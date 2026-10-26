@@ -15,13 +15,16 @@ import type { FastifyBaseLogger } from 'fastify';
 import type { Database } from '../../db/client.js';
 import {
   crmNotifications,
+  employees,
   leadEvents,
   leadStageHistory,
   leads,
+  roles,
   waContacts,
   waConversations,
   waMessages,
 } from '../../db/schema/index.js';
+import { writeAudit } from '../../lib/audit.js';
 import { adoptUnmatched, openLeadByPhone } from '../whatsapp/intake.js';
 import { managersAndBoard, writeLeadArrivalNotice } from './crm-alerts.js';
 import { changeLead, entryStageOf, nextInRotation } from './crm.js';
@@ -360,6 +363,35 @@ export async function routeLead(
   return { ok: true, lead: changed.lead };
 }
 
+/** Who took a lead the Jev handed to a person; null when nobody could. */
+type HandoffVia = 'gerente_comercial' | 'diretoria';
+
+const HANDOFF_OWNER_LABEL: Record<HandoffVia, string> = {
+  gerente_comercial: 'Ficou com o Gerente comercial.',
+  diretoria: 'Ficou com a Diretoria.',
+};
+
+/**
+ * The person who takes a lead the Jev handed to a person (Eric, 26/10: no lead stays without an
+ * owner). The person of the 13/10 rule first: an active Gerente comercial. With none, the Diretoria,
+ * who already receives every escalation of the funnels and may own a lead (`CRM_SELLER_ROLES`).
+ * Oldest record first, so two leads arriving together land on the same person. Null when nobody
+ * active holds either level.
+ */
+async function handoffOwner(db: Database): Promise<{ id: string; via: HandoffVia } | null> {
+  for (const via of ['gerente_comercial', 'diretoria'] as const) {
+    const [person] = await db
+      .select({ id: employees.id })
+      .from(employees)
+      .innerJoin(roles, eq(roles.id, employees.roleId))
+      .where(and(eq(employees.status, 'active'), eq(roles.key, via)))
+      .orderBy(asc(employees.createdAt))
+      .limit(1);
+    if (person) return { id: person.id, via };
+  }
+  return null;
+}
+
 /** The notice to Admin, Diretoria and the sales managers that something waits for a person. */
 async function noticeTeam(
   db: Database,
@@ -431,12 +463,38 @@ export async function triageLead(db: Database, leadId: string, deps: TriageDeps)
     const sure = verdict
       ? ` (${SECTOR_LABEL[verdict.sector]}, ${Math.round(verdict.confidence * 100)}%)`
       : '';
+    // No funnel (that person chooses it), but an owner, with the first-contact task and the
+    // "Novo lead" notice that follow one. The 13/10 rule finding nobody is written to the audit.
+    const owner = lead.ownerEmployeeId ? null : await handoffOwner(db);
+    if (!lead.ownerEmployeeId && owner?.via !== 'gerente_comercial')
+      await writeAudit(db, {
+        action: 'lead.triage_handoff_unmatched',
+        entity: 'lead',
+        entityId: leadId,
+        targetEmployeeId: owner?.id ?? null,
+        metadata: {
+          reason: decision.reason,
+          rule: 'gerente_comercial',
+          fallback: owner?.via ?? 'none',
+        },
+      });
+    if (owner) {
+      const changed = await changeLead(db, {
+        leadId,
+        ownerEmployeeId: owner.id,
+        source: 'triage',
+        actorEmployeeId: null,
+      });
+      if (changed.ok) await writeLeadArrivalNotice(db, changed.lead);
+    }
     await noticeTeam(db, {
       leadId,
-      message: `Lead novo sem funil precisa de uma pessoa: ${reason}${sure}. Veja em Negociações → Sem dono.`,
+      message: `Lead novo sem funil precisa de uma pessoa: ${reason}${sure}. ${
+        owner ? HANDOFF_OWNER_LABEL[owner.via] : 'Veja em Negociações → Sem dono.'
+      }`,
       dedupe: `lead:${leadId}`,
     });
-    await record();
+    await record({ handoff: owner?.via ?? null });
     return;
   }
   // No verdict (no text, or the Jev did not answer): the arrival notice the door would have sent.

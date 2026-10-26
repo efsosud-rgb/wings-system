@@ -9,12 +9,12 @@ retomada), `triage-queue.ts` (a lista de espera), `triage-schedule.ts` (o gancho
 
 ## Onde entra
 
-| Porta                                                     | Quando o Jev lê                                                                      | Fica como está                                                          |
-| --------------------------------------------------------- | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- |
-| Formulário do site (`site_form`)                          | a regra da landing page não nomeia funil: o lead nasce sem `pipeline`                | LP com funil na regra                                                   |
-| Conversão do RD Station (`rd_station`)                    | a regra da origem não nomeia funil                                                   | conversão com funil na regra; espelho do RD CRM (`rd_crm`)              |
-| WhatsApp, Sofia desligada                                 | primeira mensagem de texto de uma conversa nova, de número sem negociação e sem link | link rastreável (funil do cliente do link), Sofia ligada (ela pergunta) |
-| Meta, Google, TikTok Lead Ads, importação, cadastro à mão | —                                                                                    | sempre: a origem ou a pessoa já definem o funil                         |
+| Porta                                                     | Quando o Jev lê                                                                      | Fica como está                                                                                         |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| Formulário do site (`site_form`)                          | a regra da landing page não nomeia funil: o lead nasce sem `pipeline`                | LP com funil na regra, seja qual for a resposta: "Ainda não sei" fica no funil da página (Eric, 26/10) |
+| Conversão do RD Station (`rd_station`)                    | a regra da origem não nomeia funil                                                   | conversão com funil na regra; espelho do RD CRM (`rd_crm`)                                             |
+| WhatsApp, Sofia desligada                                 | primeira mensagem de texto de uma conversa nova, de número sem negociação e sem link | link rastreável (funil do cliente do link), Sofia ligada (ela pergunta)                                |
+| Meta, Google, TikTok Lead Ads, importação, cadastro à mão | —                                                                                    | sempre: a origem ou a pessoa já definem o funil                                                        |
 
 O gancho fica em `upsertLead` (lead criado, não antigo, sem `pipeline`, fora de importação, origem em
 `TRIAGE_SOURCES`) e em `applyInbound` do WhatsApp (`!sofiaOn && !leadId && created && texto`). A porta grava a linha da
@@ -42,12 +42,12 @@ e o nível mais provável de `interesse.probabilities`. Log só com formas (stat
 
 ## O que volta e o que acontece
 
-| Jev respondeu                                   | Lead do site / RD                                                                                                                             | Conversa do WhatsApp                                                                                                                     |
-| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| expansao ou formatacao, confiança ≥ 0,5         | `routeLead`: funil, etapa de entrada, dono pelo rodízio (se não tinha), tarefa de primeiro contato, regras da etapa, aviso `new_lead` ao dono | nasce a negociação (`upsertLead`, origem `whatsapp`, cliente Wings, base legal pré-contrato), a conversa passa a ser dela, aviso ao dono |
-| fornecedor, emprego ou outro                    | fica sem funil, sem etapa e sem dono (sem negociação em Kanban); aviso `triage_handoff` a Admin, Diretoria e Gerente comercial                | nenhuma negociação; a conversa segue esperando atendente; mesmo aviso ao time                                                            |
-| confiança < 0,5 (qualquer setor)                | idem fornecedor/emprego/outro, com o motivo "o Jev não teve certeza"                                                                          | idem                                                                                                                                     |
-| não respondeu, texto vazio ou resposta estranha | o aviso "lead sem dono" de sempre (`lead_unassigned`)                                                                                         | aviso ao time "o Jev não respondeu"; a conversa segue esperando                                                                          |
+| Jev respondeu                                   | Lead do site / RD                                                                                                                                                                                                           | Conversa do WhatsApp                                                                                                                     |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| expansao ou formatacao, confiança ≥ 0,5         | `routeLead`: funil, etapa de entrada, dono pelo rodízio (se não tinha), tarefa de primeiro contato, regras da etapa, aviso `new_lead` ao dono                                                                               | nasce a negociação (`upsertLead`, origem `whatsapp`, cliente Wings, base legal pré-contrato), a conversa passa a ser dela, aviso ao dono |
+| fornecedor, emprego ou outro                    | fica sem funil nem etapa (sem negociação em Kanban), mas **com dono** (abaixo): tarefa de primeiro contato e aviso `new_lead` ao dono; aviso `triage_handoff` a Admin, Diretoria e Gerente comercial dizendo com quem ficou | nenhuma negociação; a conversa segue esperando atendente; mesmo aviso ao time                                                            |
+| confiança < 0,5 (qualquer setor)                | idem fornecedor/emprego/outro, com o motivo "o Jev não teve certeza"                                                                                                                                                        | idem                                                                                                                                     |
+| não respondeu, texto vazio ou resposta estranha | o aviso "lead sem dono" de sempre (`lead_unassigned`)                                                                                                                                                                       | aviso ao time "o Jev não respondeu"; a conversa segue esperando                                                                          |
 
 Um número cujo único negócio está **fechado** (perdido, ou ganho e que voltou) recebe a conversa como **negócio novo ao
 lado dele** (`reopenClosed`, a mesma regra do formulário da Meta, ordem do Eric de 09/10 e da Sofia): funil, dono pelo
@@ -62,7 +62,16 @@ origem `triage`: o histórico de etapas e os eventos `lead.pipeline_changed`, `l
 (`routed:<funil>`, `person:<motivo>`, `failed`, `fallback`, `adopted`) — números e rótulos, nunca o texto.
 
 Regra de 13/10 (`docs/whatsapp/sofia.md`): fornecedor, emprego e "outro assunto" passam para uma pessoa sem criar
-negociação. A triagem segue a mesma regra e o mesmo aviso que a transferência da Sofia.
+negociação. A triagem segue a mesma regra e o mesmo aviso que a transferência da Sofia, e desde 26/10 (Eric) **nenhum
+lead sai dela sem dono**: a pessoa da regra é o Gerente comercial ativo (o mais antigo, se houver mais de um); sem
+nenhum, o lead vai para a Diretoria (a mais antiga) e a falha da regra fica na auditoria como
+`lead.triage_handoff_unmatched` (`fallback: diretoria`); sem ninguém nos dois níveis, a mesma auditoria com
+`fallback: none`, o aviso `triage_handoff` de sempre ("Veja em Negociações → Sem dono") e o lead segue sem dono. O dono
+recebe o lead pelo caminho de sempre (`changeLead` com origem `triage`: evento `lead.owner_changed`, tarefa de primeiro
+contato, aviso "Novo lead para você" e e-mail); o funil fica em aberto para ele escolher na ficha. O evento
+`lead.triaged` guarda `handoff` (`gerente_comercial`, `diretoria` ou `null`). Caso que motivou a regra: o lead 775262e5
+(23/10, LP fale, "Ainda não sei" → `outro` 0,96) ficou três dias sem funil, sem dono e sem tarefa, com três avisos
+`triage_handoff` não lidos (Admin Master e Diretoria; o único Gerente comercial do staging está inativo).
 
 ## Nada fica sem funil e sem aviso
 

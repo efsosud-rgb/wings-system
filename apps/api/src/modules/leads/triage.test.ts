@@ -1,16 +1,19 @@
 import { WINGS_CLIENT_ID } from '@wings/shared';
-import { and, eq } from 'drizzle-orm';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
 import {
+  auditLog,
   crmDistributionMembers,
   crmNotifications,
+  employees,
   leadEvents,
   leadStageHistory,
   leadTasks,
   leads,
+  roles,
   waContacts,
   waConversations,
   waMessages,
@@ -352,7 +355,7 @@ describe('a lead born without a funnel', () => {
     ]);
   });
 
-  it('a supplier stays out of the funnels: no stage, no owner, no deal in a Kanban; the managers get the triage notice', async () => {
+  it('a supplier stays out of the funnels: no stage, no deal in a Kanban, but the Gerente comercial owns it (with the task); the managers get the triage notice', async () => {
     const manager = await createEmployee(db, { role: 'gerente_comercial', sector: 'comercial' });
     scheduled.length = 0;
     const born = await upsertLead(db, {
@@ -370,20 +373,130 @@ describe('a lead born without a funnel', () => {
     await triageLead(db, born.lead.id, deps);
 
     const [row] = await db.select().from(leads).where(eq(leads.id, born.lead.id));
-    expect(row).toMatchObject({ pipeline: null, stageId: null, ownerEmployeeId: null });
+    expect(row).toMatchObject({ pipeline: null, stageId: null });
+    // The oldest active Gerente comercial (the first test made one before this one).
+    const [oldest] = await db
+      .select({ id: employees.id })
+      .from(employees)
+      .innerJoin(roles, eq(roles.id, employees.roleId))
+      .where(and(eq(roles.key, 'gerente_comercial'), eq(employees.status, 'active')))
+      .orderBy(asc(employees.createdAt))
+      .limit(1);
+    expect(oldest).toBeDefined();
+    expect(row?.ownerEmployeeId).toBe(oldest!.id);
     expect(
       await db.query.leadTasks.findFirst({ where: eq(leadTasks.leadId, born.lead.id) }),
-    ).toBeUndefined();
+    ).toMatchObject({ kind: 'first_contact', assigneeEmployeeId: oldest!.id });
     const notices = await noticesOf(born.lead.id);
-    expect(notices.map((n) => n.kind)).toEqual(notices.map(() => 'triage_handoff'));
-    expect(notices.map((n) => n.recipientEmployeeId)).toContain(manager.id);
-    expect(notices[0]?.message).toBe(
-      'Lead novo sem funil precisa de uma pessoa: fornecedor (fornecedor, 99%). Veja em Negociações → Sem dono.',
+    expect(notices.filter((n) => n.kind === 'new_lead').map((n) => n.recipientEmployeeId)).toEqual([
+      oldest!.id,
+    ]);
+    const handoff = notices.filter((n) => n.kind === 'triage_handoff');
+    expect(handoff.map((n) => n.recipientEmployeeId)).toContain(manager.id);
+    expect(handoff[0]?.message).toBe(
+      'Lead novo sem funil precisa de uma pessoa: fornecedor (fornecedor, 99%). Ficou com o Gerente comercial.',
     );
+    expect(await db.select().from(auditLog).where(eq(auditLog.entityId, born.lead.id))).toEqual([]);
     const triaged = await db.query.leadEvents.findFirst({
       where: and(eq(leadEvents.leadId, born.lead.id), eq(leadEvents.kind, 'lead.triaged')),
     });
-    expect(triaged?.detail).toMatchObject({ outcome: 'person:fornecedor', interest: null });
+    expect(triaged?.detail).toMatchObject({
+      outcome: 'person:fornecedor',
+      interest: null,
+      handoff: 'gerente_comercial',
+    });
+  });
+
+  it('"outro" always leaves with an owner: no Gerente comercial active → the Diretoria, with the miss in the audit; nobody → the miss in the audit and the notice of always', async () => {
+    const gerentes = and(
+      inArray(
+        employees.roleId,
+        db.select({ id: roles.id }).from(roles).where(eq(roles.key, 'gerente_comercial')),
+      ),
+      eq(employees.status, 'active'),
+    );
+    const director = await createEmployee(db, { role: 'diretoria', sector: 'diretoria' });
+    // Sees every lead and gets the notices, but never owns one (`CRM_SELLER_ROLES`): not in the chain.
+    const admin = await createEmployee(db, { role: 'admin_master', sector: 'diretoria' });
+    const bornWithout = (name: string) =>
+      upsertLead(db, {
+        source: 'site_form',
+        name,
+        email: `${name.toLowerCase().replace(/\s+/g, '.')}@teste.invalid`,
+        clientId: WINGS_CLIENT_ID,
+        clientMapped: false,
+        formAnswers: { 'O que você procura?': 'Ainda não sei' },
+        event: { kind: 'lead.received.site_form' },
+      });
+    await db
+      .update(employees)
+      .set({ status: 'inactive', deactivatedAt: new Date() })
+      .where(gerentes);
+    try {
+      const toBoard = await bornWithout('Indecisa Teste');
+      answers.push(verdict('outro', 0.96));
+      await triageLead(db, toBoard.lead.id, deps);
+      const [row] = await db.select().from(leads).where(eq(leads.id, toBoard.lead.id));
+      expect(row).toMatchObject({ pipeline: null, ownerEmployeeId: director.id });
+      expect(
+        await db.query.leadTasks.findFirst({ where: eq(leadTasks.leadId, toBoard.lead.id) }),
+      ).toMatchObject({ kind: 'first_contact', assigneeEmployeeId: director.id });
+      const notices = await noticesOf(toBoard.lead.id);
+      expect(notices.map((n) => n.kind)).toContain('new_lead');
+      expect(notices.find((n) => n.kind === 'triage_handoff')?.message).toBe(
+        'Lead novo sem funil precisa de uma pessoa: outro assunto (outro assunto, 96%). Ficou com a Diretoria.',
+      );
+      const [miss] = await db.select().from(auditLog).where(eq(auditLog.entityId, toBoard.lead.id));
+      expect(miss).toMatchObject({
+        action: 'lead.triage_handoff_unmatched',
+        targetEmployeeId: director.id,
+        metadata: { reason: 'outro', rule: 'gerente_comercial', fallback: 'diretoria' },
+      });
+      const triaged = await db.query.leadEvents.findFirst({
+        where: and(eq(leadEvents.leadId, toBoard.lead.id), eq(leadEvents.kind, 'lead.triaged')),
+      });
+      expect(triaged?.detail).toMatchObject({ outcome: 'person:outro', handoff: 'diretoria' });
+
+      // Nobody at all: the miss is still in the audit and the team notice still goes out.
+      await db
+        .update(employees)
+        .set({ status: 'inactive', deactivatedAt: new Date() })
+        .where(eq(employees.id, director.id));
+      const toNobody = await bornWithout('Indecisa Dois Teste');
+      answers.push(verdict('outro', 0.9));
+      await triageLead(db, toNobody.lead.id, deps);
+      expect(
+        (await db.select().from(leads).where(eq(leads.id, toNobody.lead.id)))[0]?.ownerEmployeeId,
+      ).toBeNull();
+      const [none] = await db
+        .select()
+        .from(auditLog)
+        .where(eq(auditLog.entityId, toNobody.lead.id));
+      expect(none).toMatchObject({
+        action: 'lead.triage_handoff_unmatched',
+        targetEmployeeId: null,
+        metadata: { reason: 'outro', fallback: 'none' },
+      });
+      const told = await noticesOf(toNobody.lead.id);
+      expect(told.map((n) => [n.kind, n.recipientEmployeeId])).toEqual([
+        ['triage_handoff', admin.id],
+      ]);
+      expect(told[0]?.message).toContain('Veja em Negociações → Sem dono.');
+    } finally {
+      await db
+        .update(employees)
+        .set({ status: 'active', deactivatedAt: null })
+        .where(
+          inArray(
+            employees.roleId,
+            db.select({ id: roles.id }).from(roles).where(eq(roles.key, 'gerente_comercial')),
+          ),
+        );
+      await db
+        .update(employees)
+        .set({ status: 'active', deactivatedAt: null })
+        .where(eq(employees.id, director.id));
+    }
   });
 
   it('under 50% of confidence the lead goes to a person too; with no answer from the Jev the usual "sem dono" notice goes out', async () => {
@@ -399,13 +512,13 @@ describe('a lead born without a funnel', () => {
     });
     answers.push(verdict('formatacao', 0.44));
     await triageLead(db, unsure.lead.id, deps);
-    expect(
-      (await db.select().from(leads).where(eq(leads.id, unsure.lead.id)))[0]?.pipeline,
-    ).toBeNull();
+    const [unsureRow] = await db.select().from(leads).where(eq(leads.id, unsure.lead.id));
+    expect(unsureRow?.pipeline).toBeNull();
+    expect(unsureRow?.ownerEmployeeId).not.toBeNull();
     expect((await noticesOf(unsure.lead.id)).map((n) => n.kind)).toContain('triage_handoff');
-    expect((await noticesOf(unsure.lead.id))[0]?.message).toContain(
-      'o Jev não teve certeza do assunto',
-    );
+    expect(
+      (await noticesOf(unsure.lead.id)).find((n) => n.kind === 'triage_handoff')?.message,
+    ).toContain('o Jev não teve certeza do assunto');
 
     const silent = await upsertLead(db, {
       source: 'site_form',
