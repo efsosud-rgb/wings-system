@@ -155,7 +155,7 @@ Leitura sem nenhum envio: Graph API só com GET, dentro do contêiner da API, se
   dias de log nenhum corpo de webhook chegou, e só 2 mensagens saíram pelo sistema na história toda (14/10).
 - As ligações estão ativadas no número (`calling.status` ENABLED); `callback_permission_status` está DISABLED.
 - **Para falar com lead real** (passos na Meta, do Eric):
-  1. passar o +55 21 99947-0288 para a Cloud API na conta Wings Company (558704303984649), com forma de
+  1. passar o número comercial (final 0288) para a Cloud API na conta Wings Company (558704303984649), com forma de
      pagamento na conta, registro do número com PIN e o app Wings CRM Vendas assinado na conta;
   2. trocar no api-staging `WHATSAPP_WABA_ID`, `WHATSAPP_PHONE_NUMBER_ID` e `WINGS_WHATSAPP_NUMBER`, e reiniciar;
   3. ligar o switch na tela da caixa.
