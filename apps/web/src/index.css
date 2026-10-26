@@ -9002,3 +9002,45 @@ tr.task-overdue td:nth-child(2) strong {
   color: var(--accent-soft-text);
   font-weight: 600;
 }
+
+/* Gestão → Câmeras: compact tables with a bar beside each count (apps/web/src/pages/CamerasPage.tsx). */
+.cam-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.cam-table th,
+.cam-table td {
+  padding: 0.25rem 0.5rem;
+  text-align: left;
+  vertical-align: middle;
+}
+.cam-bar {
+  display: inline-block;
+  width: 8rem;
+  height: 0.6rem;
+  margin-right: 0.5rem;
+  background: var(--surface-2, #eee);
+  border-radius: 0.3rem;
+  overflow: hidden;
+}
+.cam-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent, #c8441c);
+}
+.cam-form .form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+.cam-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.cam-form .cam-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}

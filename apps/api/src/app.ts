@@ -72,6 +72,7 @@ import {
   startLeadTriageResume,
   type JevClient,
 } from './modules/leads/triage.js';
+import { cameraRoutes } from './modules/cameras/routes.js';
 import { officeRoutes } from './modules/office/routes.js';
 import { roadmapRoutes } from './modules/roadmap/routes.js';
 import { siteRoutes } from './modules/site/routes.js';
@@ -331,6 +332,7 @@ export async function buildApp(deps: {
   await app.register(projectRoutes);
   await app.register(roadmapRoutes);
   await app.register(officeRoutes);
+  await app.register(cameraRoutes);
   await app.register(meetingRoutes);
   await app.register(googleWorkspaceRoutes);
   await app.register(agendaRoutes);
