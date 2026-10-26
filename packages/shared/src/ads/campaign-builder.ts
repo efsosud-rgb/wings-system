@@ -868,7 +868,7 @@ export function minDailyBudgetCents(platform: DraftPlatform | undefined): number
   return platform === 'meta' ? META_MIN_DAILY_BUDGET_CENTS : MIN_DAILY_BUDGET_CENTS;
 }
 
-const compliantText = (max: number, label: string) =>
+export const compliantText = (max: number, label: string) =>
   z
     .string()
     .trim()
