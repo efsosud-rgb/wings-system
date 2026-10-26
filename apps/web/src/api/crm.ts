@@ -36,6 +36,7 @@ import type {
   SalesDashboard,
   DriveLink,
   DriveUploadTicket,
+  Productivity,
 } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, noteUnauthorized } from './client.js';
@@ -58,6 +59,16 @@ function invalidateDeals(queryClient: ReturnType<typeof useQueryClient>) {
 }
 
 // --- sales panel (Dashboard › Vendas) -------------------------------------------------
+
+/** Painel de Vendas › Produtividade: results per person in the caller's scope (docs/crm/produtividade.md). */
+export function useProductivity(query: Record<string, string>) {
+  const params = new URLSearchParams(query);
+  return useQuery({
+    queryKey: ['crm', 'productivity', params.toString()],
+    queryFn: () => api.get<Productivity>(`/crm/productivity?${params.toString()}`),
+    placeholderData: (previous) => previous,
+  });
+}
 
 export function useSalesDashboard(query: Record<string, string>) {
   const params = new URLSearchParams(query);

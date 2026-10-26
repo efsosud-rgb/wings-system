@@ -17,6 +17,8 @@ const FACTS = [
   'fato_funil_diario',
   'fato_aprovacao_verba',
   'fato_diagnostico_quiz',
+  'fato_atividade',
+  'fato_movimentacao_etapa',
 ];
 const ids: number[] = [];
 
@@ -71,14 +73,14 @@ afterAll(async () => {
 });
 
 describe('BI dimensional model (schema dw)', () => {
-  it('has the 17 tables and the 2 dashboard views', async () => {
+  it('has the 19 tables and the 2 dashboard views', async () => {
     const tables = await client.query(
       `select count(*)::int as n from information_schema.tables where table_schema = 'dw' and table_type = 'BASE TABLE'`,
     );
     const views = await client.query(
       `select table_name from information_schema.views where table_schema = 'dw' order by 1`,
     );
-    expect(tables.rows[0].n).toBe(17);
+    expect(tables.rows[0].n).toBe(19);
     expect(views.rows.map((r) => r.table_name)).toEqual(['vw_funil_marcos', 'vw_midia_mensal']);
   });
 
@@ -133,6 +135,56 @@ describe('BI dimensional model (schema dw)', () => {
     expect(Number(rows[0]!.investimento)).toBe(100);
     expect(Number(rows[0]!.cpl)).toBe(25);
     expect(Number(rows[0]!.dias_sem_investimento_informado)).toBe(1);
+  });
+
+  it('counts working minutes Monday to Friday, 9h to 18h in São Paulo: Friday 17h50 to Monday 9h50 is one hour', async () => {
+    const { rows } = await client.query(
+      `select dw.minutos_uteis($1, $2) as sexta_segunda,
+              dw.minutos_uteis($3, $4) as mesmo_dia,
+              dw.minutos_uteis($5, $6) as fim_de_semana,
+              dw.minutos_uteis($7, $8) as invertido,
+              dw.minutos_uteis(null, $2) as sem_inicio,
+              dw.data_sk($1) as dia_sexta,
+              dw.data_sk(null) as sem_dia`,
+      [
+        '2026-10-09T17:50:00-03:00',
+        '2026-10-12T09:50:00-03:00',
+        '2026-10-13T10:00:00-03:00',
+        '2026-10-13T11:30:00-03:00',
+        '2026-10-10T10:00:00-03:00',
+        '2026-10-11T16:00:00-03:00',
+        '2026-10-13T11:30:00-03:00',
+        '2026-10-13T10:00:00-03:00',
+      ],
+    );
+    expect(rows[0]).toEqual({
+      sexta_segunda: 60,
+      mesmo_dia: 90,
+      fim_de_semana: 0,
+      invertido: null,
+      sem_inicio: null,
+      dia_sexta: 20261009,
+      sem_dia: 0,
+    });
+  });
+
+  it('isolates the productivity facts by tenant for a plain role too', async () => {
+    await client.query(
+      `insert into dw.fato_atividade (atividade_id, data_sk, tenant_sk, tipo, evento_em, fonte)
+       values ('teste:1', 20260901, $1, 'nota', '2026-09-01T12:00:00Z', 'teste'), ('teste:2', 20260901, $2, 'nota', '2026-09-01T12:00:00Z', 'teste')`,
+      [ids[0], ids[1]],
+    );
+    await client.query(
+      `insert into dw.fato_movimentacao_etapa (movimentacao_id, data_sk, tenant_sk, negociacao_id, evento_em, fonte)
+       values ('teste:1', 20260901, $1, 'n1', '2026-09-01T12:00:00Z', 'teste'), ('teste:2', 20260901, $2, 'n2', '2026-09-01T12:00:00Z', 'teste')`,
+      [ids[0], ids[1]],
+    );
+    for (const table of ['fato_atividade', 'fato_movimentacao_etapa']) {
+      const sql = `select tenant_sk from dw.${table}`;
+      const own = await asReader<{ tenant_sk: number }>({ 'app.tenant_sk': String(ids[0]) }, sql);
+      expect(own.map((r) => r.tenant_sk)).toEqual([ids[0]]);
+      expect(await asReader({}, sql)).toHaveLength(0);
+    }
   });
 
   it('turns a division by zero into null instead of zero', async () => {

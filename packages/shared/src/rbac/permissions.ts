@@ -22,6 +22,8 @@ export const PERMISSIONS = {
   'leads.write': 'Criar e editar leads',
   'leads.assign': 'Atribuir e redistribuir leads entre vendedores',
   'leads.whatsapp': 'Conversar e ligar pelo WhatsApp do sistema (ver, enviar e ligar)',
+  'productivity.read':
+    'Ver a aba Produtividade do Painel de Vendas: números por resultado, pessoa a pessoa (own = só os próprios e a média da equipe; sector = a equipe do setor)',
   'whatsapp.import_bulk':
     'Importar em lote as conversas exportadas do celular, pareando cada uma com a negociação',
   'companies.read': 'Ver a tela de Empresas do CRM, com o cadastro de cada empresa',
@@ -177,6 +179,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'timeclock.read': 'all',
     'timeclock.adjust': 'all',
     'leads.read': 'all',
+    'productivity.read': 'all',
     'leads.write': 'all',
     'leads.assign': 'all',
     'leads.whatsapp': 'all',
@@ -223,6 +226,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'employees.assign_roles': 'all',
     'timeclock.read': 'all',
     'leads.read': 'all',
+    'productivity.read': 'all',
     'leads.assign': 'all',
     // Eric, 07/10: Diretoria reads, sends and calls on any lead's WhatsApp, though it does not edit the deal.
     'leads.whatsapp': 'all',
@@ -264,6 +268,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'roles.assign': 'sector',
     'timeclock.read': 'sector',
     'leads.read': 'all',
+    'productivity.read': 'sector',
     'leads.write': 'all',
     // Runs the team: hands leads over and keeps the funnel's stages and rotation.
     'leads.assign': 'all',
@@ -304,6 +309,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     ...SELLER_STAFF,
     ...PROJECT_STAFF,
     'leads.read': 'own',
+    'productivity.read': 'own',
     'leads.write': 'own',
     'leads.whatsapp': 'own',
   },
@@ -312,6 +318,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     ...SELLER_STAFF,
     ...PROJECT_STAFF,
     'leads.read': 'own',
+    'productivity.read': 'own',
     'leads.write': 'own',
     'leads.whatsapp': 'own',
     'campaign_leads.read': 'own',

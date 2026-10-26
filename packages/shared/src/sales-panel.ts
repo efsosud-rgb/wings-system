@@ -127,34 +127,47 @@ const optional = <T extends z.ZodType>(schema: T) =>
   schema.optional().or(z.literal('').transform(() => undefined));
 const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
-export const salesDashboardQuerySchema = z
-  .object({
-    pipeline: z.enum([...LEAD_PIPELINES, ALL_PIPELINES]).default(ALL_PIPELINES),
-    period: z.enum(SALES_PERIODS).default('month'),
-    from: optional(day),
-    to: optional(day),
-    /** An employee id, or `none` for the deals nobody owns. */
-    owner: optional(z.uuid().or(z.literal(NO_OWNER))),
+/** The filters every sales panel shares: period, funnel and person (the Produtividade tab reuses them). */
+export const salesPeriodQuerySchema = z.object({
+  pipeline: z.enum([...LEAD_PIPELINES, ALL_PIPELINES]).default(ALL_PIPELINES),
+  period: z.enum(SALES_PERIODS).default('month'),
+  from: optional(day),
+  to: optional(day),
+  /** An employee id, or `none` for the deals nobody owns. */
+  owner: optional(z.uuid().or(z.literal(NO_OWNER))),
+});
+
+/** A custom period needs both ends, in order, and at most two years apart. */
+export const withPeriodChecks = <
+  T extends z.ZodType<{ period: string; from?: string; to?: string }>,
+>(
+  schema: T,
+) =>
+  schema
+    .refine(
+      (value) =>
+        value.period !== 'custom' ||
+        (value.from !== undefined && value.to !== undefined && value.from <= value.to),
+      { message: 'Informe o início e o fim do período.', path: ['from'] },
+    )
+    .refine(
+      (value) =>
+        value.period !== 'custom' ||
+        !value.from ||
+        !value.to ||
+        daysBetween(value.from, value.to) <= 731,
+      { message: 'O período vai até dois anos.', path: ['to'] },
+    );
+
+export const salesDashboardQuerySchema = withPeriodChecks(
+  salesPeriodQuerySchema.extend({
     /** A brand as the deals carry it, or `none` for the deals with no brand. */
     brand: optional(z.string().trim().max(120)),
     source: optional(z.enum(LEAD_SOURCES)),
     /** Campaign name or id, matched as the CRM's list matches it. */
     campaign: optional(z.string().trim().max(200)),
-  })
-  .refine(
-    (value) =>
-      value.period !== 'custom' ||
-      (value.from !== undefined && value.to !== undefined && value.from <= value.to),
-    { message: 'Informe o início e o fim do período.', path: ['from'] },
-  )
-  .refine(
-    (value) =>
-      value.period !== 'custom' ||
-      !value.from ||
-      !value.to ||
-      daysBetween(value.from, value.to) <= 731,
-    { message: 'O período vai até dois anos.', path: ['to'] },
-  );
+  }),
+);
 export type SalesDashboardQuery = z.infer<typeof salesDashboardQuerySchema>;
 
 // --- answer -------------------------------------------------------------------------
