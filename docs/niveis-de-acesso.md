@@ -107,8 +107,9 @@ comercial see every one. The old `/crm-vendas/agenda` redirects to `/produtivida
   that number's chat (404), only the official conversation of the deal; decision open for Eric. The official
   number's rule does not change (deal owner; no deal: scope all). The seller's "em breve" key is the official
   number's: a seller writes from their own connected work number with it off. Sofia's screen never lists a work
-  number's chat. The registry, the connection, the token's end and the failed webhook bodies ("Processar de novo")
-  are Admin Master only (`integrations.manage`); audit rows carry ids only.
+  number's chat. The registry, the connection, the token's end and its renewal ("Renovar acesso") and the failed
+  webhook bodies ("Processar de novo") are Admin Master only (`integrations.manage`); audit rows carry ids only. A
+  work number's templates (its own WABA's) are read by whoever reaches its chats.
 - **Central WhatsApp, who answers** (phase 2, `docs/whatsapp/central.md`, "Atendimento"): a conversation **given to a
   person** (taken, transferred to them, or by the rotation) is seen and answered by that person too, whoever owns
   the deal or the number. Only the one who holds it writes; anyone else who sees it takes it first ("Assumir"),

@@ -119,16 +119,16 @@ escreveu "Teste", que virou o nome. Agora:
 
 ## Rotas (com sessão)
 
-| Rota                                              | Permissão                         | O quê                                                     |
-| ------------------------------------------------- | --------------------------------- | --------------------------------------------------------- |
-| `GET /sofia/overview`                             | `leads.whatsapp`                  | ligada, IA configurada, gasto do dia, contagem por estado |
-| `GET /sofia/conversations?state=&segment=&q=`     | `leads.whatsapp`                  | lista no escopo                                           |
-| `GET /sofia/conversations/:id`                    | `leads.whatsapp`                  | conversa, o que ela descobriu, origem, negociação         |
-| `POST /sofia/conversations/:id/attendance`        | `leads.whatsapp`                  | `take` · `give_back` · `close` (com `version` opcional)   |
-| `GET /sofia/settings` · `PUT /sofia/settings`     | `leads.whatsapp` · `sofia.manage` | textos e perguntas                                        |
-| `GET /whatsapp/conversations?filter=&q=`          | `leads.whatsapp`                  | WhatsApp Web: não lidas por pessoa, status                |
-| `GET /whatsapp/conversations/:id` · `POST …/read` | `leads.whatsapp`                  | abrir qualquer conversa do escopo; marcar lida            |
-| `GET /whatsapp/targets?q=`                        | `leads.whatsapp`                  | "Nova conversa": negociações e contatos do escopo         |
+| Rota                                                  | Permissão                         | O quê                                                     |
+| ----------------------------------------------------- | --------------------------------- | --------------------------------------------------------- |
+| `GET /sofia/overview`                                 | `leads.whatsapp`                  | ligada, IA configurada, gasto do dia, contagem por estado |
+| `GET /sofia/conversations?state=&segment=&q=&before=` | `leads.whatsapp`                  | lista no escopo, 50 por vez (`next`)                      |
+| `GET /sofia/conversations/:id`                        | `leads.whatsapp`                  | conversa, o que ela descobriu, origem, negociação         |
+| `POST /sofia/conversations/:id/attendance`            | `leads.whatsapp`                  | `take` · `give_back` · `close` (com `version` opcional)   |
+| `GET /sofia/settings` · `PUT /sofia/settings`         | `leads.whatsapp` · `sofia.manage` | textos e perguntas                                        |
+| `GET /whatsapp/conversations?filter=&q=`              | `leads.whatsapp`                  | WhatsApp Web: não lidas por pessoa, status                |
+| `GET /whatsapp/conversations/:id` · `POST …/read`     | `leads.whatsapp`                  | abrir qualquer conversa do escopo; marcar lida            |
+| `GET /whatsapp/targets?q=`                            | `leads.whatsapp`                  | "Nova conversa": negociações e contatos do escopo         |
 
 ## Dados (migração 0080)
 

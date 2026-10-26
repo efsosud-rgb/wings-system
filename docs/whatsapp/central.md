@@ -71,9 +71,11 @@ liberar o app (Tech Provider e App Review, ainda não pedidos).
 - Nunca vão para a Sofia nem para a triagem; não abrem a janela de 24 h nem mexem no descadastro do número oficial
   (`wa_contacts.last_inbound_at`, `opt_out_at`).
 - **Envio:** com o token do próprio número, texto livre e arquivo da negociação, só dentro de 24 h da última
-  mensagem da pessoa **para aquele número**. Modelo e pedido de ligação por número de trabalho: 409
-  `number_templates_soon` (os modelos são da WABA de cada número; fase 2). A trava "em breve" dos vendedores é do
-  número oficial e não vale para o número de trabalho conectado.
+  mensagem da pessoa **para aquele número**; fora delas, um modelo aprovado **da WABA daquele número** (fase 2b:
+  `GET /whatsapp/templates?numberId=`, sincronizado com o token do número em `wa_number_templates`; nunca os
+  modelos oficiais). O pedido de ligação continua só no número oficial (409 `number_no_calls`). O descadastro
+  (SAIR) do número oficial não vale para o número de trabalho. A trava "em breve" dos vendedores é do número
+  oficial e não vale para o número de trabalho conectado.
 - Arquivos recebidos: copiados para o R2 com o token do próprio número (`media-store.ts`); abrir segue a regra de
   acesso da conversa.
 
@@ -143,9 +145,17 @@ Rotas (`leads.whatsapp`, na regra de acesso da conversa): `GET /whatsapp/convers
 ### Fila do webhook
 
 - Um corpo novo é processado na hora; um que falhou espera **2, 4, 8 e 16 minutos** (`next_attempt_at`) e, na
-  quinta falha, fica `failed`. O Admin Master vê esses avisos (recebido, tentativas, código do erro, nunca o
+  quinta falha, fica `failed` e **os Admin Masters recebem um aviso** em CRM Vendas › Avisos (fase 2b; uma vez por
+  corpo, sem o conteúdo). O Admin Master vê esses avisos (recebido, tentativas, código do erro, nunca o
   conteúdo) e manda **processar de novo** (volta a `pending` com zero tentativas). Processar de novo é seguro: cada
   mensagem entra uma vez só. Corpo já apagado pela limpeza de 90 dias não volta (409).
+
+### Envios sem resposta da Meta (fase 2b)
+
+Uma mensagem nossa sem `wamid` 10 minutos depois (a Meta não respondeu, ou um reinício cortou o envio) pode ter
+chegado ou não. A fila (a cada minuto) marca como "sem resposta da Meta" (a bolha diz "pode ter ido ou não") e avisa
+quem mandou (os gestores, se foi a Sofia ou o sistema), uma vez, olhando as últimas 24 h. **Nada é reenviado
+sozinho**: quem mandou confere a conversa antes de mandar de novo.
 
 ## Não verificado ao vivo
 
@@ -186,13 +196,13 @@ Por número:
 ## Riscos
 
 - Nada rodou contra a Meta: o primeiro número conectado é o teste real dos formatos.
-- Token de 60 dias: sem a renovação, o número para de enviar e de baixar arquivos no vencimento (a tela avisa).
+- Token de 60 dias: a renovação (fase 2b) segue a referência da Meta e não foi testada ao vivo; recusada, o número
+  para de enviar e de baixar arquivos no vencimento (a tela e os avisos dizem antes).
 - Pela auditoria, a **Sofia está ligada no staging** (`sofia.enabled` em 14/10, sem `sofia.disabled` depois); este
   trabalho não mudou a configuração. Ela continua só no número oficial.
-- Os modelos da WABA oficial ficam de fora dos números de trabalho; fora das 24 h, a conversa de um número só
-  continua quando a pessoa escrever.
+- Fora das 24 h, um número de trabalho só fala por modelo aprovado na WABA dele: sem nenhum aprovado lá, só quando
+  a pessoa escrever.
 - Um vendedor não vê a conversa de outro número sobre a negociação dele (decisão para o Eric).
-- A trava contra conexão dupla é do processo da API (um contêiner).
 
 ## Ordem de merge e rollback
 
@@ -226,7 +236,8 @@ DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1793036092766;
 ## Fases 2 e 3
 
 - Fase 2a (feita): atendimento (acima) e a Sofia por conversa (`sofia.md`).
-- Fase 2b: confiabilidade do recebimento e dos envios, itens quebrados da auditoria, modelos por número.
+- Fase 2b (feita): aviso do webhook que falhou, envios sem resposta da Meta, reserva de conexão no banco,
+  renovação do acesso de 60 dias, modelos incompletos recusados, lista da Sofia paginada, modelos por número.
 - Fase 3: indicadores (o DW do #25), tela de configuração completa.
 
 ## Migração 0101 (fase 2a) e rollback
@@ -244,4 +255,17 @@ ALTER TABLE "wa_conversations" DROP COLUMN "assignee_employee_id", DROP COLUMN "
   DROP COLUMN "sofia_paused";
 ALTER TABLE "whatsapp_settings" DROP COLUMN "assignment_mode";
 DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1793040315362;
+```
+
+## Migração 0102 (fase 2b) e rollback
+
+`0102_wa_reliability` (número provisório, depois da 0101): `wa_numbers.connecting_until`,
+`token_renew_tried_at` e `token_renew_error`; a tabela `wa_number_templates` (modelos de cada número, apagados com
+o número). Nada existente muda de valor. Sem GRANT ao `wings_ro`. Rollback do banco (antes do da 0101):
+
+```sql
+DROP TABLE "wa_number_templates";
+ALTER TABLE "wa_numbers" DROP COLUMN "connecting_until", DROP COLUMN "token_renew_tried_at",
+  DROP COLUMN "token_renew_error";
+DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1793042886871;
 ```

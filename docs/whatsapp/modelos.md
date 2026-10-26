@@ -14,6 +14,13 @@ campo estava fixo no código (`WA_TEMPLATE_FIELDS`, `packages/shared/src/whatsap
   não mudam: para isso, crie outro modelo.
 - **Cada campo precisa de um exemplo** quando o modelo é criado ou editado: a Meta analisa o texto com ele.
 - **Campo vazio a Meta recusa.** Por isso cada campo tem um texto para quando falta o dado (abaixo).
+- **O que o sistema ainda não preenche não sai (fase 2b):** modelo com campo no título, botão de link com parte
+  variável, ou cabeçalho de vídeo, documento ou localização. Antes ele saía só com o corpo preenchido e a Meta
+  recusava (ou chegava cortado). Agora a escolha do modelo mostra "o sistema ainda não envia este", com o motivo,
+  e o envio responde 422 `template_unsupported` sem chamar a Meta. Título e link fixos continuam valendo.
+- **Número de trabalho (fase 2b):** cada número usa só os modelos aprovados da própria WABA, lidos da Meta com o
+  token dele (`wa_number_templates`, a cada 6 h ou em "atualizar"). Criar e editar modelos nesta tela continua
+  sendo só da WABA oficial.
 
 ## O que preenche cada campo
 
