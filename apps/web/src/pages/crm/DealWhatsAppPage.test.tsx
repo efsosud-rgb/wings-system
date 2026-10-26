@@ -1,4 +1,11 @@
-import type { DealWhatsApp, Lead, LeadNote, WaTemplate, WaTemplatePreview } from '@wings/shared';
+import type {
+  DealWhatsApp,
+  Lead,
+  LeadNote,
+  WaAttendanceView,
+  WaTemplate,
+  WaTemplatePreview,
+} from '@wings/shared';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -45,6 +52,9 @@ const {
     artQuery: {} as Record<string, unknown>,
     // A seller before the official number is live (useWhatsAppSoon).
     soon: false,
+    // Who answers the conversation (attendance.ts); null: not loaded.
+    attendance: null as WaAttendanceView | null,
+    actions: [] as unknown[],
   },
   mutation: (mutate = vi.fn()) => ({ mutate, isPending: false, error: null }),
 }));
@@ -142,6 +152,7 @@ vi.mock('../../api/auth.js', async () => {
     useSession: () => ({
       data: {
         id: 'e1',
+        employeeId: 'e1',
         fullName: 'Eric Souza',
         role: 'vendedor_expansao',
         permissions: queryState.permissions,
@@ -182,6 +193,12 @@ vi.mock('../../api/crm.js', () => ({
 }));
 
 vi.mock('../../api/whatsapp.js', () => ({
+  useConversationAttendance: () => ({ data: queryState.attendance ?? undefined }),
+  useAttendanceAction: () => ({
+    isPending: false,
+    isError: false,
+    mutate: (input: unknown) => queryState.actions.push(input),
+  }),
   useWhatsAppSoon: () => queryState.soon,
   WHATSAPP_SOON_TEXT: 'Em breve: texto do bloqueio do vendedor.',
   useWhatsAppThread: () => ({
@@ -258,6 +275,8 @@ const show = () =>
   );
 
 beforeEach(() => {
+  queryState.attendance = null;
+  queryState.actions = [];
   noteMutate.mockClear();
   textMutate.mockClear();
   templateMutate.mockClear();
@@ -983,5 +1002,41 @@ describe('the WhatsApp conversation screen', () => {
       show();
       expect(screen.getByText(/Nenhum modelo aprovado ainda/)).toBeTruthy();
     });
+  });
+});
+
+describe('who answers it, on the deal’s tab too (docs/whatsapp/central.md, "Atendimento")', () => {
+  it('a conversation the seller holds: no field to write, and Assumir with the version on screen', () => {
+    queryState.permissions = { 'leads.read': 'all', 'leads.whatsapp': 'all' };
+    queryState.attendance = {
+      attendance: {
+        conversationId: 'c1',
+        version: 3,
+        holderId: 'e2',
+        holderName: 'Daniele',
+        assigned: false,
+        queue: null,
+        replyingName: null,
+        sofiaPaused: false,
+        sofia: null,
+        can: {
+          take: true,
+          transfer: true,
+          resolve: true,
+          reopen: false,
+          pauseSofia: false,
+          resumeSofia: false,
+        },
+      },
+      events: [],
+      people: [],
+    };
+    show();
+    expect(screen.queryByRole('textbox', { name: 'Mensagem' })).toBeNull();
+    expect(screen.getByText(/Esta conversa está com Daniele/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Assumir' }));
+    expect(queryState.actions).toEqual([
+      { version: 3, action: { kind: 'assign', employeeId: 'e1' } },
+    ]);
   });
 });

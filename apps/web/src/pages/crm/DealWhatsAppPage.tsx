@@ -4,11 +4,12 @@ import { hasPermission, useSession } from '../../api/auth.js';
 import { useLead } from '../../api/leads.js';
 import { Icon } from '../../components/Icon.js';
 import { LoadFailure } from '../../components/LoadFailure.js';
-import { useWhatsAppThread } from '../../api/whatsapp.js';
+import { useConversationAttendance, useWhatsAppThread } from '../../api/whatsapp.js';
 import { CallPanel } from './CallPanel.js';
 import { DealSidePanel } from './DealSidePanel.js';
 import { ImportChatPanel } from './ImportChatPanel.js';
 import { WhatsAppChat } from './WhatsAppChat.js';
+import { AttendanceBar, heldByOf } from './WhatsAppAttendance.js';
 import { formatPhone } from './format.js';
 
 /**
@@ -143,6 +144,9 @@ export function DealWhatsAppPage() {
 
 function DealChat({ leadId, canSend }: { leadId: string; canSend: boolean }) {
   const thread = useWhatsAppThread({ leadId }, canSend);
+  const session = useSession();
+  // Who answers it, as in the Central: a person who does not hold it takes it here too.
+  const attendance = useConversationAttendance(thread.data?.conversationId ?? null);
   if (!canSend)
     return (
       <section className="crm-wa-chat" aria-label="Conversa">
@@ -177,8 +181,16 @@ function DealChat({ leadId, canSend }: { leadId: string; canSend: boolean }) {
       thread={{ leadId }}
       data={thread.data}
       canSend={canSend}
+      heldBy={heldByOf(attendance.data, session.data?.employeeId)}
       notice={
         <>
+          {attendance.data && (
+            <AttendanceBar
+              id={attendance.data.attendance.conversationId}
+              view={attendance.data}
+              me={session.data?.employeeId ?? null}
+            />
+          )}
           {thread.isError && (
             <LoadFailure
               what="a conversa"

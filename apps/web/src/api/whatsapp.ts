@@ -198,10 +198,11 @@ export function useWhatsAppConversation(id: string | undefined) {
 }
 
 /** Who answers the conversation, what the reader may do, its history (docs/whatsapp/central.md). */
-export function useConversationAttendance(id: string) {
+export function useConversationAttendance(id: string | null) {
   return useQuery({
     queryKey: ['whatsapp', 'conversations', 'attendance', id],
     queryFn: () => api.poll<WaAttendanceView>(`/whatsapp/conversations/${id}/attendance`),
+    enabled: id !== null,
     // "Está respondendo" lasts seconds: looked at again often while the conversation is open.
     refetchInterval: 10_000,
   });
