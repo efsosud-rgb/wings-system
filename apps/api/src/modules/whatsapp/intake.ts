@@ -573,8 +573,10 @@ async function answerCallRequest(
   const askedToday =
     contact.callPermissionRequestedAt !== null &&
     at.getTime() - contact.callPermissionRequestedAt.getTime() < DAY_MS;
+  // No open deal: nobody to call and no known brand voice, so nothing goes.
   if (
     !send ||
+    !leadId ||
     state === 'temporary' ||
     state === 'permanent' ||
     askedToday ||

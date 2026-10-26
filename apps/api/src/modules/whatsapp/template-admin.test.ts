@@ -239,7 +239,14 @@ describe('the Modelos screen', () => {
         language: 'pt_BR',
         category: 'MARKETING',
         status: 'APPROVED',
-        components: [header, { type: 'BODY', text: 'Oi {{1}}' }],
+        components: [
+          header,
+          { type: 'BODY', text: 'Oi {{1}}' },
+          {
+            type: 'BUTTONS',
+            buttons: [{ type: 'URL', text: 'Ver o site', url: 'https://exemplo.com' }],
+          },
+        ],
       })
       .returning();
     const edit = {
@@ -262,6 +269,11 @@ describe('the Modelos screen', () => {
         header,
         { type: 'BODY', text: edit.body, example: { body_text: [['Mariana']] } },
         { type: 'FOOTER', text: edit.footer },
+        // The form edits only quick replies: the link button stays.
+        {
+          type: 'BUTTONS',
+          buttons: [{ type: 'URL', text: 'Ver o site', url: 'https://exemplo.com' }],
+        },
       ],
     });
     expect(edited.json<{ template: { status: string } }>().template.status).toBe('PENDING');
@@ -328,6 +340,26 @@ describe('the Modelos screen', () => {
       payload: { fields: [{ role: 'lead' }] },
     });
     expect(wrong.statusCode).toBe(422);
+  });
+
+  it('drops a template Meta no longer lists, so its name can be used again', async () => {
+    const admin = await sessionFor('admin_master');
+    await db.insert(waTemplates).values({
+      metaId: 'tpl-gone',
+      name: 'apagado_na_meta',
+      language: 'pt_BR',
+      status: 'APPROVED',
+      components: [{ type: 'BODY', text: 'Oi' }],
+    });
+    listed = [];
+    const answer = await app.inject({
+      method: 'GET',
+      url: '/whatsapp/templates/manage',
+      cookies: admin,
+    });
+    expect(answer.json<WaManagedTemplates>().templates.map((t) => t.name)).not.toContain(
+      'apagado_na_meta',
+    );
   });
 
   it('is for Admin Master and Diretoria only', async () => {

@@ -616,6 +616,54 @@ describe('a template written on the Modelos screen', () => {
     expect(plan.preview.ready).toBe(false);
   });
 
+  it('a custom company fallback follows the article the seller ticked', () => {
+    const own = {
+      ...T.formatacaoBoasVindasArte,
+      fields: [
+        { role: 'lead' as const },
+        { role: 'seller' as const },
+        { role: 'company' as const, form: 'article' as const, fallback: 'seu negócio' },
+      ],
+    };
+    const plan = ok({
+      ...input,
+      request: {
+        name: 'wings_formatacao_boas_vindas',
+        language: 'pt_BR',
+        params: [],
+        companyArticle: 'o',
+      },
+      templates: [T.formatacaoBoasVindas, own],
+      defaults: { lead: 'Mariana', seller: 'Daniele', company: '' },
+    });
+    expect(plan.preview.text).toContain('transformar o seu negócio em franquia');
+  });
+
+  it('the _arte version takes the fallback saved on its base, with its own article', () => {
+    const base = {
+      ...T.formatacaoBoasVindas,
+      fields: [
+        { role: 'lead' as const, fallback: 'tudo bem' },
+        { role: 'seller' as const },
+        { role: 'company' as const, fallback: 'sua empresa' },
+      ],
+    };
+    const plan = ok({
+      ...input,
+      request: {
+        name: 'wings_formatacao_boas_vindas',
+        language: 'pt_BR',
+        params: [],
+        companyArticle: 'a',
+      },
+      templates: [base, T.formatacaoBoasVindasArte],
+      defaults: { lead: '', seller: 'Daniele', company: '' },
+    });
+    expect(plan.version.name).toBe('wings_formatacao_boas_vindas_arte');
+    expect(plan.preview.text).toContain('Olá, tudo bem!');
+    expect(plan.preview.text).toContain('transformar a sua empresa em franquia');
+  });
+
   it('with the call-permission request, goes as the template even inside the window', () => {
     const asking = {
       ...custom,

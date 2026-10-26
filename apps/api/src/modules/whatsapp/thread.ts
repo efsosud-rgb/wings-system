@@ -263,7 +263,7 @@ export function conversationListSql(input: {
                  (select r.read_at from wa_conversation_reads r
                    where r.conversation_id = c.id and r.employee_id = ${input.readerId}),
                  (select max(o.created_at) from wa_messages o
-                   where o.conversation_id = c.id and o.direction = 'out'),
+                   where o.conversation_id = c.id and o.direction = 'out' and o.author <> 'system'),
                  '-infinity'::timestamptz)) as unread
     from wa_conversations c
     join wa_contacts k on k.id = c.contact_id
@@ -272,7 +272,8 @@ export function conversationListSql(input: {
     left join clients b on b.id = c.brand_client_id
     left join lateral (
       select direction, kind, text, status from wa_messages
-      where conversation_id = c.id order by created_at desc limit 1
+      -- The system's own call-permission request is not an answer: the conversation stays waiting.
+      where conversation_id = c.id and author <> 'system' order by created_at desc limit 1
     ) m on true
     where c.last_message_at is not null
       ${input.owner === undefined ? sql`` : sql`and l.owner_employee_id = ${input.owner}`}

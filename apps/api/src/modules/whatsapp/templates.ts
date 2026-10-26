@@ -5,8 +5,14 @@ import {
   type WaTemplateEdit,
 } from '@wings/shared';
 import type { Database } from '../../db/client.js';
+import { eq } from 'drizzle-orm';
 import { waTemplates } from '../../db/schema/index.js';
-import { errorText, listWhatsAppTemplates, type WhatsAppConfig } from './graph.js';
+import {
+  errorText,
+  listWhatsAppTemplates,
+  TEMPLATE_LIST_MAX,
+  type WhatsAppConfig,
+} from './graph.js';
 import { asksCallPermission, templateBody } from './template-send.js';
 
 /**
@@ -25,6 +31,7 @@ export async function syncTemplates(
 ): Promise<string | null> {
   const listed = await listWhatsAppTemplates(fetchImpl, config);
   if (!listed.ok) return errorText(listed.code, listed.title);
+  const names = new Set(listed.data.map((t) => `${t.name}|${t.language}`));
   for (const t of listed.data) {
     if (!t.name || !t.language || !t.status) continue;
     const row = {
@@ -43,6 +50,13 @@ export async function syncTemplates(
         set: row,
       });
   }
+  // Deleted at Meta: gone here too, unless the list hit the page limit (then it may be cut short).
+  if (listed.data.length < TEMPLATE_LIST_MAX)
+    for (const stored of await db
+      .select({ id: waTemplates.id, name: waTemplates.name, language: waTemplates.language })
+      .from(waTemplates))
+      if (!names.has(`${stored.name}|${stored.language}`))
+        await db.delete(waTemplates).where(eq(waTemplates.id, stored.id));
   return null;
 }
 
@@ -68,6 +82,11 @@ const listOf = (components: unknown): Component[] =>
  */
 export function componentsFor(draft: WaTemplateEdit, keep: unknown = []): object[] {
   const header = listOf(keep).find((c) => c.type === 'HEADER');
+  // The form edits only the quick replies: a link or phone button stays as Meta has it.
+  const kept = (listOf(keep).find((c) => c.type === 'BUTTONS')?.buttons ?? []).filter(
+    (b) => b.type !== 'QUICK_REPLY',
+  );
+  const buttons = [...draft.buttons.map((text) => ({ type: 'QUICK_REPLY', text })), ...kept];
   return [
     ...(header ? [header] : []),
     {
@@ -76,9 +95,7 @@ export function componentsFor(draft: WaTemplateEdit, keep: unknown = []): object
       ...(draft.examples.length > 0 ? { example: { body_text: [draft.examples] } } : {}),
     },
     ...(draft.footer ? [{ type: 'FOOTER', text: draft.footer }] : []),
-    ...(draft.buttons.length > 0
-      ? [{ type: 'BUTTONS', buttons: draft.buttons.map((text) => ({ type: 'QUICK_REPLY', text })) }]
-      : []),
+    ...(buttons.length > 0 ? [{ type: 'BUTTONS', buttons }] : []),
     // shortcut: Meta's call-permission template component as documented, not yet sent to Meta for real.
     ...(draft.callPermission ? [{ type: 'call_permission_request' }] : []),
   ];

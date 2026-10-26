@@ -1,5 +1,6 @@
 import {
   WA_ART_SUFFIX,
+  WA_COMPANY_FALLBACK,
   WA_FIELD_LABELS,
   WA_TEMPLATE_FIELDS,
   WINGS_CLIENT_ID,
@@ -187,8 +188,14 @@ export function planTemplate(input: PlanInput): TemplatePlan {
 
   // The fields: what the seller typed (names without their article), or what the server knows.
   const body = bodyOf(version);
+  // Saved fields: the version's own, or the base's (an `_arte` keeps its own form: "da Malkuth").
+  const saved = [version, base].find((row) => row?.fields?.length === count)?.fields ?? null;
   const specs =
-    version.fields?.length === count ? version.fields : waTemplateFields(version.name, count);
+    version.fields?.length === count
+      ? version.fields
+      : waTemplateFields(version.name, count).map((spec, i) =>
+          saved?.[i] ? { ...saved[i], form: spec.form } : spec,
+        );
   const given = request.params.length === count ? request.params : null;
   const fellBack: string[] = [];
   const fields: WaTemplateField[] = specs.map((spec, i) => {
@@ -232,8 +239,8 @@ export function planTemplate(input: PlanInput): TemplatePlan {
     if (field.role === 'company') {
       usesCompanyArticle = true;
       // "sua empresa" is feminine whatever the seller ticked: never "o sua empresa".
-      const fallback = field.value === waFieldFallback(specs[i]!);
-      return withArticle(field.value, fallback ? 'a' : request.companyArticle, form);
+      const feminine = field.value === WA_COMPANY_FALLBACK;
+      return withArticle(field.value, feminine ? 'a' : request.companyArticle, form);
     }
     if (field.role === 'brand') {
       if (voice && !voice.article) brandArticleMissing = true;

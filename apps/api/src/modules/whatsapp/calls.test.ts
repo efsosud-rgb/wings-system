@@ -716,10 +716,30 @@ describe('"Prefiro uma ligação" on a template (Eric, 26/10)', () => {
       .from(waContacts)
       .where(eq(waContacts.phone, '5521977200001'));
     expect(contact?.callPermission).toBe('requested');
+    // The system's own request is not an answer: the conversation still waits for a person.
+    const admin = await sessionFor('admin_master');
+    const waiting = await app.inject({
+      method: 'GET',
+      url: '/whatsapp/conversations?filter=unanswered',
+      cookies: admin.cookies,
+    });
+    expect(
+      waiting
+        .json<{ conversations: { leadId: string | null }[] }>()
+        .conversations.map((c) => c.leadId),
+    ).toContain(leadId);
     // A second tap the same day: no second task, no second request (Meta allows 1 a day).
     await tap('5521977200001', 'wamid.CALLME2');
     expect(await callTasks(leadId)).toHaveLength(1);
     expect(posts.filter((p) => p.type === 'interactive')).toHaveLength(1);
+  });
+
+  it('with no open deal (a closed one only), nothing is sent and no task made', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const closed = await deal('5521977200009', owner.id);
+    await db.update(leads).set({ won: false, closedAt: new Date() }).where(eq(leads.id, closed));
+    await tap('5521977200009', 'wamid.CALLME9');
+    expect(posts.filter((p) => p.type === 'interactive')).toHaveLength(0);
   });
 
   it('before the number is live or with calling off: the task only, nothing sent', async () => {

@@ -253,6 +253,20 @@ function FieldRow({
           ))}
         </select>
       </label>
+      {(row.role === 'brand' || row.role === 'company') && (
+        <label>
+          Como o nome entra (sem artigo antes do campo no texto)
+          <select
+            className="crm-select"
+            value={row.form ?? 'plain'}
+            onChange={(event) => onChange({ form: event.target.value as WaNameForm })}
+          >
+            <option value="plain">Como está (franquia Malkuth)</option>
+            <option value="article">Com artigo (a Malkuth / o Casal do Churros)</option>
+            <option value="of">Com "de" (da Malkuth / do Casal do Churros)</option>
+          </select>
+        </label>
+      )}
       {row.role === 'free' && (
         <label>
           Nome do campo

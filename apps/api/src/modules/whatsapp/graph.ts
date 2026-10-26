@@ -391,6 +391,9 @@ export interface GraphTemplate {
   components?: unknown[];
 }
 
+/** At most 10 pages of 100: a list this long may be cut short. */
+export const TEMPLATE_LIST_MAX = 1000;
+
 /** GET /{waba-id}/message_templates, following Meta's pages (at most 10). */
 export async function listWhatsAppTemplates(
   fetchImpl: Fetch,
