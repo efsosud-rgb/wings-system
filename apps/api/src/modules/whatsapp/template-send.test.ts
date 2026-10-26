@@ -10,6 +10,7 @@ import {
   type PlanInput,
   type TemplateRow,
 } from './template-send.js';
+import { errorText } from './graph.js';
 import { callPermissionText } from './routes.js';
 
 /**
@@ -587,5 +588,13 @@ describe('the call-permission text', () => {
       /^A Cabana da Barra gostaria/,
     );
     expect(callPermissionText({ name: 'Pecan', article: null })).toMatch(/^A Pecan gostaria/);
+  });
+});
+
+describe("Meta's refusals in Portuguese", () => {
+  it('says the test number only reaches the numbers listed in the app (131030)', () => {
+    expect(errorText(131030, 'Recipient phone number not in allowed list')).toMatch(
+      /número de teste da Meta/,
+    );
   });
 });

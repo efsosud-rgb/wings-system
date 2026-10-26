@@ -582,6 +582,9 @@ export async function requestSmbSync(
 const ERRORS: Record<number, string> = {
   131047: 'Fora das 24 horas: só um modelo aprovado pode ir agora.',
   131026: 'Não entregue: o número pode não ter WhatsApp ou não aceitar mensagens da empresa.',
+  // The staging still runs on Meta's test number, which only delivers to the numbers listed in the app.
+  131030:
+    'Não entregue: o sistema está no número de teste da Meta, que só manda para até 5 números cadastrados no app. Para falar com lead de verdade, falta ligar o número da Wings na API (veja docs/whatsapp/cloud-api.md).',
   131049:
     'A Meta segurou a mensagem para não cansar a pessoa com mensagens de empresa. Tente outro dia.',
   131050: 'A pessoa pediu para não receber mensagens de marketing.',
