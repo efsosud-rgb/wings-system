@@ -5,6 +5,7 @@ import {
   WA_MEDIA_KINDS,
   WA_MESSAGES_PAGE,
   WA_WINDOW_HOURS,
+  withArticle,
   type BrandArticle,
   type DealWhatsApp,
   type WaConversationItem,
@@ -124,6 +125,16 @@ export async function contactOfPhone(db: Database, phone: string | null) {
     .limit(1);
   return found[0] ?? null;
 }
+
+/**
+ * What the person sees above Meta's "Permitir ligações" buttons (a brand's
+ * lead hears the brand, with its own article: "O Casal do Churros", "A Cabana
+ * da Barra" — never "A A Cabana").
+ */
+export const callPermissionText = (brand: Pick<BrandVoice, 'name' | 'article'> | null) => {
+  const who = brand ? withArticle(brand.name, brand.article ?? 'a', 'article') : 'a Wings';
+  return `${who.charAt(0).toUpperCase()}${who.slice(1)} gostaria de poder te ligar pelo WhatsApp para continuar o seu atendimento.`;
+};
 
 /** The brand a conversation speaks for, with what its WhatsApp header needs. */
 export interface BrandVoice {

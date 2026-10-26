@@ -11,7 +11,7 @@ import {
   type TemplateRow,
 } from './template-send.js';
 import { errorText } from './graph.js';
-import { callPermissionText } from './routes.js';
+import { callPermissionText } from './thread.js';
 
 /**
  * Which message a template becomes, with no database and no Meta: the window,

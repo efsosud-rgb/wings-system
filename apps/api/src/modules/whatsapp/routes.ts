@@ -57,7 +57,7 @@ import {
   permissionOf,
   toMessage,
   windowOf,
-  type BrandVoice,
+  callPermissionText,
 } from './thread.js';
 import { takeConversation } from '../sofia/state.js';
 import { adoptUnmatched, conversationFor } from './intake.js';
@@ -84,17 +84,6 @@ export { templateBody } from './template-send.js';
 const TEMPLATES_FRESH_MS = 6 * 3_600_000;
 
 const idParams = z.object({ id: z.uuid() });
-
-/**
- * What the person sees above Meta's "Permitir ligações" buttons (a brand's
- * lead hears the brand, with its own article: "O Casal do Churros", "A Cabana
- * da Barra" — never "A A Cabana").
- */
-export const callPermissionText = (brand: Pick<BrandVoice, 'name' | 'article'> | null) => {
-  const who = brand ? withArticle(brand.name, brand.article ?? 'a', 'article') : 'a Wings';
-  return `${who.charAt(0).toUpperCase()}${who.slice(1)} gostaria de poder te ligar pelo WhatsApp para continuar o seu atendimento.`;
-};
-export const CALL_PERMISSION_TEXT = callPermissionText(null);
 
 export const whatsappRoutes: FastifyPluginAsync = async (app) => {
   const { db, env } = app.wings;
