@@ -21,6 +21,7 @@ import {
   waConversationEvents,
   waConversations,
   waMessages,
+  waNumberTemplates,
   waTemplates,
   waWebhookEvents,
 } from '../../db/schema/index.js';
@@ -195,6 +196,9 @@ export async function applyWhatsAppPayload(deps: WhatsAppIntakeDeps, body: unkno
       const now = deps.now?.() ?? new Date();
       await applyNumberChange(deps.db, change, now);
       await applyWorkNumberChange(deps.db, number.id, change, now);
+      // Its own WABA's template reviews (phase 2): only its own rows move.
+      for (const template of change.templates)
+        await applyTemplateReview(deps.db, template, number.id);
       continue;
     }
     if (deps.phoneNumberId && change.phoneNumberId && change.phoneNumberId !== deps.phoneNumberId)
@@ -745,7 +749,24 @@ export async function applyStatus(db: Database, update: WaStatusUpdate) {
 
 // --- a template review ------------------------------------------------------------------------
 
-async function applyTemplateReview(db: Database, update: WaTemplateUpdate) {
+async function applyTemplateReview(
+  db: Database,
+  update: WaTemplateUpdate,
+  numberId: string | null = null,
+) {
+  if (numberId) {
+    await db
+      .update(waNumberTemplates)
+      .set({ status: update.status, rejectedReason: reasonOf(update.reason), syncedAt: new Date() })
+      .where(
+        and(
+          eq(waNumberTemplates.numberId, numberId),
+          eq(waNumberTemplates.name, update.name),
+          update.language ? eq(waNumberTemplates.language, update.language) : sql`true`,
+        ),
+      );
+    return;
+  }
   await db
     .update(waTemplates)
     .set({ status: update.status, rejectedReason: reasonOf(update.reason), syncedAt: new Date() })

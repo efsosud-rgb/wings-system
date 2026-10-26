@@ -41,6 +41,7 @@ import {
   waConversations,
   waMessageFiles,
   waMessages,
+  waNumberTemplates,
   waNumbers,
   waTemplates,
 } from '../../db/schema/index.js';
@@ -116,7 +117,7 @@ import {
 import { loadSofiaSettings } from '../sofia/settings.js';
 import { factListOf } from '../sofia/state.js';
 import { adoptUnmatched, conversationFor, openConversation } from './intake.js';
-import { syncTemplates } from './templates.js';
+import { syncNumberTemplates, syncTemplates } from './templates.js';
 import { inboxSummaryOf } from './inbox.js';
 import { notifyInboxChanged } from './inbox-signal.js';
 import {
@@ -839,11 +840,11 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
         : undefined);
     const other = known ? await heldByOther(db, known, request.session.actor.employeeId) : null;
     if (other) return notHolder(reply, other.holderName);
-    if (numberId && (outgoing.kind === 'template' || outgoing.kind === 'call_permission'))
+    // Calling is the official number's: a work number sends text, files and its own templates.
+    if (numberId && outgoing.kind === 'call_permission')
       return reply.status(409).send({
-        error: 'number_templates_soon',
-        message:
-          'Por este número vão só mensagem livre e arquivo, dentro das 24 h. Modelos e pedido de ligação por ele chegam depois; fora das 24 h, fale pelo número oficial.',
+        error: 'number_no_calls',
+        message: 'O pedido de ligação vai só pelo número oficial.',
       });
     const config = numberId ? await numberConfigOf(db, box, numberId) : whatsappConfigOf(env);
     if (!config)
@@ -977,8 +978,8 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       };
     } else {
       // Who asked not to receive messages gets no template, not even as a common message:
-      // only what a person writes, inside the window.
-      if (target.contact?.optOutAt)
+      // only what a person writes, inside the window. (The official number's opt-out.)
+      if (!numberId && target.contact?.optOutAt)
         return reply.status(409).send({
           error: 'opted_out',
           message:
@@ -991,10 +992,12 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
           conversationId: target.conversationId ?? null,
           contact: target.contact,
           senderEmployeeId: request.session.actor.employeeId,
+          numberId,
         },
         at,
       );
-      const plan = await planTemplateFor(db, context, outgoing);
+      // A work number sends only its own WABA's templates (synced on "Usar modelo").
+      const plan = await planTemplateFor(db, context, outgoing, numberId);
       if (!plan.ok)
         return reply.status(plan.status).send({ error: plan.error, message: plan.message });
       const { preview } = plan;
@@ -1245,6 +1248,7 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       leadId: found.conversation.leadId,
       conversationId: found.conversation.id,
       contact: found.contact,
+      numberId: found.conversation.numberId,
     };
   }
 
@@ -1270,7 +1274,12 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
         { ...target, senderEmployeeId: request.session.actor.employeeId },
         now(),
       );
-      const plan = await planTemplateFor(db, context, body.data);
+      const plan = await planTemplateFor(
+        db,
+        context,
+        body.data,
+        'numberId' in target ? target.numberId : null,
+      );
       if (!plan.ok)
         return reply.status(plan.status).send({ error: plan.error, message: plan.message });
       return reply.header('Cache-Control', 'no-store').send({ preview: plan.preview });
@@ -1378,24 +1387,12 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
 
   // --- templates ----------------------------------------------------------------------
 
-  app.get('/whatsapp/templates', use, async (request, reply) => {
-    const refresh = (request.query as { refresh?: string } | undefined)?.refresh === '1';
-    const config = whatsappConfigOf(env);
-    let syncError: string | null = null;
-    const [{ last } = { last: null }] = await db
-      .select({ last: max(waTemplates.syncedAt) })
-      .from(waTemplates);
-    const stale = !last || now().getTime() - last.getTime() > TEMPLATES_FRESH_MS;
-    if (config?.wabaId && (refresh || stale))
-      syncError = await syncTemplates(db, fetchImpl(), { ...config, wabaId: config.wabaId }, now());
-    const rows = await db
-      .select()
-      .from(waTemplates)
-      .where(eq(waTemplates.status, 'APPROVED'))
-      .orderBy(asc(waTemplates.name), asc(waTemplates.language));
-    // One entry per template for the seller: the `_arte` version is chosen when it goes.
+  /** One entry per template for the seller: the `_arte` version is chosen when it goes. */
+  const templateList = (
+    rows: { name: string; language: string; category: string | null; components: unknown }[],
+  ): WaTemplate[] => {
     const approved = new Set(rows.map((row) => `${row.name}|${row.language}`));
-    const templates: WaTemplate[] = rows
+    return rows
       .filter(
         (row) =>
           !row.name.endsWith(WA_ART_SUFFIX) ||
@@ -1415,7 +1412,59 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
           unsupported: unsupportedOf(row),
         };
       });
-    return reply.send({ templates, configured: config !== null, syncError });
+  };
+
+  app.get('/whatsapp/templates', use, async (request, reply) => {
+    const query = z
+      .object({ refresh: z.literal('1').optional(), numberId: z.uuid().optional() })
+      .safeParse(request.query);
+    if (!query.success)
+      return reply.status(400).send({ error: 'invalid', message: 'Pedido inválido.' });
+    const refresh = query.data.refresh === '1';
+    const { numberId } = query.data;
+    if (numberId) {
+      // A work number's own WABA (docs/whatsapp/central.md): only for who reaches its chats.
+      const [number] = await chatNumbersOf(request, numberId);
+      if (!number)
+        return reply.status(404).send({ error: 'not_found', message: 'Número não encontrado.' });
+      const config = await numberConfigOf(db, box, numberId);
+      let syncError: string | null = null;
+      const [{ last } = { last: null }] = await db
+        .select({ last: max(waNumberTemplates.syncedAt) })
+        .from(waNumberTemplates)
+        .where(eq(waNumberTemplates.numberId, numberId));
+      const stale = !last || now().getTime() - last.getTime() > TEMPLATES_FRESH_MS;
+      if (config?.wabaId && (refresh || stale))
+        syncError = await syncNumberTemplates(
+          db,
+          fetchImpl(),
+          numberId,
+          { ...config, wabaId: config.wabaId },
+          now(),
+        );
+      const rows = await db
+        .select()
+        .from(waNumberTemplates)
+        .where(
+          and(eq(waNumberTemplates.numberId, numberId), eq(waNumberTemplates.status, 'APPROVED')),
+        )
+        .orderBy(asc(waNumberTemplates.name), asc(waNumberTemplates.language));
+      return reply.send({ templates: templateList(rows), configured: config !== null, syncError });
+    }
+    const config = whatsappConfigOf(env);
+    let syncError: string | null = null;
+    const [{ last } = { last: null }] = await db
+      .select({ last: max(waTemplates.syncedAt) })
+      .from(waTemplates);
+    const stale = !last || now().getTime() - last.getTime() > TEMPLATES_FRESH_MS;
+    if (config?.wabaId && (refresh || stale))
+      syncError = await syncTemplates(db, fetchImpl(), { ...config, wabaId: config.wabaId }, now());
+    const rows = await db
+      .select()
+      .from(waTemplates)
+      .where(eq(waTemplates.status, 'APPROVED'))
+      .orderBy(asc(waTemplates.name), asc(waTemplates.language));
+    return reply.send({ templates: templateList(rows), configured: config !== null, syncError });
   });
 
   // --- received files -------------------------------------------------------------------

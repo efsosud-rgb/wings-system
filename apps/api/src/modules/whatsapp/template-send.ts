@@ -19,7 +19,13 @@ import {
 } from '@wings/shared';
 import { and, eq, inArray } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
-import { crmCompanies, employees, leads, waTemplates } from '../../db/schema/index.js';
+import {
+  crmCompanies,
+  employees,
+  leads,
+  waNumberTemplates,
+  waTemplates,
+} from '../../db/schema/index.js';
 import { artFileOf, type ArtFile } from './art.js';
 import {
   buttonsPayload,
@@ -31,7 +37,7 @@ import {
   type OutgoingPayload,
 } from './graph.js';
 import type { Contact } from './outbox.js';
-import { brandOf, windowOf, type BrandVoice } from './thread.js';
+import { brandOf, numberWindowOf, windowOf, type BrandVoice } from './thread.js';
 
 /**
  * Which message a template becomes (docs/whatsapp/arte-modelos.md), one rule
@@ -448,6 +454,8 @@ export async function templateContextOf(
     contact: Contact | null;
     /** Who sends: their first name fills "Aqui é {{2}}". */
     senderEmployeeId: string | null;
+    /** A work number's chat: its own window (the person's last message to that number). */
+    numberId?: string | null;
   },
   now: Date,
 ): Promise<TemplateContext> {
@@ -469,7 +477,10 @@ export async function templateContextOf(
   return {
     voice,
     art,
-    window: windowOf(target.contact, now),
+    window:
+      target.numberId && target.conversationId
+        ? await numberWindowOf(db, target.conversationId, now)
+        : windowOf(target.contact, now),
     defaults: {
       lead: firstName(lead?.name) || firstName(target.contact?.profileName),
       seller: firstName(sender?.name),
@@ -478,13 +489,34 @@ export async function templateContextOf(
   };
 }
 
-/** The approved rows of a template's family (`x` and `x_arte`) in one language. */
+/**
+ * The approved rows of a template's family (`x` and `x_arte`) in one language: the official
+ * WABA's, or with `numberId` that work number's own.
+ */
 export async function familyTemplates(
   db: Database,
   name: string,
   language: string,
+  numberId: string | null = null,
 ): Promise<TemplateRow[]> {
   const family = waTemplateFamily(name);
+  if (numberId)
+    return db
+      .select({
+        name: waNumberTemplates.name,
+        language: waNumberTemplates.language,
+        category: waNumberTemplates.category,
+        components: waNumberTemplates.components,
+      })
+      .from(waNumberTemplates)
+      .where(
+        and(
+          eq(waNumberTemplates.numberId, numberId),
+          inArray(waNumberTemplates.name, [family, `${family}${WA_ART_SUFFIX}`]),
+          eq(waNumberTemplates.language, language),
+          eq(waNumberTemplates.status, 'APPROVED'),
+        ),
+      );
   return db
     .select({
       name: waTemplates.name,
@@ -508,10 +540,11 @@ export async function planTemplateFor(
   db: Database,
   context: TemplateContext,
   request: PlanInput['request'],
+  numberId: string | null = null,
 ): Promise<TemplatePlan> {
   return planTemplate({
     request,
-    templates: await familyTemplates(db, request.name, request.language),
+    templates: await familyTemplates(db, request.name, request.language, numberId),
     window: context.window,
     voice: context.voice,
     hasArt: context.art !== null,

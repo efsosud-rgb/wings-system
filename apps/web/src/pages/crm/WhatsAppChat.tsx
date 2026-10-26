@@ -73,9 +73,9 @@ export function WhatsAppChat({
     bottom.current?.scrollIntoView?.({ block: 'end' });
   }, [last]);
   const [useTemplate, setUseTemplate] = useState(false);
-  // A work number's chat (docs/whatsapp/central.md): free text and files only, inside its 24 h.
+  // A work number's chat (docs/whatsapp/central.md): its own window, its own WABA's templates.
   const onNumber = Boolean(data.number);
-  const templateMode = !onNumber && (useTemplate || !data.window.open);
+  const templateMode = useTemplate || !data.window.open;
   const older = useOlder(thread, data.messages);
   // The seller's "em breve" is the official number's; a work number is live once connected.
   const soon = useWhatsAppSoon() && !onNumber;
@@ -136,17 +136,13 @@ export function WhatsAppChat({
             Esta conversa está com {heldBy}. Para responder, assuma a conversa ({heldBy} recebe um
             aviso).
           </p>
-        ) : onNumber && !data.window.open ? (
-          <p className="crm-wa-off">
-            Fora das 24 h da última mensagem da pessoa para este número: só dá para responder quando
-            ela escrever de novo. Para falar primeiro, use o número oficial e um modelo aprovado.
-          </p>
         ) : templateMode ? (
           <TemplateCompose
             key={composerKey}
             thread={thread}
             optedOut={data.optedOut}
             windowOpen={data.window.open}
+            numberId={data.number?.id ?? null}
             onText={() => setUseTemplate(false)}
           />
         ) : (
@@ -154,7 +150,7 @@ export function WhatsAppChat({
             key={composerKey}
             thread={thread}
             leadId={data.leadId}
-            onTemplate={onNumber ? undefined : () => setUseTemplate(true)}
+            onTemplate={() => setUseTemplate(true)}
             onTyping={onTyping}
           />
         )
@@ -516,7 +512,7 @@ function TextCompose({
 }: {
   thread: WhatsAppThread;
   leadId: string | null;
-  /** Absent on a work number's chat: its templates come later. */
+  /** Switches to the template picker (a work number's chat uses its own WABA's templates). */
   onTemplate?: () => void;
   onTyping?: () => void;
 }) {
@@ -770,15 +766,18 @@ function TemplateCompose({
   thread,
   optedOut,
   windowOpen,
+  numberId,
   onText,
 }: {
   thread: WhatsAppThread;
   optedOut: boolean;
   windowOpen: boolean;
+  /** A work number's chat: that number's own templates (its WABA), never the official ones. */
+  numberId: string | null;
   onText: () => void;
 }) {
-  const templates = useWhatsAppTemplates(true);
-  const refresh = useRefreshWhatsAppTemplates();
+  const templates = useWhatsAppTemplates(true, numberId);
+  const refresh = useRefreshWhatsAppTemplates(numberId);
   const send = useSendWhatsAppTemplate(thread);
   const list = templates.data?.templates ?? [];
   const [chosen, setChosen] = useState('');

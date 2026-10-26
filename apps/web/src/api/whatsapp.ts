@@ -285,26 +285,31 @@ export function useWhatsAppTargets(q: string) {
   });
 }
 
-export function useWhatsAppTemplates(enabled: boolean) {
+/** The official number's approved templates, or with `numberId` that work number's own (its WABA). */
+const templatesPath = (numberId: string | null) =>
+  `/whatsapp/templates${numberId ? `?numberId=${numberId}` : ''}`;
+const templatesKey = (numberId: string | null) => ['whatsapp', 'templates', numberId ?? 'official'];
+
+export function useWhatsAppTemplates(enabled: boolean, numberId: string | null = null) {
   return useQuery({
-    queryKey: ['whatsapp', 'templates'],
+    queryKey: templatesKey(numberId),
     queryFn: () =>
       api.get<{ templates: WaTemplate[]; configured: boolean; syncError: string | null }>(
-        '/whatsapp/templates',
+        templatesPath(numberId),
       ),
     enabled,
     staleTime: 5 * 60_000,
   });
 }
 
-export function useRefreshWhatsAppTemplates() {
+export function useRefreshWhatsAppTemplates(numberId: string | null = null) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: () =>
       api.get<{ templates: WaTemplate[]; configured: boolean; syncError: string | null }>(
-        '/whatsapp/templates?refresh=1',
+        `${templatesPath(numberId)}${numberId ? '&' : '?'}refresh=1`,
       ),
-    onSuccess: (data) => queryClient.setQueryData(['whatsapp', 'templates'], data),
+    onSuccess: (data) => queryClient.setQueryData(templatesKey(numberId), data),
   });
 }
 
