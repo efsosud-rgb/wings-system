@@ -35,7 +35,10 @@ import {
 } from '../../test/factories.js';
 import { configureLeadTriage } from '../leads/triage-schedule.js';
 import { saveSofiaSettings } from '../sofia/settings.js';
+import type { ObjectStorage } from '../../lib/storage/index.js';
 import { applyWhatsAppPayload, processWhatsAppEvents, storeWhatsAppEvent } from './intake.js';
+import { storeWhatsAppMedia } from './media-store.js';
+import { numberConfigOf } from './numbers.js';
 
 /**
  * The Central WhatsApp (docs/whatsapp/central.md) against a simulated Meta: a work number's own
@@ -786,5 +789,55 @@ describe('the webhook queue', () => {
     });
     expect(gone.statusCode).toBe(409);
     expect(await db.select().from(waMessages)).toHaveLength(0);
+  });
+});
+
+describe('a work number’s received file', () => {
+  it('is copied to our storage with that number’s own token, never the official one', async () => {
+    await apply(
+      workChange('messages', {
+        messages: [
+          {
+            from: PERSON,
+            id: 'wamid.IMG1',
+            timestamp: unix(ago(2)),
+            type: 'image',
+            image: { id: 'media-work', mime_type: 'image/jpeg' },
+          },
+        ],
+      }),
+    );
+    const auths: (string | null)[] = [];
+    const mediaFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(
+        typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
+      );
+      auths.push(new Headers(init?.headers).get('authorization'));
+      if (url.hostname === 'lookaside.fbsbx.com') return new Response('JPEGDATA');
+      return json({
+        url: 'https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1',
+        mime_type: 'image/jpeg',
+        file_size: 8,
+      });
+    }) as typeof fetch;
+    const put: string[] = [];
+    const storage = {
+      put: async (key: string) => {
+        put.push(key);
+      },
+      delete: async () => undefined,
+    } as unknown as ObjectStorage;
+    const result = await storeWhatsAppMedia({
+      db,
+      storage,
+      config: { token: TOKEN, phoneNumberId: PHONE_ID, wabaId: WABA },
+      numberConfig: (id) => numberConfigOf(db, createSecretBox(KEY), id),
+      fetchImpl: mediaFetch,
+      log: () => {},
+      now: () => clock,
+    });
+    expect(result).toMatchObject({ queued: 1, stored: 1 });
+    expect(put).toHaveLength(1);
+    expect(auths).toEqual([`Bearer ${NUMBER_TOKEN}`, `Bearer ${NUMBER_TOKEN}`]);
   });
 });
