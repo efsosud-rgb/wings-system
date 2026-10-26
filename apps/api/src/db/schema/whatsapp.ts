@@ -83,6 +83,13 @@ export const waConversations = pgTable(
       .notNull()
       .references(() => waContacts.id),
     leadId: uuid('lead_id').references(() => leads.id),
+    /**
+     * A person's work number the chat is on (docs/whatsapp/central.md): one chat per contact per
+     * number, as on the phone, never Sofia's. Null is the official number.
+     */
+    numberId: uuid('number_id').references(() => waNumbers.id),
+    /** The name the number's owner saved for the person in the phone (`smb_app_state_sync`). */
+    phoneContactName: text('phone_contact_name'),
     /** open | closed */
     status: text('status').notNull().default('open'),
     /** The ad the person came from (`referral` of the first message), ids and texts of the ad only. */
@@ -125,10 +132,13 @@ export const waConversations = pgTable(
       .where(sql`${table.sofiaDueAt} is not null`),
     uniqueIndex('wa_conversations_contact_lead_uq')
       .on(table.contactId, table.leadId)
-      .where(sql`${table.leadId} is not null`),
+      .where(sql`${table.leadId} is not null and ${table.numberId} is null`),
     uniqueIndex('wa_conversations_contact_unmatched_uq')
       .on(table.contactId)
-      .where(sql`${table.leadId} is null`),
+      .where(sql`${table.leadId} is null and ${table.numberId} is null`),
+    uniqueIndex('wa_conversations_number_contact_uq')
+      .on(table.numberId, table.contactId)
+      .where(sql`${table.numberId} is not null`),
     index('wa_conversations_lead_idx').on(table.leadId),
     index('wa_conversations_last_idx').on(table.lastMessageAt),
   ],
@@ -374,6 +384,8 @@ export const waWebhookEvents = pgTable(
     attempts: integer('attempts').notNull().default(0),
     /** A code (bad_payload, db_error, ...), never text about the person. */
     lastError: text('last_error'),
+    /** A failed try waits longer each time (`intake.ts`). */
+    nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }).notNull().defaultNow(),
     processedAt: timestamp('processed_at', { withTimezone: true }),
   },
   (table) => [
@@ -497,30 +509,47 @@ export const whatsappSettings = pgTable('whatsapp_settings', {
 });
 
 /**
- * The sellers' own WhatsApp Business numbers, mirrored by coexistence (Eric, 20/10;
- * docs/whatsapp/conectar-numero.md). One row per number, each with its own WABA and business
- * portfolio: nothing assumes one portfolio for all. `token_enc` is the business token Meta gave
- * when this number was connected, sealed by `secret-box.ts` under INTEGRATIONS_ENCRYPTION_KEY;
- * it is never sent to the browser, never logged, and this table is not granted to `wings_ro`.
+ * The company's work numbers (docs/whatsapp/central.md, conectar-numero.md): an Admin Master
+ * registers each one (owner, department, the phone checks), then connects it by coexistence. One
+ * row per number, each with its own WABA and business portfolio: nothing assumes one portfolio for
+ * all. Meta's ids, the token and `connected_at` stay null until the connection. `token_enc` is the
+ * business token Meta gave, sealed by `secret-box.ts` under INTEGRATIONS_ENCRYPTION_KEY; it is
+ * never sent to the browser, never logged, and this table is not granted to `wings_ro`.
  */
 export const waNumbers = pgTable(
   'wa_numbers',
   {
     tenantId: tenantId(),
     id: uuid('id').primaryKey().defaultRandom(),
-    phoneNumberId: text('phone_number_id').notNull(),
-    wabaId: text('waba_id').notNull(),
+    /** The number as registered: 55 + DDD + number, digits only. */
+    phone: text('phone'),
+    /** A name for it on the screens ("Comercial Expansão"). */
+    label: text('label'),
+    /** Its department, a SectorSlug. */
+    sector: text('sector'),
+    /** a_confirmar | confirmado | inelegivel (WaNumberEligibility). */
+    eligibility: text('eligibility').notNull().default('a_confirmar'),
+    eligibilityNotes: text('eligibility_notes'),
+    /** The phone checks done so far (WA_NUMBER_CHECKS keys). */
+    checks: text('checks')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    phoneNumberId: text('phone_number_id'),
+    wabaId: text('waba_id'),
     businessId: text('business_id'),
     displayPhone: text('display_phone'),
     verifiedName: text('verified_name'),
     ownerEmployeeId: uuid('owner_employee_id')
       .notNull()
       .references(() => employees.id),
-    tokenEnc: text('token_enc').notNull(),
-    /** connected | disconnected */
-    status: text('status').notNull().default('connected'),
+    tokenEnc: text('token_enc'),
+    /** When Meta said the token ends (`expires_in` of the exchange); null: Meta gave no end. */
+    tokenExpiresAt: timestamp('token_expires_at', { withTimezone: true }),
+    /** registered | connected | disconnected */
+    status: text('status').notNull().default('registered'),
     connectedBy: uuid('connected_by').references(() => employees.id),
-    connectedAt: timestamp('connected_at', { withTimezone: true }).notNull(),
+    connectedAt: timestamp('connected_at', { withTimezone: true }),
     /** Meta's event and reason when the number left: a code, never a message. */
     disconnectReason: text('disconnect_reason'),
     disconnectedAt: timestamp('disconnected_at', { withTimezone: true }),
@@ -532,10 +561,15 @@ export const waNumbers = pgTable(
     historySyncRequest: text('history_sync_request'),
     /** 0–100, the highest Meta reported in a `history` webhook. */
     historyProgress: integer('history_progress'),
+    createdBy: uuid('created_by').references(() => employees.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     uniqueIndex('wa_numbers_phone_number_uq').on(table.tenantId, table.phoneNumberId),
+    uniqueIndex('wa_numbers_phone_uq')
+      .on(table.tenantId, table.phone)
+      .where(sql`${table.phone} is not null`),
     index('wa_numbers_waba_idx').on(table.wabaId),
   ],
 );

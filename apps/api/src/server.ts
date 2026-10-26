@@ -16,6 +16,8 @@ import { startSofia } from './modules/sofia/engine.js';
 import { whatsappConfigOf } from './modules/whatsapp/graph.js';
 import { startWhatsAppIntake } from './modules/whatsapp/intake.js';
 import { startWhatsAppMediaStore } from './modules/whatsapp/media-store.js';
+import { numberConfigOf } from './modules/whatsapp/numbers.js';
+import { createSecretBox } from './lib/secret-box.js';
 import { startYoutubeScheduler } from './modules/youtube/scheduler.js';
 
 const pageIdsOf = (value: string | undefined) =>
@@ -150,10 +152,14 @@ async function main() {
     const storage = storageOf(app.wings);
     const config = whatsappConfigOf(env);
     if (storage && config) {
+      const box = env.INTEGRATIONS_ENCRYPTION_KEY
+        ? createSecretBox(env.INTEGRATIONS_ENCRYPTION_KEY)
+        : null;
       const files = startWhatsAppMediaStore({
         db,
         storage,
         config,
+        numberConfig: (numberId) => numberConfigOf(db, box, numberId),
         fetchImpl: fetch,
         log: (facts) => app.log.info(facts),
       });

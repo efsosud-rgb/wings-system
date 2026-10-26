@@ -18,6 +18,9 @@ import { notifyInboxChanged } from './inbox-signal.js';
  */
 
 export type Contact = typeof waContacts.$inferSelect;
+
+/** Meta's id inside a work number: two of our numbers talking would otherwise share one wamid. */
+export const numberWamid = (numberId: string, wamid: string) => `${numberId}:${wamid}`;
 export type MessageRow = typeof waMessages.$inferSelect;
 
 export interface Delivery {
@@ -32,6 +35,8 @@ export interface Delivery {
   content: Record<string, unknown>;
   payload: OutgoingPayload;
   at: Date;
+  /** Sent through a work number: Meta's id is kept under it (`numberWamid`). */
+  numberId?: string | null;
 }
 
 export interface Delivered {
@@ -73,7 +78,14 @@ export async function deliverWhatsApp(
     .update(waMessages)
     .set(
       result.ok
-        ? { wamid: result.data.wamid, status: 'sent', sentAt: at, waTimestamp: at }
+        ? {
+            wamid: delivery.numberId
+              ? numberWamid(delivery.numberId, result.data.wamid)
+              : result.data.wamid,
+            status: 'sent',
+            sentAt: at,
+            waTimestamp: at,
+          }
         : result.unknown
           ? { errorTitle: UNKNOWN_OUTCOME, waTimestamp: at }
           : {
