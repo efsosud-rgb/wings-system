@@ -57,6 +57,9 @@ const rows: WaConversationItem[] = [
     lastStatus: null,
     attendance: 'waiting_seller',
     ownerName: 'Daniele',
+    holderId: 'e1',
+    holderName: 'Daniele',
+    queue: null,
     number: null,
   },
   {
@@ -74,6 +77,9 @@ const rows: WaConversationItem[] = [
     lastStatus: 'read',
     attendance: 'sofia',
     ownerName: null,
+    holderId: null,
+    holderName: null,
+    queue: null,
     number: null,
   },
 ];

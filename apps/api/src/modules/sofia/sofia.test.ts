@@ -1162,6 +1162,14 @@ describe('what the review found (each was a real path)', () => {
     await write(other, text('oi, sou o sócio'));
     const conversation = await conversationOf(other);
     expect(conversation.leadId).toBe(lead!.id);
+    // The deal is the seller's: the Admin takes the conversation before writing (attendance.ts).
+    const take = await app.inject({
+      method: 'POST',
+      url: `/whatsapp/conversations/${conversation.id}/assign`,
+      cookies: admin.cookies,
+      payload: { version: conversation.version, employeeId: admin.id },
+    });
+    expect(take.statusCode).toBe(204);
     const res = await app.inject({
       method: 'POST',
       url: `/whatsapp/conversations/${conversation.id}/text`,

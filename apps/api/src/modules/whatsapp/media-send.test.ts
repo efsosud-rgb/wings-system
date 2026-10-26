@@ -420,6 +420,18 @@ describe('sending a file of the deal', () => {
     expect(res.json().error).toBe('file_not_found');
     expect(uploads).toHaveLength(0);
     expect(sends).toHaveLength(0);
+    // The seller holds the conversation: the Admin takes it first (attendance.ts).
+    const [conversation] = await db
+      .select({ id: waConversations.id, version: waConversations.version })
+      .from(waConversations)
+      .where(eq(waConversations.leadId, leadId));
+    const take = await app.inject({
+      method: 'POST',
+      url: `/whatsapp/conversations/${conversation!.id}/assign`,
+      cookies: admin.cookies,
+      payload: { version: conversation!.version, employeeId: admin.id },
+    });
+    expect(take.statusCode).toBe(204);
     const byAdmin = await sendFile(admin, `/leads/${leadId}/whatsapp/media`, { fileId });
     expect(byAdmin.statusCode).toBe(201);
   });

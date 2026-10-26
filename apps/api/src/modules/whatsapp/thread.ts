@@ -344,6 +344,9 @@ export interface ConversationListRow extends Record<string, unknown> {
   number_label: string | null;
   number_phone: string | null;
   number_owner_name: string | null;
+  holder_id: string | null;
+  holder_name: string | null;
+  queue: string | null;
 }
 
 /**
@@ -363,13 +366,18 @@ export const unreadMessageOf = (readerId: string) => sql`
 
 /**
  * The conversations a reader reaches (`owner` = their id when they see only their own): an
- * official one through its deal's owner, a work number's chat through the number's owner. Needs
+ * official one through its deal's owner, a work number's chat through the number's owner, and any
+ * one assigned to them (whatsapp/attendance.ts). Needs
  * `c`, `l` (the deal) and `n` (the number) in the query.
  */
 export const reachOf = (owner: string | undefined) =>
   owner === undefined
     ? sql``
-    : sql`and ((c.number_id is null and l.owner_employee_id = ${owner}) or n.owner_employee_id = ${owner})`;
+    : sql`and ((c.number_id is null and l.owner_employee_id = ${owner}) or n.owner_employee_id = ${owner}
+          or c.assignee_employee_id = ${owner})`;
+
+/** Who answers a conversation (whatsapp/attendance.ts), over `c`, `l` (its deal) and `n` (its number). */
+export const holderSql = sql`coalesce(c.assignee_employee_id, case when c.number_id is null then l.owner_employee_id else n.owner_employee_id end)`;
 
 /** An ILIKE pattern that finds `term` as typed: `%`, `_` and `\` in it are plain characters. */
 export const likeOf = (term: string) => `%${term.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
@@ -394,6 +402,7 @@ export function conversationListSql(input: {
            c.last_message_at, c.last_message_at::text as cursor_at, c.attendance, c.segment,
            c.state_changed_at, c.reason, b.name as brand_name, m.direction, m.kind, m.text, m.status,
            c.phone_contact_name, c.number_id, n.label as number_label,
+           h.id as holder_id, h.full_name as holder_name, c.queue,
            coalesce(n.phone, n.display_phone) as number_phone, ne.full_name as number_owner_name,
            (select count(*)::int from wa_messages u
              where ${unreadMessageOf(input.readerId)}) as unread
@@ -405,6 +414,7 @@ export function conversationListSql(input: {
     left join clients b on b.id = c.brand_client_id
     left join wa_numbers n on n.id = c.number_id
     left join employees ne on ne.id = n.owner_employee_id
+    left join employees h on h.id = ${holderSql}
     left join lateral (
       select direction, kind, text, status from wa_messages
       -- The system's own call-permission request is not an answer: the conversation stays waiting.
@@ -462,6 +472,9 @@ export function conversationItemOf(
     lastStatus: row.direction === 'out' ? ((row.status ?? 'pending') as WaMessageStatus) : null,
     attendance: row.attendance as SofiaState,
     ownerName: row.owner_name,
+    holderId: row.holder_id,
+    holderName: row.holder_name,
+    queue: row.queue,
     number: row.number_id
       ? {
           id: row.number_id,
