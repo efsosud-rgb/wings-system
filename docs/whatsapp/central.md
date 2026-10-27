@@ -219,7 +219,7 @@ CREATE UNIQUE INDEX "wa_conversations_contact_lead_uq" ON "wa_conversations" ("c
   WHERE "lead_id" IS NOT NULL;
 CREATE UNIQUE INDEX "wa_conversations_contact_unmatched_uq" ON "wa_conversations" ("contact_id")
   WHERE "lead_id" IS NULL;
-DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1793036092766;
+DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1793109586555;
 ```
 
 ## Fases 2 e 3
