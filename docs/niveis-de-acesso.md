@@ -36,6 +36,7 @@ Financeiro, Processos e Projetos, Contábil/Tributário, Logística, TI).
 | CRM → Empresas, Landing pages           | yes          | yes               | —     | yes               | —         | —                             | —                 | —                   |
 | CRM → Configurações                     | yes          | —                 | —     | yes               | —         | —                             | —                 | —                   |
 | CRM → Sofia (every conversation)        | yes          | yes               | —     | yes               | —         | —                             | —                 | —                   |
+| CRM → WhatsApp → Modelos                | yes          | yes               | —     | —                 | —         | —                             | —                 | —                   |
 | Dashboard → Vendas                      | all          | all               | —     | all               | —         | —                             | own, in the CRM   | own, in the CRM     |
 | Dashboard → Marketing                   | yes          | yes               | —     | —                 | yes       | —                             | —                 | —                   |
 | Dashboard → Leads das Campanhas         | all          | all               | —     | all               | —         | —                             | —                 | own, in the CRM     |
@@ -54,7 +55,7 @@ Financeiro, Processos e Projetos, Contábil/Tributário, Logística, TI).
 
 Also by level, outside the menu: the sector-manager flag (`is_sector_manager`) adds the register of the person's
 own sector; Diretoria never sees TI sector records; Diretoria does not edit deals or employee data (only levels);
-nobody but the Admin Master sets the ad budget caps or connects Kairogen.
+nobody but the Admin Master sets the ad budget caps, connects Kairogen or connects a seller's WhatsApp number.
 
 Decisions of 13/10, asked and answered: sellers keep the WhatsApp inbox, Projects, the Sales dashboard and (Vendedor
 Formatação) Leads das Campanhas, and lose the Sofia screen and the employee register; the Gerente Comercial keeps
@@ -96,6 +97,9 @@ comercial see every one. The old `/crm-vendas/agenda` redirects to `/produtivida
   other levels do not change. Since 19/10 the API holds it too: while the key is off, a seller's send (text,
   template, call request) and outgoing call answer 403 `whatsapp_soon`, and the deal's chat, the call panel and
   the deal's WhatsApp action say "em breve". Reading the conversation stays.
+- **WhatsApp → Importar em lote** (`whatsapp.import_bulk`, 19/10): Admin Master only, scope all, because it pairs
+  conversations with any open deal. The single import in a deal stays `leads.whatsapp` + `leads.write`. See
+  `docs/whatsapp/importar-conversa.md`.
 
 Not in the system: **Notion** (no module or link exists). **Meet** for a seller is the Google connection in
 "Minha conta" and the meetings inside the deal; Produtividade → Agenda and Reuniões only read (above).

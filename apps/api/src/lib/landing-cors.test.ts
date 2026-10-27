@@ -217,12 +217,13 @@ describe('CORS on the running app', () => {
     expect(sent.headers['access-control-allow-origin']).toBe(LANDING);
     noCredentials(sent.headers);
 
-    // An error answer carries them too, so the page can read the message.
+    // An error answer carries them too, so the page can read the message (the answer is what
+    // the short page requires; the e-mail is optional since 22/10).
     const invalid = await app.inject({
       method: 'POST',
       url,
       headers: { origin: 'http://localhost:5174' },
-      payload: { ...body, email: undefined },
+      payload: { ...body, qualifierAnswer: undefined },
     });
     expect(invalid.statusCode).toBe(400);
     expect(invalid.headers['access-control-allow-origin']).toBe('http://localhost:5174');

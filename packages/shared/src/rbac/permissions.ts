@@ -22,6 +22,8 @@ export const PERMISSIONS = {
   'leads.write': 'Criar e editar leads',
   'leads.assign': 'Atribuir e redistribuir leads entre vendedores',
   'leads.whatsapp': 'Conversar e ligar pelo WhatsApp do sistema (ver, enviar e ligar)',
+  'whatsapp.import_bulk':
+    'Importar em lote as conversas exportadas do celular, pareando cada uma com a negociação',
   'companies.read': 'Ver a tela de Empresas do CRM, com o cadastro de cada empresa',
   'landing_pages.read': 'Ver as landing pages de cada cliente e funil no CRM',
   'crm.manage': 'Configurar as etapas do funil e a distribuição de leads',
@@ -40,7 +42,10 @@ export const PERMISSIONS = {
   'ads.budget_caps.manage': 'Editar o teto interno de orçamento de tráfego pago por conta',
   'ads.reconcile.manual':
     'Forçar agora a reconciliação de uma conta de tráfego pago com a plataforma',
-  'integrations.manage': 'Conectar e desconectar integrações do sistema (Kairogen)',
+  'integrations.manage':
+    'Conectar e desconectar integrações do sistema (Kairogen, os números do WhatsApp dos vendedores)',
+  'whatsapp_templates.manage':
+    'Criar e editar os modelos de mensagem do WhatsApp e mandar para a aprovação da Meta',
   'marketing.media.read': 'Ver a biblioteca de mídia do marketing',
   'marketing.media.generate': 'Gerar imagens e vídeos gastando créditos',
   'marketing.media.edit': 'Editar vídeos no Studio, exportar e salvar no Drive',
@@ -173,10 +178,12 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'employees.assign_roles': 'all',
     'timeclock.read': 'all',
     'timeclock.adjust': 'all',
+    'whatsapp_templates.manage': 'all',
     'leads.read': 'all',
     'leads.write': 'all',
     'leads.assign': 'all',
     'leads.whatsapp': 'all',
+    'whatsapp.import_bulk': 'all',
     'sofia.manage': 'all',
     'sofia.read': 'all',
     'crm.manage': 'all',
@@ -218,6 +225,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     // Access levels only: Diretoria still cannot edit the rest of a record.
     'employees.assign_roles': 'all',
     'timeclock.read': 'all',
+    'whatsapp_templates.manage': 'all',
     'leads.read': 'all',
     'leads.assign': 'all',
     // Eric, 07/10: Diretoria reads, sends and calls on any lead's WhatsApp, though it does not edit the deal.

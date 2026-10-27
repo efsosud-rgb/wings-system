@@ -730,6 +730,70 @@ describe('the WhatsApp conversation screen', () => {
     );
   });
 
+  it('keeps the field (and the focus) while the same template asks for a new preview', () => {
+    queryState.templates = [
+      {
+        name: 'boas_vindas',
+        language: 'pt_BR',
+        category: 'UTILITY',
+        body: 'x',
+        paramCount: 1,
+        artVersion: false,
+      },
+    ];
+    queryState.preview = {
+      family: 'boas_vindas',
+      version: 'boas_vindas',
+      language: 'pt_BR',
+      category: 'UTILITY',
+      sendAs: 'template',
+      charged: true,
+      reason: null,
+      windowExpiresAt: null,
+      text: 'Olá, transformar a sua empresa em franquia',
+      footer: null,
+      buttons: [],
+      withArt: false,
+      notices: [],
+      fields: [
+        {
+          index: 1,
+          role: 'company',
+          label: 'Empresa do lead',
+          value: 'sua empresa',
+          locked: false,
+        },
+      ],
+      usesCompanyArticle: true,
+      ready: true,
+    };
+    const page = show();
+    const chat = within(screen.getByRole('region', { name: 'Conversa' }));
+    fireEvent.click(chat.getByRole('button', { name: 'Usar modelo' }));
+    fireEvent.change(chat.getByLabelText('Modelo'), { target: { value: 'boas_vindas|pt_BR' } });
+    const field = chat.getByLabelText('Empresa do lead ({{1}})') as HTMLInputElement;
+    field.focus();
+    fireEvent.change(field, { target: { value: 'Padaria' } });
+    // The typed value asks the server again: while it answers, the field is the same element.
+    queryState.loading.add('boas_vindas');
+    page.rerender(
+      <MemoryRouter initialEntries={['/crm-vendas/negociacoes/l1/whatsapp']}>
+        <Routes>
+          <Route path="/crm-vendas/negociacoes/:id/whatsapp" element={<DealWhatsAppPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(chat.getByLabelText('Empresa do lead ({{1}})')).toBe(field);
+    expect(document.activeElement).toBe(field);
+    expect(field.value).toBe('Padaria');
+    expect(chat.queryByText('Montando a prévia…')).toBeNull();
+    // Only a fresh preview can be sent.
+    expect(
+      (chat.getByRole('button', { name: 'Enviar modelo' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    queryState.loading.delete('boas_vindas');
+  });
+
   it('keeps the conversation closed to who has no WhatsApp access', () => {
     queryState.permissions = { 'leads.read': 'own', 'leads.write': 'own' };
     show();

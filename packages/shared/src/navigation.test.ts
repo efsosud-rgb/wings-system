@@ -327,6 +327,13 @@ describe('menu by access level', () => {
     expect(withSofia.sort()).toEqual(['admin_master', 'diretoria', 'gerente_comercial']);
   });
 
+  it('keeps the WhatsApp templates screen to Admin Master and Diretoria', () => {
+    const withTemplates = ROLE_KEYS.filter((role) =>
+      Object.values(menuOf(role)).some((paths) => paths.includes('/crm-vendas/whatsapp/modelos')),
+    );
+    expect(withTemplates.sort()).toEqual(['admin_master', 'diretoria']);
+  });
+
   it('shows "em breve" placeholders only to Admin Master and Diretoria', () => {
     const placeholders = new Set(
       ALL_SUBMODULES.filter((s) => s.status === 'coming_soon').map((s) => s.path),

@@ -5,6 +5,8 @@ import {
   siteFormCopyOf,
   siteFormSpecSchema,
   siteFormSubmitSchema,
+  siteLinkText,
+  wameLinkOf,
   whatsappLinkOf,
   type LeadPipeline,
   type SiteFormInfo,
@@ -25,7 +27,6 @@ import { RdMarketing } from '../expansion/rd.js';
 import { shapeOf } from '../media/kairogen-adapter.js';
 import { rdAttributionOf } from './rd-attribution.js';
 import { brandOfLink, resolveLandingPage, upsertLead, type ClientResolution } from './service.js';
-import { leadTriageEnabled } from './triage-schedule.js';
 
 /**
  * The site form (CRM phase 1, T5): the Wings System's own form on a landing
@@ -72,7 +73,12 @@ export async function siteWhatsappUrl(
     )
     .orderBy(desc(leadTrackingLinks.createdAt))
     .limit(1);
-  return link ? whatsappLinkOf(wingsNumber, link.code, brandOfLink(client), ref) : null;
+  if (!link) return null;
+  const brand = brandOfLink(client);
+  // The Wings site: a sentence with the code at the end; a brand's page keeps "<code> Olá! …".
+  return brand
+    ? whatsappLinkOf(wingsNumber, link.code, brand, ref)
+    : wameLinkOf(wingsNumber, siteLinkText(link.code, ref));
 }
 
 /** `@perfil` from what the record keeps (`@perfil`, `perfil` or an instagram.com address), or null. */
@@ -87,10 +93,10 @@ export function instagramHandleOf(value: string | null | undefined): string | nu
 
 const TURNSTILE_VERIFY = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 
-const slugParam = z.object({ slug: z.string().trim().min(1).max(80) });
+export const slugParam = z.object({ slug: z.string().trim().min(1).max(80) });
 
 /** The page, when it exists, is active and takes the form; anything else is one 404. */
-async function formPage(db: Database, slug: string) {
+export async function formPage(db: Database, slug: string) {
   const [row] = await db
     .select({
       id: leadSourceRules.id,
@@ -232,21 +238,18 @@ export function siteFormAnswersOf(
 
 /**
  * The funnel the lead goes to: the page's own, unless the chosen option names
- * another. "None" (null, the Jev triage decides) only while the triage is on:
- * off, nobody would ever give the lead a funnel, so it keeps the page's.
+ * another. An option that names none ("Ainda não sei") keeps the page's funnel
+ * (Eric, 26/10: the origin decides, the rotation takes it); only a page with no
+ * funnel of its own leaves the lead to the Jev triage.
  * Expansão only for a page tied to a brand: without one, nobody would know
  * which franchise the lead wants, so it keeps the page's too.
  */
 export function answerPipelineOf(
   choice: SiteFormQualifierValue | null,
   page: Pick<ClientResolution, 'pipeline' | 'brand'>,
-  triageOn: boolean,
 ): LeadPipeline | null {
-  const override = choice?.pipeline;
-  if (override === undefined) return page.pipeline;
-  if (override === null) return triageOn ? null : page.pipeline;
-  if (override === 'expansao' && !page.brand) return page.pipeline;
-  return override;
+  const override = choice?.pipeline ?? page.pipeline;
+  return override === 'expansao' && !page.brand ? page.pipeline : override;
 }
 
 /** The rule's funnel, when it names one. */
@@ -256,7 +259,7 @@ function pipelineOf(value: string | null): LeadPipeline | null {
     : null;
 }
 
-const notFound = (reply: FastifyReply) =>
+export const notFound = (reply: FastifyReply) =>
   reply.status(404).send({ error: 'not_found', message: 'Formulário não encontrado.' });
 
 export const siteFormRoutes: FastifyPluginAsync = async (app) => {
@@ -378,8 +381,8 @@ export const siteFormRoutes: FastifyPluginAsync = async (app) => {
         trafficSource: null,
       });
       const client = await resolveLandingPage(db, { identifier: page.pattern });
-      // The chosen option may send the lead to another funnel, or to none (the Jev triage decides).
-      const pipeline = answerPipelineOf(answers.choice, client, leadTriageEnabled());
+      // The chosen option may send the lead to another funnel; a page with none leaves it to the Jev triage.
+      const pipeline = answerPipelineOf(answers.choice, client);
       const now = new Date();
       // The consent line the page showed: its own when the spec names one, else the funnel's
       // (the rule is the same one the page read).

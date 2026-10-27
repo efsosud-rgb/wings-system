@@ -340,14 +340,29 @@ export function isTrackingCode(value: string): boolean {
   return TRACKING_CODE_RE.test(value);
 }
 
+/** `(K7M2QX)` or `(K7M2QX ABC234)`: the code, and the form's ref, in brackets (`siteLinkText`). */
+const BRACKETED_CODES = /\(\s*#?([A-Za-z2-9]{6})(?:\s+([A-Za-z2-9]{6}))?\s*\)/g;
+
+/** The last bracketed code in a message, with the ref after it when there is one. */
+function bracketedCodesOf(message: string): { code: string; ref: string | null } | null {
+  for (const match of [...message.matchAll(BRACKETED_CODES)].reverse()) {
+    const code = match[1]?.toUpperCase() ?? '';
+    const ref = match[2]?.toUpperCase() ?? '';
+    if (isTrackingCode(code)) return { code, ref: isTrackingCode(ref) ? ref : null };
+  }
+  return null;
+}
+
 /**
- * The code an inbound WhatsApp message starts with, or null. A leading `#`
- * and surrounding spaces are ignored; anything after the first word is the
- * person's own text.
+ * The code an inbound WhatsApp message carries, or null: its first word (a
+ * leading `#` and surrounding spaces are ignored; the rest is the person's own
+ * text), else the last code in brackets, where the Wings site's sentence puts
+ * it (`siteLinkText`).
  */
 export function trackingCodeOf(message: string | null | undefined): string | null {
   const first = (message ?? '').trim().replace(/^#/, '').split(/\s+/)[0]?.toUpperCase() ?? '';
-  return isTrackingCode(first) ? first : null;
+  if (isTrackingCode(first)) return first;
+  return bracketedCodesOf(message ?? '')?.code ?? null;
 }
 
 /**
@@ -358,6 +373,16 @@ export function trackingCodeOf(message: string | null | undefined): string | nul
 export function trackedLinkText(code: string, brand?: string | null, ref?: string | null): string {
   const start = ref ? `${code} ${ref}` : code;
   return brand ? `${start} Olá! Quero saber sobre a franquia ${brand}.` : start;
+}
+
+/**
+ * What the Wings site's link pre-fills: a sentence a person would send, with
+ * the code (and the form's ref) in brackets at the end. A bare code reads as
+ * junk and was not being sent (Eric, 22/10); `trackingCodeOf` and
+ * `trackingRefOf` read the brackets.
+ */
+export function siteLinkText(code: string, ref?: string | null): string {
+  return `Olá! Vim pelo site da Wings e quero saber como formatar a minha franquia. (${ref ? `${code} ${ref}` : code})`;
 }
 
 /**
@@ -380,11 +405,14 @@ export function generateFormRef(random: () => number = Math.random): string {
 
 /**
  * The form reference an inbound message carries: the word right after the tracking code, when the
- * message starts with one. The shape is only a hint; a ref counts when a recent lead holds it.
+ * message starts with one, else the one after the code in brackets (`siteLinkText`). The shape is
+ * only a hint; a ref counts when a recent lead holds it.
  */
 export function trackingRefOf(message: string | null | undefined): string | null {
   const words = (message ?? '').trim().replace(/^#/, '').split(/\s+/);
-  if (!isTrackingCode(words[0]?.toUpperCase() ?? '')) return null;
+  if (!isTrackingCode(words[0]?.toUpperCase() ?? '')) {
+    return bracketedCodesOf(message ?? '')?.ref ?? null;
+  }
   const second = words[1]?.toUpperCase() ?? '';
   return isTrackingCode(second) ? second : null;
 }
@@ -401,7 +429,12 @@ export function whatsappLinkOf(
   brand?: string | null,
   ref?: string | null,
 ): string {
-  return `https://wa.me/${phone}?text=${encodeURIComponent(trackedLinkText(code, brand, ref))}`;
+  return wameLinkOf(phone, trackedLinkText(code, brand, ref));
+}
+
+/** `https://wa.me/<phone>?text=<text>`, the text encoded. */
+export function wameLinkOf(phone: string, text: string): string {
+  return `https://wa.me/${phone}?text=${encodeURIComponent(text)}`;
 }
 
 // --- source rules: landing page / Meta form -> client -------------------------
@@ -1700,6 +1733,67 @@ export const siteFormSubmitSchema = z.object({
   qualifierAnswer: z.string().trim().max(80).optional(),
 });
 export type SiteFormSubmitInput = z.infer<typeof siteFormSubmitSchema>;
+
+// --- what the visitor does on the page, counted on the server --------------------
+
+/**
+ * The steps a landing page reports to `POST /public/site-forms/:slug/events`
+ * (apps/api leads site-events.ts), one small beacon each, so the server can
+ * count where visitors stop before the form. Nothing personal: a closed list
+ * of events and steps, the ad's UTMs and a random id of the visit.
+ */
+export const SITE_EVENT_NAMES = [
+  'page_view',
+  'form_view',
+  'form_start',
+  'submit_attempt',
+  'submit_error',
+  'submit_ok',
+  'whatsapp_click',
+] as const;
+export type SiteEventName = (typeof SITE_EVENT_NAMES)[number];
+
+/** Which WhatsApp button (`whatsapp_click`) or why the send failed (`submit_error`). */
+export const SITE_EVENT_STEPS = [
+  'header',
+  'final',
+  'thanks',
+  'validation',
+  'captcha',
+  'network',
+  'rate_limited',
+] as const;
+export type SiteEventStep = (typeof SITE_EVENT_STEPS)[number];
+
+/** The UTMs an event carries, from the first touch kept in the browser (never a click id). */
+export const SITE_EVENT_UTM_KEYS = [
+  'utm_source',
+  'utm_medium',
+  'utm_campaign',
+  'utm_content',
+  'utm_term',
+  'utm_id',
+] as const;
+
+const siteEventUtm = z.string().trim().max(100).optional();
+
+/** One event, as the page sends it; any other key is refused. */
+export const siteEventSchema = z.strictObject({
+  event: z.enum(SITE_EVENT_NAMES),
+  step: z.enum(SITE_EVENT_STEPS).optional(),
+  /** This visit's random id, made by the page and kept in its sessionStorage only. */
+  visit: z
+    .string()
+    .regex(/^[a-z0-9]{8,32}$/)
+    .optional(),
+  utm_source: siteEventUtm,
+  utm_medium: siteEventUtm,
+  utm_campaign: siteEventUtm,
+  utm_content: siteEventUtm,
+  utm_term: siteEventUtm,
+  utm_id: siteEventUtm,
+});
+export type SiteEvent = z.infer<typeof siteEventSchema>;
 
 /** The channels a UTM link is made for, with the source/medium the team uses. */
 export const UTM_CHANNELS = [

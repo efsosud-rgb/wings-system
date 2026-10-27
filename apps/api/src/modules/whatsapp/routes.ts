@@ -54,7 +54,6 @@ import {
   downloadWhatsAppMedia,
   errorText,
   filePayload,
-  listWhatsAppTemplates,
   textPayload,
   callPermissionPayload,
   readCallPermission,
@@ -76,15 +75,17 @@ import {
   permissionOf,
   toMessage,
   windowOf,
-  type BrandVoice,
+  callPermissionText,
 } from './thread.js';
 import { takeConversation } from '../sofia/state.js';
 import { adoptUnmatched, conversationFor } from './intake.js';
+import { syncTemplates } from './templates.js';
 import { inboxSummaryOf } from './inbox.js';
 import { notifyInboxChanged } from './inbox-signal.js';
 import {
   payloadOf,
   planTemplateFor,
+  asksCallPermission,
   templateBody,
   templateContextOf,
   type TemplatePlan,
@@ -109,17 +110,6 @@ const idParams = z.object({ id: z.uuid() });
 /** Why a conversation with no deal cannot send a file (the screen shows the same). */
 const NO_DEAL_FOR_FILES =
   'O arquivo fica nos arquivos da negociação: esta conversa ainda não tem negociação.';
-
-/**
- * What the person sees above Meta's "Permitir ligações" buttons (a brand's
- * lead hears the brand, with its own article: "O Casal do Churros", "A Cabana
- * da Barra" — never "A A Cabana").
- */
-export const callPermissionText = (brand: Pick<BrandVoice, 'name' | 'article'> | null) => {
-  const who = brand ? withArticle(brand.name, brand.article ?? 'a', 'article') : 'a Wings';
-  return `${who.charAt(0).toUpperCase()}${who.slice(1)} gostaria de poder te ligar pelo WhatsApp para continuar o seu atendimento.`;
-};
-export const CALL_PERMISSION_TEXT = callPermissionText(null);
 
 export const whatsappRoutes: FastifyPluginAsync = async (app) => {
   const { db, env } = app.wings;
@@ -665,7 +655,12 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       ART_MEDIA_GONE_CODES.has(delivered.errorCode)
     )
       await invalidateArtMedia(db, sentMediaId, at);
-    if (outcome === 'sent' && outgoing.kind === 'call_permission')
+    // A template with Meta's "Permitir ligações" request asks too.
+    if (
+      outcome === 'sent' &&
+      (outgoing.kind === 'call_permission' ||
+        (planned !== null && asksCallPermission(planned.plan.version)))
+    )
       await db
         .update(waContacts)
         .set({
@@ -925,36 +920,8 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       .select({ last: max(waTemplates.syncedAt) })
       .from(waTemplates);
     const stale = !last || now().getTime() - last.getTime() > TEMPLATES_FRESH_MS;
-    if (config?.wabaId && (refresh || stale)) {
-      const listed = await listWhatsAppTemplates(fetchImpl(), { ...config, wabaId: config.wabaId });
-      if (listed.ok) {
-        const at = now();
-        for (const t of listed.data) {
-          if (!t.name || !t.language || !t.status) continue;
-          await db
-            .insert(waTemplates)
-            .values({
-              metaId: t.id ?? null,
-              name: t.name,
-              language: t.language,
-              category: t.category ?? null,
-              status: t.status,
-              components: (t.components ?? []) as object[],
-              syncedAt: at,
-            })
-            .onConflictDoUpdate({
-              target: [waTemplates.tenantId, waTemplates.name, waTemplates.language],
-              set: {
-                metaId: t.id ?? null,
-                category: t.category ?? null,
-                status: t.status,
-                components: (t.components ?? []) as object[],
-                syncedAt: at,
-              },
-            });
-        }
-      } else syncError = errorText(listed.code, listed.title);
-    }
+    if (config?.wabaId && (refresh || stale))
+      syncError = await syncTemplates(db, fetchImpl(), { ...config, wabaId: config.wabaId }, now());
     const rows = await db
       .select()
       .from(waTemplates)

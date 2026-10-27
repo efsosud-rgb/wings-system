@@ -1,5 +1,6 @@
 import {
   addTotals,
+  campaignEnded,
   earliestEnd,
   effectiveCampaignEnd,
   EMPTY_TOTALS,
@@ -25,7 +26,7 @@ import {
   type MirroredFormat,
   type SpendStrip,
 } from '@wings/shared';
-import { and, desc, eq, gte, inArray, isNull, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, inArray, isNull, lte, sql } from 'drizzle-orm';
 import type { Database } from '../../../db/client.js';
 import {
   adAccountDaily,
@@ -775,6 +776,7 @@ export async function campaigns(
     alertRows,
     verdicts,
     drafts,
+    lastSpends,
   ] = await Promise.all([
     db.query.adCampaigns.findMany({ where: inArray(adCampaigns.adAccountId, ids) }),
     db
@@ -804,7 +806,23 @@ export async function campaigns(
       .from(adCampaignDrafts)
       .innerJoin(adCampaigns, eq(adCampaigns.id, adCampaignDrafts.campaignId))
       .where(inArray(adCampaigns.adAccountId, ids)),
+    // Any window: a campaign quiet in this one says when it last spent.
+    db
+      .select({
+        entity: adMetricsDaily.entityExternalId,
+        day: sql<string>`max(${adMetricsDaily.day})`,
+      })
+      .from(adMetricsDaily)
+      .where(
+        and(
+          inArray(adMetricsDaily.adAccountId, ids),
+          eq(adMetricsDaily.level, 'campaign'),
+          gt(adMetricsDaily.spendCents, 0),
+        ),
+      )
+      .groupBy(adMetricsDaily.entityExternalId),
   ]);
+  const lastSpendOf = new Map(lastSpends.map((row) => [row.entity, row.day]));
   const verdictOf = new Map(verdicts.map((row) => [row.campaignId, row.verdict]));
   const targetOf = new Map(verdicts.map((row) => [row.campaignId, row.targetCplCents]));
   const draftOf = new Map(drafts.map((row) => [row.campaignId, row]));
@@ -867,6 +885,11 @@ export async function campaigns(
       .filter((ad) => ad.campaignId === campaign.id && !ad.adSetId)
       .map(adNode)
       .sort(bySpend);
+    // The platform's own schedule first; the draft's for a campaign not synced since.
+    const endDate =
+      effectiveCampaignEnd(campaign.endDate, ownAdSets) ??
+      draftOf.get(campaign.id)?.endDate ??
+      null;
     return {
       externalId: campaign.externalId,
       platform: (account?.platform ?? 'meta') as AdPlatform,
@@ -874,12 +897,10 @@ export async function campaigns(
       accountExternalId: account?.externalId ?? '',
       systemCreated: draftOf.has(campaign.id),
       launchDefaults: launchDefaultsOf(draftOf.get(campaign.id)?.payload),
-      // The platform's own schedule first; the draft's for a campaign not synced since.
       startDate: campaign.startDate ?? draftOf.get(campaign.id)?.startDate ?? null,
-      endDate:
-        effectiveCampaignEnd(campaign.endDate, ownAdSets) ??
-        draftOf.get(campaign.id)?.endDate ??
-        null,
+      endDate,
+      ended: campaignEnded({ deliveryStatus: campaign.deliveryStatus, endDate }, window.until),
+      lastSpendDate: lastSpendOf.get(campaign.externalId) ?? null,
       mirroredAt: campaign.createdAt.toISOString(),
       targetCplCents: targetOf.get(campaign.id) ?? null,
       name: campaign.name,

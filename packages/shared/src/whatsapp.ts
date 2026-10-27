@@ -465,6 +465,120 @@ export interface WaImportPreview {
   last: WaImportLine;
 }
 
+// --- many conversations at once (Eric, 19/10: "dezenas de conversas") ------------------------
+
+/**
+ * "Importar em lote" (docs/whatsapp/importar-conversa.md): an Admin Master (`whatsapp.import_bulk`)
+ * brings in dozens of exports at once. A lote-pai holds one item per conversation, each paired with a
+ * deal by phone, by the optional name→phone map or by name; the Admin confirms, corrects or skips
+ * each pair, and every item is then written as an ordinary import (`applyImport`), one at a time.
+ */
+export const WA_BULK_MAX_ITEMS = 300;
+/** The optional `.csv` of name and phone, one pair per line. */
+export const WA_BULK_MAP_MAX_CHARS = 1_000_000;
+
+/**
+ * The chat inside a phone's `.zip` export, or null when the entries are a bundle of exports. An
+ * export holds no `.zip` and one chat: `_chat.txt` (iPhone), "Conversa do WhatsApp com …" (Android),
+ * or its only `.txt`. Two chats, or an inner `.zip`, make a bundle; a `.txt` a person sent stays media.
+ */
+export function waExportChatOf(names: string[]): string | null {
+  const kept = names.filter((name) => !/(^|\/)(__MACOSX\/|\.)/.test(name));
+  if (kept.some((name) => /\.zip$/i.test(name))) return null;
+  const texts = kept.filter((name) => /\.txt$/i.test(name));
+  const chats = texts.filter((name) =>
+    /(^|\/)(_chat\.txt|conversa do whatsapp[^/]*|whatsapp chat[^/]*)$/i.test(name),
+  );
+  if (chats.length === 1) return chats[0]!;
+  return chats.length === 0 && texts.length === 1 ? texts[0]! : null;
+}
+
+/** How an item found its deal: the contact's number in the chat, the map, the name, or the Admin. */
+export const WA_BULK_MATCHES = ['telefone', 'mapa', 'nome', 'manual'] as const;
+export type WaBulkMatch = (typeof WA_BULK_MATCHES)[number];
+
+export const WA_BULK_ITEM_STATES = [
+  'pendente',
+  'pulada',
+  'gravada',
+  'sem_novas',
+  'falhou',
+  'desfeita',
+] as const;
+export type WaBulkItemState = (typeof WA_BULK_ITEM_STATES)[number];
+
+export const waBulkCreateSchema = z.object({
+  /** The `.csv` of name and phone ("Maria Souza;21999990001"), when the Admin sends one. */
+  nameMap: z.string().max(WA_BULK_MAP_MAX_CHARS, 'Mapa grande demais.').optional(),
+});
+export type WaBulkCreateInput = z.infer<typeof waBulkCreateSchema>;
+
+export const waBulkItemSchema = waImportPreviewSchema.extend({
+  /** The export's own file name ("Conversa do WhatsApp com Maria.zip"): it names the contact. */
+  fileName: z.string().trim().min(1).max(500),
+  byteSize: z.number().int().nonnegative(),
+});
+export type WaBulkItemInput = z.infer<typeof waBulkItemSchema>;
+
+/** The Admin's correction of one pair: another deal, or skip the conversation. */
+export const waBulkItemPatchSchema = z.union([
+  z.object({ leadId: z.uuid() }),
+  z.object({ skip: z.literal(true) }),
+  z.object({ skip: z.literal(false) }),
+]);
+export type WaBulkItemPatch = z.infer<typeof waBulkItemPatchSchema>;
+
+export const waBulkApplySchema = z.object({
+  /** The name that is the Wings side, the same in every file (the business profile). */
+  ourName: z.string().trim().min(1, 'Escolha qual nome é a Wings.').max(200),
+});
+
+export const waBulkItemApplySchema = z.object({
+  /** The conversation's own exported file, already among the paired deal's files. */
+  fileId: z.uuid(),
+});
+
+export interface WaBulkItem {
+  id: string;
+  position: number;
+  fileName: string;
+  byteSize: number;
+  platform: 'android' | 'ios' | null;
+  /** The contact's name as the file or the chat gives it. */
+  contactName: string | null;
+  participants: { name: string; messages: number }[];
+  leadId: string | null;
+  /** The paired deal's name, for the Admin's screen only (never in the report). */
+  leadName: string | null;
+  match: WaBulkMatch | null;
+  /** Deals that fit equally well when there is no pair (a tie is never guessed). */
+  candidates: number;
+  messages: number;
+  newMessages: number;
+  existingMessages: number;
+  first: string | null;
+  last: string | null;
+  state: WaBulkItemState;
+  /** Why it failed or was left out, as an `ImportErrorCode` or `not_an_export`. */
+  error: string | null;
+  batchId: string | null;
+}
+
+export interface WaBulkImport {
+  id: string;
+  source: 'tela' | 'cli';
+  state: 'previa' | 'gravando' | 'gravado' | 'desfeito';
+  ourName: string | null;
+  /** The name that looks like the Wings in most files: the suggestion for `ourName`. */
+  suggestedOurName: string | null;
+  hasNameMap: boolean;
+  createdAt: string;
+  createdByName: string | null;
+  appliedAt: string | null;
+  undoneAt: string | null;
+  items: WaBulkItem[];
+}
+
 export interface WaImportBatch {
   id: string;
   fileId: string | null;

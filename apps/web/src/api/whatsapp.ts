@@ -3,6 +3,8 @@ import type {
   WaCall,
   WaCallPermissionLive,
   WaConversationItem,
+  WaBulkImport,
+  WaBulkItem,
   WaImportBatch,
   WaImportPreview,
   WaMessage,
@@ -14,7 +16,13 @@ import type {
   WaTemplatePreview,
   WaRingingSnapshot,
   WaTemplateSend,
+  WaFieldSpec,
+  WaManagedTemplate,
+  WaManagedTemplates,
+  WaTemplateCreate,
+  WaTemplateEdit,
 } from '@wings/shared';
+import { waExportChatOf } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { permissionScope, useSession } from './auth.js';
@@ -171,6 +179,38 @@ function afterSend(queryClient: ReturnType<typeof useQueryClient>, thread: Whats
   // A person writing takes the conversation from Sofia: her screen shows it at once.
   void queryClient.invalidateQueries({ queryKey: ['sofia'] });
 }
+
+/** CRM Vendas → WhatsApp → Modelos (docs/whatsapp/modelos.md): every template, read again from Meta. */
+export function useManagedTemplates() {
+  return useQuery({
+    queryKey: ['whatsapp', 'templates', 'manage'],
+    queryFn: () => api.get<WaManagedTemplates>('/whatsapp/templates/manage'),
+  });
+}
+
+function useTemplateWrite<T>(write: (input: T) => Promise<{ template: WaManagedTemplate }>) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: write,
+    // The prefix covers this screen's list and the sellers' list of approved templates.
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['whatsapp', 'templates'] }),
+  });
+}
+
+export const useCreateTemplate = () =>
+  useTemplateWrite((input: WaTemplateCreate) => api.post('/whatsapp/templates/manage', input));
+
+/** New words go back to Meta's review. */
+export const useEditTemplate = () =>
+  useTemplateWrite(({ id, ...input }: WaTemplateEdit & { id: string }) =>
+    api.put(`/whatsapp/templates/manage/${id}`, input),
+  );
+
+/** Only what fills each {{n}}: stays in the system, Meta sees nothing. */
+export const useSaveTemplateFields = () =>
+  useTemplateWrite(({ id, fields }: { id: string; fields: WaFieldSpec[] }) =>
+    api.put(`/whatsapp/templates/manage/${id}/fields`, { fields }),
+  );
 
 function useSend<T>(thread: WhatsAppThread, kind: 'text' | 'template') {
   const queryClient = useQueryClient();
@@ -362,13 +402,83 @@ export async function exportTextOf(file: File): Promise<string> {
 }
 
 /** The exported file keeps its name with the import's day and time, so a second export of the same chat fits beside it. */
-function stampedFile(file: File, at: Date) {
+export function stampedFile(file: File, at: Date) {
   const pad = (n: number) => String(n).padStart(2, '0');
   const stamp = `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}h${pad(at.getMinutes())}`;
   const dot = file.name.lastIndexOf('.');
   const [base, ext] = dot > 0 ? [file.name.slice(0, dot), file.name.slice(dot)] : [file.name, ''];
   return new File([file], `${base} (importada ${stamp})${ext}`, { type: file.type });
 }
+
+/** Above this a bundle `.zip` is not read in the browser: pick the exports themselves, or use the CLI. */
+export const WA_BULK_BROWSER_ZIP_MAX = 1024 * 1024 * 1024;
+
+/**
+ * "Importar em lote": the conversations in what the Admin picked. A `.txt` or a phone's `.zip`
+ * export is one conversation and stays the file it is; a `.zip` of many exports is opened here,
+ * in the browser, and each export inside it becomes a file of its own (its media stays inside).
+ */
+export async function conversationFilesOf(file: File): Promise<File[]> {
+  if (/\.txt$/i.test(file.name)) return [file];
+  if (!/\.zip$/i.test(file.name)) return [];
+  if (file.size > WA_BULK_BROWSER_ZIP_MAX)
+    throw new Error(
+      `${file.name} passa de 1 GB: escolha as conversas soltas, ou mande a pasta para o CLI.`,
+    );
+  const { unzipSync } = await import('fflate');
+  const wanted = (name: string) =>
+    !/(^|\/)__MACOSX\//.test(name) && /\.(txt|zip)$/i.test(name) && !/(^|\/)\./.test(name);
+  const entries = unzipSync(new Uint8Array(await file.arrayBuffer()), {
+    filter: (entry) => wanted(entry.name),
+  });
+  const names = Object.keys(entries);
+  if (waExportChatOf(names)) return [file];
+  return names.map(
+    (name) =>
+      new File([entries[name]!], name.split('/').pop()!, {
+        type: /\.zip$/i.test(name) ? 'application/zip' : 'text/plain',
+      }),
+  );
+}
+
+const bulkPath = (id: string) => `/whatsapp/bulk-imports/${id}`;
+
+export const bulkImports = {
+  create: (nameMap?: string) =>
+    api
+      .post<{ bulk: WaBulkImport }>('/whatsapp/bulk-imports', nameMap ? { nameMap } : {})
+      .then((r) => r.bulk),
+  get: (id: string) => api.get<{ bulk: WaBulkImport }>(bulkPath(id)).then((r) => r.bulk),
+  addItem: (id: string, input: { fileName: string; byteSize: number; text: string }) =>
+    api.post<{ item: WaBulkItem }>(`${bulkPath(id)}/items`, input).then((r) => r.item),
+  patchItem: (id: string, itemId: string, patch: { leadId: string } | { skip: boolean }) =>
+    api.patch<{ item: WaBulkItem }>(`${bulkPath(id)}/items/${itemId}`, patch).then((r) => r.item),
+  pairAgain: (id: string, ourName: string) =>
+    api.post<{ bulk: WaBulkImport }>(`${bulkPath(id)}/pair`, { ourName }).then((r) => r.bulk),
+  start: (id: string, ourName: string) =>
+    api.post<{ bulk: WaBulkImport }>(`${bulkPath(id)}/apply`, { ourName }).then((r) => r.bulk),
+  /** The conversation's file first, among the paired deal's files; then its messages. */
+  applyItem: async (id: string, item: WaBulkItem, file: File) => {
+    const kept = await sendLeadFile({
+      leadId: item.leadId!,
+      file: stampedFile(file, new Date()),
+      onProgress: () => {},
+    });
+    return api
+      .post<{ item: WaBulkItem }>(`${bulkPath(id)}/items/${item.id}/apply`, {
+        fileId: kept.fileId,
+      })
+      .then((r) => r.item);
+  },
+  undo: (id: string, itemId?: string) =>
+    api
+      .post<{ bulk: WaBulkImport; undone: number; removed: number }>(
+        itemId ? `${bulkPath(id)}/items/${itemId}/undo` : `${bulkPath(id)}/undo`,
+      )
+      .then((r) => r.bulk),
+  discard: (id: string) => api.delete<void>(bulkPath(id)),
+  reportUrl: (id: string) => `/api${bulkPath(id)}/report`,
+};
 
 const importsKey = (leadId: string) => ['whatsapp', 'imports', leadId] as const;
 

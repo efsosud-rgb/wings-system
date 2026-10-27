@@ -42,7 +42,11 @@ function htmlIncludes(): Plugin {
 }
 
 /** Fonts inlined as data URIs, so the first frame already has them (the approved page's choice). */
-const INLINE_FONTS = ['limelight-latin-400-normal.woff2', 'nunito-latin-wght-normal.woff2'];
+const INLINE_FONTS = [
+  'limelight-latin-400-normal.woff2',
+  'nunito-latin-wght-normal.woff2',
+  'fa-brands-subset.woff2',
+];
 
 /**
  * The page's module renders nothing until it has run (`blocking="render"`), so

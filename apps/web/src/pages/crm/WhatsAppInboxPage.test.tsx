@@ -415,3 +415,22 @@ describe('before the swap of the number (Eric, 14/10)', () => {
     );
   });
 });
+
+describe('the "Importar em lote" link', () => {
+  it('opens the lote import page for someone with whatsapp.import_bulk', () => {
+    state.permissions = { 'leads.whatsapp': 'all', 'whatsapp.import_bulk': 'all' };
+    renderAt('/crm-vendas/whatsapp');
+    expect(screen.getByRole('link', { name: 'Importar em lote' }).getAttribute('href')).toBe(
+      '/crm-vendas/whatsapp/importar-lote',
+    );
+  });
+
+  it.each([
+    ['a seller', { 'leads.whatsapp': 'own', 'leads.write': 'own' }],
+    ['someone who sees every conversation but may not import in bulk', { 'leads.whatsapp': 'all' }],
+  ])('is not shown to %s', (_who, permissions) => {
+    state.permissions = permissions;
+    renderAt('/crm-vendas/whatsapp');
+    expect(screen.queryByRole('link', { name: 'Importar em lote' })).toBeNull();
+  });
+});
