@@ -6,7 +6,7 @@ import {
   type LeadListItem,
   type LeadTrackingLink,
 } from '@wings/shared';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
@@ -1384,6 +1384,25 @@ describe('Meta Lead Ads webhook', () => {
     expect((await reprocessMetaLeadgenEvent(deps, '900041', 'estado')).refusal).toContain(
       'criou o próprio lead',
     );
+  });
+
+  it('takes an event written in the same millisecond as the run (microseconds in the column)', async () => {
+    await db.insert(metaLeadgenEvents).values({
+      leadgenId: '900099',
+      nextAttemptAt: sql`'2020-01-01 00:00:00.000500+00'::timestamptz`,
+    });
+    const run = await processMetaLeadgenEvents({
+      db,
+      accessToken: 'fake-leads-token',
+      rdCrmToken: null,
+      expansionOwnerId: 'rd-user-fernando',
+      rdCopyEnabled: false,
+      graphFetch: app.wings.platformFetch,
+      rdFetch,
+      log: () => undefined,
+      now: () => new Date('2020-01-01T00:00:00.000Z'),
+    });
+    expect(run.processed).toBe(1);
   });
 
   it('puts the lead in the Wings System even when RD CRM is down, and copies it on a later try', async () => {

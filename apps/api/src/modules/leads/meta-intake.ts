@@ -141,7 +141,12 @@ export async function processMetaLeadgenEvents(deps: MetaIntakeDeps): Promise<Me
       .select()
       .from(metaLeadgenEvents)
       .where(
-        and(eq(metaLeadgenEvents.status, 'pending'), lte(metaLeadgenEvents.nextAttemptAt, now)),
+        and(
+          eq(metaLeadgenEvents.status, 'pending'),
+          // The column keeps microseconds and a JS date stops at the millisecond: an event written
+          // in this very millisecond (the webhook's kick) is due too, not "in the future".
+          lte(metaLeadgenEvents.nextAttemptAt, new Date(now.getTime() + 1)),
+        ),
       )
       .orderBy(asc(metaLeadgenEvents.receivedAt))
       .limit(BATCH);
