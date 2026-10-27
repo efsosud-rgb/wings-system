@@ -60,6 +60,7 @@ import { LoadFailure } from '../../components/LoadFailure.js';
 import { failureReason } from '../../lib/failure.js';
 import { CallPanel } from './CallPanel.js';
 import { CompanyResearchPanel } from './CompanyResearchPanel.js';
+import { CopyButton } from './CopyButton.js';
 import { DealSummary } from './DealSummary.js';
 import { DealTabs, type View } from './DealTabs.js';
 import {
@@ -72,6 +73,7 @@ import {
   parseMoney,
   stageTone,
   toLocalInput,
+  waMeUrl,
 } from './format.js';
 import { EnteredAt } from './EnteredAt.js';
 
@@ -1103,33 +1105,10 @@ function BrandEdit({ lead, canWrite }: { lead: Lead; canWrite: boolean }) {
   );
 }
 
-/** A small "Copiar" that says "Copiado" for a moment. */
-function CopyButton({ value, label }: { value: string; label: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      type="button"
-      className="crm-btn is-small is-quiet crm-copy"
-      aria-label={label}
-      title={label}
-      onClick={() => {
-        void navigator.clipboard
-          ?.writeText(value)
-          .then(() => {
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1500);
-          })
-          .catch(() => undefined); // the browser refused: the value stays on the screen to select
-      }}
-    >
-      {copied ? 'Copiado' : 'Copiar'}
-    </button>
-  );
-}
-
 /**
- * A phone and an e-mail with their copy buttons, the call panel and the
- * WhatsApp conversation. The number is text, never a tel: link.
+ * A phone and an e-mail with their copy buttons, the call panel, the
+ * WhatsApp conversation and the seller's own WhatsApp (wa.me). The number is
+ * text, never a tel: link.
  */
 function Reach({
   phone,
@@ -1168,6 +1147,16 @@ function Reach({
           >
             <Icon name="message" size={13} />
           </Link>
+          <a
+            className="crm-btn is-small is-quiet"
+            href={waMeUrl(phone)}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Abrir no WhatsApp do vendedor"
+            aria-label="Abrir no WhatsApp do vendedor"
+          >
+            <Icon name="external" size={13} />
+          </a>
         </span>
       )}
       {email && (

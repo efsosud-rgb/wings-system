@@ -55,10 +55,9 @@ permissão. O que o Eric faz na Meta e o roteiro da troca do número ficam em `/
   antes só tem a quantidade); a localização mostra nome, endereço e um link para o Google Maps. A API acha a
   mensagem citada ou reagida **só na mesma negociação** (ou na mesma conversa sem negociação), nunca em
   outra. O que não dá para mostrar aparece com "—" e o motivo, nunca some.
-- **Ordem de entrada da migração 0096:** depois da 0094 (pacote de 20/10) e da 0095 (PR #8, `wa_numbers`),
-  nesta ordem. O drizzle aplica pela data: a 0096 aplicada antes da 0095 faz a 0095 ser pulada para sempre, e
-  a fila do webhook passa a falhar na tabela `wa_numbers` que não existe. O snapshot da 0096 já contém
-  `wa_numbers`.
+- **Ordem de entrada da migração 0097:** depois da 0096 (PR #26, `wa_template_fields`), gerada de novo
+  sobre ela para que a data cresça. O drizzle aplica pela data: uma migração com data menor que a última
+  aplicada é pulada para sempre, sem erro (`journal.test.ts` confere a ordem).
 - **Números dos vendedores (próximo bloco):** a fila e a rota usam o token do número oficial. Antes de guardar
   mensagens dos números dos vendedores, a mensagem precisa dizer de qual número veio, e a cópia usar o token
   desse número (`wa_numbers`); senão a Meta recusa e o arquivo se perde nos 30 dias.
@@ -159,19 +158,20 @@ cadastrados na Meta. Os outros níveis não mudam.
 
 ## Rotas (com sessão)
 
-| Rota                                                                     | O quê                                                   |
-| ------------------------------------------------------------------------ | ------------------------------------------------------- |
-| `GET /leads/:id/whatsapp`                                                | Conversa da negociação, janela, opt-out, `configured`   |
-| `POST /leads/:id/whatsapp/text`                                          | Texto livre (só dentro das 24 h)                        |
-| `POST /leads/:id/whatsapp/template`                                      | Modelo aprovado com os campos `{{n}}`                   |
-| `GET /whatsapp/conversations[?filter=&q=]`                               | Lista no escopo de quem lê, com busca no texto          |
-| `GET /whatsapp/inbox/summary`                                            | Conversas não lidas (menu) e o carimbo da caixa         |
-| `GET /whatsapp/conversations/:id` e `POST …/text`, `…/template`          | Conversa sem negociação (escopo total)                  |
-| `GET /whatsapp/templates[?refresh=1]`                                    | Modelos aprovados                                       |
-| `GET /whatsapp/messages/:id/media`                                       | Arquivo recebido                                        |
-| `POST /leads/:id/whatsapp/template-preview`, `GET …/art`                 | O que o modelo vira agora e a arte (`arte-modelos.md`)  |
-| `POST /leads/:id/whatsapp/imports[/preview]`, `GET`, `DELETE …/:batchId` | Conversa exportada do celular (`importar-conversa.md`)  |
-| `GET /leads/:id/whatsapp/messages?before=<id>`                           | Mensagens anteriores às 500 da tela, uma página por vez |
+| Rota                                                                      | O quê                                                   |
+| ------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `GET /leads/:id/whatsapp`                                                 | Conversa da negociação, janela, opt-out, `configured`   |
+| `POST /leads/:id/whatsapp/text`                                           | Texto livre (só dentro das 24 h)                        |
+| `POST /leads/:id/whatsapp/template`                                       | Modelo aprovado com os campos `{{n}}`                   |
+| `GET /whatsapp/conversations[?filter=&q=]`                                | Lista no escopo de quem lê, com busca no texto          |
+| `GET /whatsapp/inbox/summary`                                             | Conversas não lidas (menu) e o carimbo da caixa         |
+| `GET /whatsapp/conversations/:id` e `POST …/text`, `…/template`           | Conversa sem negociação (escopo total)                  |
+| `GET /whatsapp/templates[?refresh=1]`                                     | Modelos aprovados                                       |
+| `GET`, `POST /whatsapp/templates/manage`, `PUT …/:id`, `PUT …/:id/fields` | Tela de modelos (`modelos.md`)                          |
+| `GET /whatsapp/messages/:id/media`                                        | Arquivo recebido                                        |
+| `POST /leads/:id/whatsapp/template-preview`, `GET …/art`                  | O que o modelo vira agora e a arte (`arte-modelos.md`)  |
+| `POST /leads/:id/whatsapp/imports[/preview]`, `GET`, `DELETE …/:batchId`  | Conversa exportada do celular (`importar-conversa.md`)  |
+| `GET /leads/:id/whatsapp/messages?before=<id>`                            | Mensagens anteriores às 500 da tela, uma página por vez |
 
 A tela da conversa se atualiza a cada 5 s e a lista a cada 10 s (e na hora, pelo stream, quando chega
 mensagem), com o cabeçalho `x-wings-passive: 1`: o servidor responde sem contar como atividade da pessoa, para
@@ -183,7 +183,7 @@ Migrações 0077, 0079 (`wa_calls`; permissão de ligação no contato) e 0081 (
 Meta, só ids e datas, legível pelo `wings_ro`; arte e artigo em `clients`): `wa_contacts` (telefone único, `wa_id`, nome do perfil, última mensagem recebida, opt-out),
 `wa_conversations` (uma por telefone e negociação; a sem negociação é única por telefone), `wa_messages`,
 `wa_webhook_events`, `wa_templates`; 0093 (`wa_import_batches`, as importações do celular; visão
-`wa_imports_analysis` para o `wings_ro`, ver `importar-conversa.md`); 0096 (`wa_message_files`, a fila e o
+`wa_imports_analysis` para o `wings_ro`, ver `importar-conversa.md`); 0097 (`wa_message_files`, a fila e o
 endereço no armazenamento de cada arquivo recebido; visão `wa_message_files_analysis` para o `wings_ro`, sem a
 chave do arquivo). Telefone e texto são dados pessoais: sem GRANT ao `wings_ro`, nada disso
 em log (o webhook registra só o formato do corpo, `shapeOf`). A auditoria `whatsapp.message_sent` guarda ids,
@@ -195,6 +195,30 @@ tipo, nome do modelo e resultado, nunca o texto.
 `WHATSAPP_WEBHOOK_VERIFY_TOKEN` (16+ caracteres), `WHATSAPP_APP_SECRET`, `WHATSAPP_ACCESS_TOKEN` (segredos, só
 no Coolify). Sem token e número, a conversa diz que está desligada; sem segredo e token de verificação, o
 webhook responde 503. Uma mudança chegada para outro número do mesmo app é ignorada.
+
+Os números dos vendedores em coexistência (`wa_numbers`, migração 0095) têm a própria tela e o próprio token:
+ver `conectar-numero.md` (`WHATSAPP_ES_CONFIG_ID`).
+
+## Estado do staging (lido em 26/10/2026)
+
+Leitura sem nenhum envio: Graph API só com GET, dentro do contêiner da API, sem imprimir o token; banco pelo
+`wings_ro`; e os logs.
+
+- **O staging usa o número de teste da Meta** (+1 555-669-6643, "Test Number", conta 2116475762622670). Esse
+  número só entrega para até 5 números cadastrados no app da Meta. Para um lead de verdade, a Meta recusa com
+  o erro 131030, que a tela mostra em português. Token, número CONECTADO e os 31 modelos aprovados estão ok, e o
+  app Wings CRM Vendas está assinado no webhook.
+- O switch `official_number_live` está desligado desde 19/10, e o vendedor não envia nem liga pelo sistema. Em 3
+  dias de log nenhum corpo de webhook chegou, e só 2 mensagens saíram pelo sistema na história toda (14/10).
+- As ligações estão ativadas no número (`calling.status` ENABLED); `callback_permission_status` está DISABLED.
+- **Para falar com lead real** (passos na Meta, do Eric):
+  1. passar o número comercial (final 0288) para a Cloud API na conta Wings Company (558704303984649), com forma de
+     pagamento na conta, registro do número com PIN e o app Wings CRM Vendas assinado na conta;
+  2. trocar no api-staging `WHATSAPP_WABA_ID`, `WHATSAPP_PHONE_NUMBER_ID` e `WINGS_WHATSAPP_NUMBER`, e reiniciar;
+  3. ligar o switch na tela da caixa.
+
+  Os modelos aprovados da conta de teste não passam para a outra conta: a conta Wings Company tem os seus
+  (`modelos.md`).
 
 ## Não verificado ao vivo
 

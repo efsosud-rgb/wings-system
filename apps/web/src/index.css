@@ -1411,6 +1411,7 @@ a {
 }
 
 .campaign-paused,
+.campaign-ended,
 .campaign-archived,
 .campaign-deleted {
   color: var(--wings-muted);

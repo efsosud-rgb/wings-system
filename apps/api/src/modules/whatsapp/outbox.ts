@@ -24,7 +24,7 @@ export interface Delivery {
   contact: Contact;
   conversationId: string;
   leadId: string | null;
-  author: 'employee' | 'sofia';
+  author: 'employee' | 'sofia' | 'system';
   employeeId: string | null;
   kind: WaMessageKind;
   /** What the screen shows (the body, a filled template). */

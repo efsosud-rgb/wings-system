@@ -1,9 +1,11 @@
 import { instagramUsernameOf } from '@wings/shared/instagram';
 
 /**
- * The approved form's rules (landing v3, Eric): every field but the site is
- * required, the button stays off until everything is filled, and the line
- * under it says what is still missing. Pure, so the page and the tests share it.
+ * The short form's rules (Eric, 22/10/2026): the name, the WhatsApp and "O que
+ * você procura?" are required; the e-mail, company, Instagram and site are
+ * optional and checked only when filled. The button stays off until the
+ * required ones are filled, and the line under it says what is still missing.
+ * Pure, so the page and the tests share it.
  */
 
 /** `(21) 99999-9999` as the person types; at most 11 digits. */
@@ -17,8 +19,13 @@ export function maskPhone(value: string): string {
 
 export const phoneDigitsOf = (value: string): string => value.replace(/\D/g, '');
 
-/** Accepts `@marca`, `marca` or the profile address; the username is what is kept. */
-export const instagramOk = (value: string): boolean => instagramUsernameOf(value) !== null;
+/** Optional: empty is fine; otherwise an address with @ and a domain. */
+export const emailOk = (value: string): boolean =>
+  !value.trim() || /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(value.trim());
+
+/** Optional: empty is fine; otherwise `@marca`, `marca` or the profile address (the username is what is kept). */
+export const instagramOk = (value: string): boolean =>
+  !value.trim() || instagramUsernameOf(value) !== null;
 
 /** Optional: empty is fine; otherwise a host with a dot and a top-level domain. */
 export function siteOk(value: string): boolean {
@@ -69,23 +76,23 @@ export const FIELD_RULES: readonly FieldRule[] = [
     message: 'Informe um WhatsApp com DDD.',
   },
   {
-    id: 'f-email',
-    errorId: 'e-email',
-    label: 'e-mail',
-    ok: (v) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v.trim()),
-    message: 'Confira o e-mail.',
+    id: 'f-int',
+    errorId: 'e-int',
+    label: 'o que você procura',
+    ok: (v) => v !== '',
+    message: 'Escolha uma opção.',
   },
   {
-    id: 'f-empresa',
-    errorId: 'e-empresa',
-    label: 'empresa',
-    ok: (v) => v.trim().length >= 2,
-    message: 'Escreva o nome da empresa.',
+    id: 'f-email',
+    errorId: 'e-email',
+    label: null,
+    ok: emailOk,
+    message: 'Confira o e-mail.',
   },
   {
     id: 'f-ig',
     errorId: 'e-ig',
-    label: 'Instagram',
+    label: null,
     ok: instagramOk,
     message: 'Informe o @ do Instagram da marca (só letras, números, ponto e sublinhado).',
   },
@@ -95,13 +102,6 @@ export const FIELD_RULES: readonly FieldRule[] = [
     label: null,
     ok: siteOk,
     message: 'Confira o endereço do site.',
-  },
-  {
-    id: 'f-int',
-    errorId: 'e-int',
-    label: 'o que você procura',
-    ok: (v) => v !== '',
-    message: 'Escolha uma opção.',
   },
 ];
 

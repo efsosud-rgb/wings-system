@@ -35,10 +35,14 @@ export interface WaTemplateUpdate {
   name: string;
   language: string | null;
   status: string;
+  /** Meta's reason for a refusal; NONE otherwise. */
+  reason: string | null;
 }
 
 export interface WaChange {
   field: string;
+  /** The WABA the change is about (the entry's id). */
+  wabaId: string | null;
   phoneNumberId: string | null;
   messages: WaInboundMessage[];
   statuses: WaStatusUpdate[];
@@ -46,6 +50,10 @@ export interface WaChange {
   /** The `calls` field: a call starting or ending, and the statuses of our calls. */
   calls: WaCallEvent[];
   callStatuses: WaCallStatusUpdate[];
+  /** `account_update`: Meta's event, with the disconnection's reason when it gives one. */
+  account: { event: string; reason: string | null } | null;
+  /** `history`: the highest progress (0–100) in the body; the threads are not read here. */
+  historyProgress: number | null;
 }
 
 type Obj = Record<string, unknown>;
@@ -256,6 +264,7 @@ export function whatsappChangesOf(body: unknown): WaChange[] {
   if (root.object !== 'whatsapp_business_account') return [];
   const out: WaChange[] = [];
   for (const entry of arr(root.entry)) {
+    const wabaId = str(obj(entry).id);
     for (const change of arr(obj(entry).changes)) {
       const field = str(obj(change).field) ?? 'unknown';
       const value = obj(obj(change).value);
@@ -267,12 +276,15 @@ export function whatsappChangesOf(body: unknown): WaChange[] {
       }
       const parsed: WaChange = {
         field,
+        wabaId,
         phoneNumberId: str(obj(value.metadata).phone_number_id),
         messages: [],
         statuses: [],
         templates: [],
         calls: [],
         callStatuses: [],
+        account: null,
+        historyProgress: null,
       };
       if (field === 'messages') {
         for (const message of arr(value.messages)) {
@@ -293,7 +305,21 @@ export function whatsappChangesOf(body: unknown): WaChange[] {
             name,
             language: str(value.message_template_language),
             status: event,
+            reason: str(value.reason),
           });
+      } else if (field === 'account_update') {
+        const event = str(value.event);
+        if (event)
+          parsed.account = {
+            event: event.slice(0, 60),
+            reason: str(obj(value.disconnection_info).reason)?.slice(0, 60) ?? null,
+          };
+      } else if (field === 'history') {
+        for (const chunk of arr(value.history)) {
+          const progress = num(obj(obj(chunk).metadata).progress);
+          if (progress !== null && progress >= 0 && progress <= 100)
+            parsed.historyProgress = Math.max(parsed.historyProgress ?? 0, Math.round(progress));
+        }
       } else if (field === 'calls') {
         const error = obj(arr(value.errors)[0]);
         for (const call of arr(value.calls)) {

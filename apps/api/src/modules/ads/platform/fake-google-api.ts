@@ -17,7 +17,7 @@ export interface FakeGoogleCampaign {
   amountMicros: string;
   budgetResourceName?: string;
   explicitlyShared?: boolean;
-  /** YYYY-MM-DD, as `campaign.start_date`/`end_date` come back on v22. */
+  /** YYYY-MM-DD; answered as `campaign.start_date_time`/`end_date_time`, as v23+ does. */
   startDate?: string;
   endDate?: string;
   /** campaign.serving_status; SERVING for an enabled campaign when omitted. */
@@ -129,10 +129,14 @@ export interface FakeGoogleApiOptions {
   }[];
   /**
    * Fields this "API version" does not know: a query naming one is refused
-   * the way v22 refused `metrics.video_views` on the first real run.
+   * the way v22 refused `metrics.video_views` on the first real run. By
+   * default, the names the API no longer has (`REMOVED_FIELDS`).
    */
   unrecognizedFields?: string[];
 }
+
+/** Names v26 no longer knows: asking for one is refused, as the real API does. */
+export const REMOVED_FIELDS = ['metrics.video_views', 'campaign.start_date', 'campaign.end_date'];
 
 export const BRAZIL_GEO = [
   {
@@ -244,8 +248,8 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
       name: campaign.name,
       status: campaign.status,
       servingStatus: campaign.servingStatus ?? (campaign.status === 'ENABLED' ? 'SERVING' : 'NONE'),
-      ...(campaign.startDate ? { startDate: campaign.startDate } : {}),
-      ...(campaign.endDate ? { endDate: campaign.endDate } : {}),
+      ...(campaign.startDate ? { startDateTime: `${campaign.startDate} 00:00:00` } : {}),
+      ...(campaign.endDate ? { endDateTime: `${campaign.endDate} 23:59:59` } : {}),
       ...(campaign.finalUrlSuffix ? { finalUrlSuffix: campaign.finalUrlSuffix } : {}),
     },
     customer: options.accountFinalUrlSuffix
@@ -285,7 +289,7 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
       ...(row.videoViews === undefined
         ? {}
         : {
-            videoViews: String(row.videoViews),
+            videoTrueviewViews: String(row.videoViews),
             videoQuartileP25Rate: row.quartiles?.[0] ?? 0,
             videoQuartileP50Rate: row.quartiles?.[1] ?? 0,
             videoQuartileP75Rate: row.quartiles?.[2] ?? 0,
@@ -711,7 +715,10 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
 
     if (href.endsWith('googleAds:search')) {
       const query = String(body.query ?? '');
-      const unknown = (options.unrecognizedFields ?? []).find((field) => query.includes(field));
+      // A whole name only: `campaign.start_date` is not `campaign.start_date_time`.
+      const unknown = (options.unrecognizedFields ?? REMOVED_FIELDS).find((field) =>
+        new RegExp(`${field.replace(/\./g, '\\.')}(?![a-z0-9_])`).test(query),
+      );
       if (unknown) {
         return Promise.resolve(
           json(400, {
@@ -725,9 +732,9 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
       // Like the real API, only the metrics the query named come back.
       const results = search(query).map((row) => {
         const metrics = (row as { metrics?: Record<string, unknown> }).metrics;
-        if (!metrics || /metrics\.video_views/.test(query)) return row;
+        if (!metrics || /metrics\.video_trueview_views/.test(query)) return row;
         const {
-          videoViews,
+          videoTrueviewViews,
           videoQuartileP25Rate,
           videoQuartileP50Rate,
           videoQuartileP75Rate,
@@ -735,7 +742,7 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
           ...rest
         } = metrics;
         void [
-          videoViews,
+          videoTrueviewViews,
           videoQuartileP25Rate,
           videoQuartileP50Rate,
           videoQuartileP75Rate,

@@ -3,6 +3,7 @@ import {
   SESSION_COOKIE,
   WA_MESSAGES_PAGE,
   WINGS_CLIENT_ID,
+  siteLinkText,
   type DealWhatsApp,
   type WaMessage,
   type RoleKey,
@@ -419,6 +420,25 @@ describe('incoming messages', () => {
     await deliver(message.body);
     await run();
     const [lead] = await db.select().from(leads).where(eq(leads.phone, '5541988887777'));
+    expect(lead).toMatchObject({ source: 'whatsapp_link' });
+    const [row] = await db.select().from(waMessages).where(eq(waMessages.wamid, message.id));
+    expect(row?.leadId).toBe(lead!.id);
+    const [conversation] = await db
+      .select()
+      .from(waConversations)
+      .where(eq(waConversations.id, row!.conversationId));
+    expect(conversation?.originCode).toBe(code);
+  });
+
+  it("makes the lead from the Wings site's sentence, the code at the end", async () => {
+    const code = 'SYTE23';
+    await db
+      .insert(leadTrackingLinks)
+      .values({ clientId: WINGS_CLIENT_ID, channel: 'site', code, phone: '5521999470288' });
+    const message = inbound('5541988886666', siteLinkText(code));
+    await deliver(message.body);
+    await run();
+    const [lead] = await db.select().from(leads).where(eq(leads.phone, '5541988886666'));
     expect(lead).toMatchObject({ source: 'whatsapp_link' });
     const [row] = await db.select().from(waMessages).where(eq(waMessages.wamid, message.id));
     expect(row?.leadId).toBe(lead!.id);

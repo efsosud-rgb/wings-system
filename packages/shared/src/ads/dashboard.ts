@@ -427,6 +427,10 @@ export interface CampaignNode {
   /** First and last day, as the platform reports them (or the draft's); null end = no end date. */
   startDate: string | null;
   endDate: string | null;
+  /** Ran its course (`campaignEnded`): "Encerrada", and neither Pausar nor Retomar is offered. */
+  ended: boolean;
+  /** The last day it spent anything, in any window; null when it never spent. */
+  lastSpendDate: string | null;
   /** When the mirror first saw it: the order's tie-break when the start date is unknown. */
   mirroredAt: string;
   /** The CPL target the verdict used (the account's, else the company's); null without one. */
@@ -838,6 +842,20 @@ export function campaignDelivering(
     return campaign.status === 'ACTIVE' && (campaign.deliveryStatus ?? 'SERVING') === 'SERVING';
   }
   return (campaign.deliveryStatus ?? campaign.status) === 'ACTIVE';
+}
+
+/**
+ * Whether a campaign has run its course: Google says so (serving_status
+ * ENDED, while its status may still read ENABLED), or its last day has
+ * passed. Meta has no such delivery status; its end date is the rule there.
+ */
+export function campaignEnded(
+  campaign: { deliveryStatus: string | null; endDate: string | null },
+  today: string,
+): boolean {
+  return (
+    campaign.deliveryStatus === 'ENDED' || Boolean(campaign.endDate && campaign.endDate < today)
+  );
 }
 
 /** Google approval states an ad serves under; anything else is a warning. */

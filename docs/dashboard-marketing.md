@@ -173,9 +173,11 @@ Três coisas que só a Meta e o Google de verdade mostraram, corrigidas em
   responder campo desconhecido, o cliente marca vídeo como não disponível para
   a conta (plays e quartis zerados), registra um aviso (`drainWarnings`, impresso
   pelo job como `AVISO:` e devolvido em `IngestResult.warnings`) e refaz a
-  leitura só com os campos de dinheiro. Nenhuma outra falha é engolida. Qual
-  campo de vídeo esta versão aceita em `campaign` continua **não verificado**;
-  o log da próxima rodada diz.
+  leitura só com os campos de dinheiro. Nenhuma outra falha é engolida.
+  **20/10/2026 (v26):** o nome certo é `metrics.video_trueview_views`, e os
+  quartis são fração das impressões (contagem = impressões × taxa), pela
+  referência da v26; ainda **não verificado** na conta real (ver
+  `docs/ads/google-escrita.md`, "Versão da API: v26").
 
 ### O que o token não pode ler vira "não disponível" (22/09/2026)
 
@@ -311,7 +313,8 @@ botão: muda-se na plataforma.
   Kairogen, IA e provedores continuam em linha reta.
 - **Datas das campanhas** (migração 0040): `ad_campaigns.start_date` e
   `end_date`, lidas da Meta (`start_time`/`stop_time`, ou `created_time` na
-  falta de início) e do Google (`campaign.start_date`/`end_date` na v22; o
+  falta de início) e do Google (`campaign.start_date`/`end_date` na v22,
+  `campaign.start_date_time`/`end_date_time` desde a v26, cortados no dia; o
   2037-12-30 do Google vira "sem fim"). A aba Campanhas vem da mais recente
   para a mais antiga pelo início, com a opção de inverter ou ordenar por
   gasto. A campanha Search de 28/09 sumia porque a ordem era por gasto e ela

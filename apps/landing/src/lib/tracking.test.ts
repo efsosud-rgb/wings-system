@@ -31,7 +31,17 @@ describe('trackingOfSearch', () => {
       trackingOfSearch(
         '?utm_source=meta&utm_id=9&msclkid=x&ttclid=y&gclid=abc&referrer=evil&hsa_ad=7&nome=Fulano',
       ),
-    ).toEqual({ utm_source: 'meta', gclid: 'abc', hsa_ad: '7' });
+    ).toEqual({ utm_source: 'meta', gclid: 'abc', hsa_ad: '7', utm_id: '9' });
+  });
+
+  it('keeps utm_id for the events, never in what the form sends (the API refuses the key)', () => {
+    const origin = captureOrigin(
+      '?utm_campaign=120252596733630076&utm_id=120252596733630076',
+      '',
+      null,
+    );
+    expect(origin.now.utm_id).toBe('120252596733630076');
+    expect(trackingPayloadOf(origin)).toEqual({ utm_campaign: '120252596733630076' });
   });
 
   it('cuts every value to 500 characters', () => {
@@ -42,8 +52,10 @@ describe('trackingOfSearch', () => {
 describe('firstTouchOf', () => {
   it('drops unknown keys and keeps the time it was stored', () => {
     expect(
-      firstTouchOf(JSON.stringify({ ts: 5, utm_source: 'google', utm_id: '1', referrer: 'x' })),
-    ).toEqual({ ts: 5, utm_source: 'google' });
+      firstTouchOf(
+        JSON.stringify({ ts: 5, utm_source: 'google', utm_id: '1', ttclid: 'y', referrer: 'x' }),
+      ),
+    ).toEqual({ ts: 5, utm_source: 'google', utm_id: '1' });
   });
 
   it('is null for nothing, garbage or a touch without keys', () => {

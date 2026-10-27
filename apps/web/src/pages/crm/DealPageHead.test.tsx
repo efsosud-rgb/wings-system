@@ -198,6 +198,9 @@ vi.mock('../../api/leads.js', () => ({
   useCreateTask: () => mutation(),
 }));
 
+// "Reunião agora" reads the person's Google connection in the Reunião section.
+vi.mock('../../api/google.js', () => ({ useGoogleStatus: idle }));
+
 vi.mock('../../api/crm.js', () => ({
   useUpdateDeal: () => mutation(dealMutate),
   useAddActivity: () => mutation(),
@@ -395,7 +398,7 @@ describe('the action bar', () => {
     const panel = within(screen.getByRole('dialog', { name: 'Ligação' }));
     expect(panel.getByRole('button', { name: 'Copiar número' })).toBeTruthy();
     expect(panel.getByRole('button', { name: 'Registrar ligação' })).toBeTruthy();
-    expect(document.querySelector('a[href^="tel:"]')).toBeNull();
+    expect(panel.getByRole('link', { name: 'Ligar pelo celular' })).toBeTruthy();
     fireEvent.click(panel.getByRole('button', { name: 'Fechar' }));
     expect(screen.queryByRole('dialog', { name: 'Ligação' })).toBeNull();
     fireEvent.click(within(bar).getByRole('button', { name: 'Tarefa' }));
