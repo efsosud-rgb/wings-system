@@ -83,13 +83,14 @@ describe('visitIdOf', () => {
 });
 
 describe('eventBodyOf', () => {
-  it('carries the event, the step, the visit and the four UTMs only, never a click id, the referrer or a person', () => {
+  it('carries the event, the step, the visit and the UTMs only, never a click id, the referrer or a person', () => {
     const body = eventBodyOf('whatsapp_click', 'header', 'a1b2c3d4e5f6', {
       utm_source: 'ig',
       utm_medium: 'cpc',
       utm_campaign: 'lancamento',
       utm_content: 'video-2',
       utm_term: 'franquia',
+      utm_id: '9',
       gclid: 'TESTE123',
       fbclid: 'x',
       referrer: 'https://l.instagram.com/',
@@ -102,8 +103,34 @@ describe('eventBodyOf', () => {
       utm_medium: 'cpc',
       utm_campaign: 'lancamento',
       utm_content: 'video-2',
+      utm_term: 'franquia',
+      utm_id: '9',
     });
     expect(siteEventSchema.safeParse(body).success).toBe(true);
+  });
+
+  it('sends the ids Meta puts in the address whole, and the API takes them', () => {
+    const meta = {
+      utm_source: 'ig',
+      utm_medium: 'paid',
+      utm_campaign: '120252596733630076',
+      utm_content: '120252596746630076',
+      utm_term: '120252596743640076',
+      utm_id: '120252596733630076',
+    };
+    const body = eventBodyOf('page_view', undefined, 'a1b2c3d4e5f60718293a4b5c', meta);
+    expect(body).toEqual({ event: 'page_view', visit: 'a1b2c3d4e5f60718293a4b5c', ...meta });
+    expect(siteEventSchema.safeParse(body).success).toBe(true);
+    // Under the route's 1 KB body limit even with every UTM at the 100-character cap.
+    const longest = eventBodyOf('whatsapp_click', 'thanks', 'a'.repeat(32), {
+      utm_source: 'x'.repeat(300),
+      utm_medium: 'x'.repeat(300),
+      utm_campaign: 'x'.repeat(300),
+      utm_content: 'x'.repeat(300),
+      utm_term: 'x'.repeat(300),
+      utm_id: 'x'.repeat(300),
+    });
+    expect(new TextEncoder().encode(JSON.stringify(longest)).length).toBeLessThan(1024);
   });
 
   it('leaves the step out when there is none and cuts a UTM to the API’s limit', () => {
