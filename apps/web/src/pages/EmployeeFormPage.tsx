@@ -5,8 +5,11 @@ import {
   employeeCreateSchema,
   formatCpf,
   isValidCpf,
+  loginEmailChangeDenial,
   roleFieldState,
+  statusChangeDenial,
   type DenyReason,
+  type EmailChangeOutcome,
   type EmployeeCreateInput,
   type EmployeeStatus,
   type EmployeeView,
@@ -46,6 +49,20 @@ function roleLockHint(reason: DenyReason): string {
   return 'Seu perfil não pode alterar este nível.';
 }
 
+/** Why the login e-mail is locked, in the operator's words. */
+function emailLockHint(reason: DenyReason): string {
+  if (reason === 'self_role_change') {
+    return 'Você não pode trocar o próprio e-mail de login. Peça ao RH/DP ou a um Admin Master.';
+  }
+  if (reason === 'diretoria_level') {
+    return 'Só um Admin Master troca o e-mail de login de alguém da Diretoria.';
+  }
+  if (reason === 'role_rank_too_high') {
+    return 'Você não pode trocar o e-mail de login de alguém com nível igual ou maior que o seu.';
+  }
+  return 'Só quem pode mudar o nível de acesso desta pessoa troca o e-mail de login dela.';
+}
+
 /** On edit the CPF stays masked, so the field is optional: fill it only to change it. */
 const editSchema = employeeCreateSchema.omit({ cpf: true }).extend({
   cpf: z
@@ -80,6 +97,7 @@ export function EmployeeFormPage() {
     kind: 'success' | 'error';
     text: string;
   } | null>(null);
+  const [emailChange, setEmailChange] = useState<EmailChangeOutcome | null>(null);
 
   const employee: EmployeeView | undefined = existing.data?.employee;
 
@@ -148,8 +166,48 @@ export function EmployeeFormPage() {
   const nothingToSave = fieldsLocked && roleField.locked !== null;
   const lock = { disabled: fieldsLocked };
 
+  // The login e-mail is where a password reset goes, so only someone who could
+  // also change this person's level may change it. Same rule as the API.
+  const emailLock =
+    isEdit && employee && actor && !fieldsLocked
+      ? loginEmailChangeDenial(actor, {
+          employeeId: employee.id,
+          sector: employee.sector,
+          currentRole: employee.role,
+          isLastActiveAdminMaster: employee.isLastActiveAdminMaster,
+        })
+      : null;
+  // Switching someone off or back on needs its own permission; the statuses
+  // offered are the ones this actor may move the record to.
+  const statusOptions =
+    isEdit && employee && actor
+      ? EMPLOYEE_STATUS.filter(
+          (value) =>
+            statusChangeDenial(actor, { sector: employee.sector }, employee.status, value) === null,
+        )
+      : [...EMPLOYEE_STATUS];
+  const statusHint =
+    !isEdit || fieldsLocked || statusOptions.length === EMPLOYEE_STATUS.length
+      ? undefined
+      : employee?.status === 'inactive'
+        ? 'Só quem pode inativar funcionários reativa este cadastro.'
+        : 'Inativar exige a permissão de inativar funcionários.';
+
+  async function resendInvite() {
+    try {
+      await resend.mutateAsync();
+      setInviteNotice({ kind: 'success', text: 'Convite reenviado com sucesso.' });
+    } catch (error) {
+      setInviteNotice({
+        kind: 'error',
+        text: error instanceof ApiError ? error.message : 'Não foi possível reenviar o convite.',
+      });
+    }
+  }
+
   const onSubmit = handleSubmit(async (values) => {
     setInviteNotice(null);
+    setEmailChange(null);
     if (isEdit) {
       const roleChanged = Boolean(employee) && values.role !== employee?.role;
       if (roleChanged && employee && ROLES[values.role].rank < ROLES[employee.role].rank) {
@@ -166,7 +224,14 @@ export function EmployeeFormPage() {
       // An unchanged level is left out: there is nothing to authorize.
       if (roleChanged) payload.role = values.role;
       else delete payload.role;
-      await update.mutateAsync(payload);
+      if (emailLock) delete payload.email;
+      const result = await update.mutateAsync(payload);
+      // A new login e-mail ends the person's sessions and warns the old
+      // address: stay here and say what happened, including a failed warning.
+      if (result.emailChange) {
+        setEmailChange(result.emailChange);
+        return;
+      }
       navigate('/funcionarios');
       return;
     }
@@ -230,23 +295,36 @@ export function EmployeeFormPage() {
                 type="button"
                 className="link-button"
                 disabled={resend.isPending}
-                onClick={async () => {
-                  try {
-                    await resend.mutateAsync();
-                    setInviteNotice({ kind: 'success', text: 'Convite reenviado com sucesso.' });
-                  } catch (error) {
-                    setInviteNotice({
-                      kind: 'error',
-                      text:
-                        error instanceof ApiError
-                          ? error.message
-                          : 'Não foi possível reenviar o convite.',
-                    });
-                  }
-                }}
+                onClick={() => void resendInvite()}
               >
                 {resend.isPending ? 'Reenviando…' : 'Reenviar convite'}
               </button>
+            </>
+          )}
+        </Alert>
+      )}
+
+      {emailChange && (
+        <Alert kind={emailChange.notice.sent ? 'success' : 'error'}>
+          E-mail de login trocado. Esta pessoa saiu de todas as sessões e entra de novo com o
+          endereço novo.{' '}
+          {emailChange.notice.sent
+            ? 'O aviso da troca foi enviado ao endereço antigo.'
+            : (emailChange.notice.error?.message ?? 'O aviso ao endereço antigo NÃO foi enviado.')}
+          {emailChange.linksCancelled > 0 && (
+            <>
+              {' '}
+              Os links de definir senha que estavam pendentes foram cancelados. Se ela ainda não
+              definiu a senha,{' '}
+              <button
+                type="button"
+                className="link-button"
+                disabled={resend.isPending}
+                onClick={() => void resendInvite()}
+              >
+                {resend.isPending ? 'reenviando…' : 'reenvie o convite'}
+              </button>
+              .
             </>
           )}
         </Alert>
@@ -314,9 +392,19 @@ export function EmployeeFormPage() {
             <Field
               label="E-mail (login)"
               error={errors.email?.message}
-              hint="O convite para definir a senha é enviado para este endereço."
+              hint={
+                emailLock
+                  ? emailLockHint(emailLock)
+                  : isEdit && !fieldsLocked
+                    ? 'Trocar o e-mail encerra as sessões desta pessoa e avisa o endereço antigo.'
+                    : 'O convite para definir a senha é enviado para este endereço.'
+              }
             >
-              <Input type="email" {...register('email')} {...lock} />
+              <Input
+                type="email"
+                {...register('email')}
+                disabled={fieldsLocked || emailLock !== null}
+              />
             </Field>
           </div>
         </fieldset>
@@ -359,9 +447,12 @@ export function EmployeeFormPage() {
               <Input type="date" {...register('admissionDate')} {...lock} />
             </Field>
 
-            <Field label="Status" error={errors.status?.message}>
-              <Select {...register('status')} {...lock}>
-                {EMPLOYEE_STATUS.map((value) => (
+            <Field label="Status" error={errors.status?.message} hint={statusHint}>
+              <Select
+                {...register('status')}
+                disabled={fieldsLocked || (isEdit && statusOptions.length <= 1)}
+              >
+                {statusOptions.map((value) => (
                   <option key={value} value={value}>
                     {STATUS_LABEL[value]}
                   </option>

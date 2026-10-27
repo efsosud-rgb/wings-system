@@ -4,6 +4,7 @@ import {
   SECTOR_SLUGS,
   employeeCreateSchema,
   employeeUpdateSchema,
+  type EmailChangeOutcome,
   type EmployeeStatus,
   type InviteFailureCode,
   type InviteOutcome,
@@ -11,7 +12,7 @@ import {
 } from '@wings/shared';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { sendInvite } from '../auth/credentials-service.js';
+import { notifyLoginEmailChanged, sendInvite } from '../auth/credentials-service.js';
 import {
   createEmployee,
   getEmployee,
@@ -30,6 +31,8 @@ const STATUS_BY_FAILURE: Record<EmployeeFailure, number> = {
   manager_flag_forbidden: 403,
   admin_master_record: 403,
   last_admin_master: 409,
+  email_change_forbidden: 403,
+  deactivate_forbidden: 403,
 };
 
 const MESSAGE_BY_FAILURE: Record<EmployeeFailure, string> = {
@@ -41,6 +44,9 @@ const MESSAGE_BY_FAILURE: Record<EmployeeFailure, string> = {
   manager_flag_forbidden: 'Apenas o Admin Master pode definir gestores de setor.',
   admin_master_record: 'Apenas um Admin Master pode alterar o cadastro de um Admin Master.',
   last_admin_master: 'Único Admin Master do sistema — não pode ser rebaixado nem inativado.',
+  email_change_forbidden:
+    'Você não pode trocar o e-mail de login desta pessoa: só quem pode mudar o nível de acesso dela pode trocá-lo.',
+  deactivate_forbidden: 'Você não tem permissão para inativar ou reativar funcionários.',
 };
 
 function fail(reply: FastifyReply, reason: EmployeeFailure) {
@@ -163,7 +169,32 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
       parsed.data,
       requestContext(request),
     );
-    return updated.ok ? reply.send({ employee: updated.value }) : fail(reply, updated.reason);
+    if (!updated.ok) return fail(reply, updated.reason);
+
+    const { employee, emailChange } = updated.value;
+    if (!emailChange) return reply.send({ employee });
+
+    // The new address is saved; the old one is told, and the operator is told
+    // whether that warning actually went out.
+    const notice = await notifyLoginEmailChanged(db, mailer, {
+      employeeId: employee.id,
+      // The name as it was: the same request may have changed it.
+      name: emailChange.previousName,
+      previousEmail: emailChange.previousEmail,
+      actorId: request.session.actor.employeeId,
+      ctx: requestContext(request),
+      // The error's class and code only: an SMTP message can quote the address.
+      onSendError: (error) =>
+        request.log.error(
+          {
+            errorName: error instanceof Error ? error.name : typeof error,
+            code: (error as { code?: unknown } | null)?.code,
+          },
+          'login e-mail change notice failed',
+        ),
+    });
+    const outcome: EmailChangeOutcome = { linksCancelled: emailChange.linksCancelled, notice };
+    return reply.send({ employee, emailChange: outcome });
   });
 
   /** POST, not GET: a CPF must never sit in a URL, a log or browser history. */

@@ -697,6 +697,342 @@ describe('PATCH /employees/:id — access levels', () => {
   });
 });
 
+describe('PATCH /employees/:id — login e-mail (security audit, 2026-10-13)', () => {
+  const patch = (id: string, cookies: Record<string, string>, payload: Record<string, unknown>) =>
+    app.inject({ method: 'PATCH', url: `/employees/${id}`, cookies, payload });
+
+  const storedEmail = async (id: string) =>
+    (
+      await db.execute<{ email: string } & Record<string, unknown>>(
+        sql`select email from employees where id = ${id}`,
+      )
+    ).rows[0]?.email;
+
+  const isLoggedIn = async (cookies: Record<string, string>) =>
+    (await app.inject({ method: 'GET', url: '/auth/me', cookies })).statusCode === 200;
+
+  const login = (email: string, password: string) =>
+    app.inject({ method: 'POST', url: '/auth/login', payload: { email, password } });
+
+  const someAddress = () => `outro-${randomBytes(4).toString('hex')}@exemplo.com.br`;
+
+  /** The token of the last link mailed, read the way the recipient would. */
+  function tokenFromOutbox(): string {
+    const link = outbox.at(-1)?.text.match(/https:\/\/\S+/)?.[0];
+    const token = link ? new URL(link).searchParams.get('token') : null;
+    if (!token) throw new Error('no link in the last e-mail');
+    return token;
+  }
+
+  it("stops RH/DP re-pointing a director's login, which was the takeover", async () => {
+    const rh = await sessionFor({ role: 'rh_dp', sector: 'diretoria' });
+    const director = await sessionFor({ role: 'diretoria', sector: 'diretoria' });
+    const attacker = someAddress();
+
+    const res = await patch(director.employee.id, rh.cookies, { email: attacker });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toBe('email_change_forbidden');
+    expect(await storedEmail(director.employee.id)).toBe(director.employee.email);
+    expect(await isLoggedIn(director.cookies)).toBe(true);
+
+    // The rest of the chain finds nothing: no reset link reaches the new address.
+    await app.inject({
+      method: 'POST',
+      url: '/auth/forgot-password',
+      payload: { email: attacker },
+    });
+    expect(outbox).toHaveLength(0);
+
+    // The form sends the address back on every save; unchanged is not a change.
+    const save = await patch(director.employee.id, rh.cookies, {
+      email: director.employee.email.toUpperCase(),
+      cargo: 'Diretora',
+    });
+    expect(save.statusCode).toBe(200);
+    expect(save.json().emailChange).toBeUndefined();
+    expect(await isLoggedIn(director.cookies)).toBe(true);
+  });
+
+  it('stops a manager re-pointing a colleague of equal or higher level in their sector', async () => {
+    const formatacaoManager = await sessionFor({
+      role: 'formatacao_financeiro',
+      sector: 'formatacao',
+      isSectorManager: true,
+    });
+    const ti = await createEmployee(db, { role: 'formatacao_ti', sector: 'formatacao-ti' });
+    const gerente = await sessionFor({ role: 'gerente_comercial', sector: 'comercial' });
+    const otherGerente = await createEmployee(db, {
+      role: 'gerente_comercial',
+      sector: 'comercial',
+    });
+
+    for (const [target, cookies] of [
+      [ti, formatacaoManager.cookies],
+      [otherGerente, gerente.cookies],
+      [gerente.employee, gerente.cookies],
+    ] as const) {
+      const res = await patch(target.id, cookies, { email: someAddress() });
+      expect(res.statusCode).toBe(403);
+      expect(res.json().error).toBe('email_change_forbidden');
+      expect(await storedEmail(target.id)).toBe(target.email);
+    }
+    // The rest of that colleague's record is still theirs to edit.
+    expect((await patch(ti.id, formatacaoManager.cookies, { cargo: 'Suporte' })).statusCode).toBe(
+      200,
+    );
+  });
+
+  it('closes the two-step path: no demoting that colleague first, then re-pointing the login', async () => {
+    const gerente = await sessionFor({ role: 'gerente_comercial', sector: 'comercial' });
+    const otherGerente = await createEmployee(db, {
+      role: 'gerente_comercial',
+      sector: 'comercial',
+    });
+
+    const demote = await patch(otherGerente.id, gerente.cookies, { role: 'vendedor_expansao' });
+    expect(demote.statusCode).toBe(403);
+    expect(demote.json().error).toBe('role_not_allowed');
+    const reroute = await patch(otherGerente.id, gerente.cookies, { email: someAddress() });
+    expect(reroute.statusCode).toBe(403);
+    expect(await storedEmail(otherGerente.id)).toBe(otherGerente.email);
+  });
+
+  it('escapes the name in the warning, and uses the name from before the change', async () => {
+    const rh = await sessionFor({ role: 'rh_dp', sector: 'diretoria' });
+    const seller = await createEmployee(db, { role: 'vendedor_expansao', sector: 'comercial' });
+
+    const res = await patch(seller.id, rh.cookies, {
+      email: someAddress(),
+      fullName: 'Ana<div style="display:none">',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(outbox).toHaveLength(1);
+    expect(outbox[0]?.html).not.toContain('<div style="display:none">');
+    expect(outbox[0]?.text).toContain('Olá, Funcionário de Teste.');
+  });
+
+  it('lets an Admin Master change their own login, which ends their own sessions too', async () => {
+    const admin = await sessionFor({ role: 'admin_master', sector: 'diretoria' });
+    const fresh = someAddress();
+
+    const res = await patch(admin.employee.id, admin.cookies, { email: fresh });
+    expect(res.statusCode).toBe(200);
+    expect(outbox[0]?.to).toBe(admin.employee.email);
+    expect(await isLoggedIn(admin.cookies)).toBe(false);
+    expect((await login(fresh, admin.employee.password)).statusCode).toBe(200);
+  });
+
+  it('lets an allowed editor change it: sessions end, pending links die, the old address is warned', async () => {
+    const rh = await sessionFor({ role: 'rh_dp', sector: 'diretoria' });
+    const seller = await sessionFor({ role: 'vendedor_expansao', sector: 'comercial' });
+    // A reset link mailed to the old address before the change.
+    await app.inject({
+      method: 'POST',
+      url: '/auth/forgot-password',
+      payload: { email: seller.employee.email },
+    });
+    const oldLink = tokenFromOutbox();
+    outbox = [];
+
+    const fresh = someAddress();
+    const res = await patch(seller.employee.id, rh.cookies, { email: fresh });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().employee.email).toBe(fresh);
+    expect(res.json().emailChange).toEqual({ linksCancelled: 1, notice: { sent: true } });
+
+    // One warning, to the old address, which does not learn the new one.
+    expect(outbox).toHaveLength(1);
+    expect(outbox[0]?.to).toBe(seller.employee.email);
+    expect(outbox[0]?.subject).toContain('e-mail de login');
+    expect(`${outbox[0]?.text}${outbox[0]?.html}`).not.toContain(fresh);
+
+    expect(await isLoggedIn(seller.cookies)).toBe(false);
+    const reuse = await app.inject({
+      method: 'POST',
+      url: '/auth/set-password',
+      payload: { token: oldLink, password: 'Outra-senha-forte-2026' },
+    });
+    expect(reuse.statusCode).toBe(410);
+
+    expect((await login(seller.employee.email, seller.employee.password)).statusCode).toBe(401);
+    expect((await login(fresh, seller.employee.password)).statusCode).toBe(200);
+
+    // Audited by field name and outcome, never by address.
+    const entries = await db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.targetEmployeeId, seller.employee.id));
+    const update = entries.find((entry) => entry.action === 'employee.updated');
+    expect(update?.metadata).toMatchObject({
+      changed: ['email'],
+      linksCancelled: 1,
+      sessionsRevoked: true,
+    });
+    const notice = entries.find((entry) => entry.action === 'credentials.email_change_notified');
+    expect(notice?.actorEmployeeId).toBe(rh.employee.id);
+    expect(notice?.metadata).toEqual({ delivered: true });
+    const revoked = entries.find((entry) => entry.action === 'session.revoked_all');
+    expect(revoked?.metadata).toMatchObject({ reason: 'email_changed' });
+    const serialized = JSON.stringify(entries.map((entry) => entry.metadata));
+    expect(serialized).not.toContain(fresh);
+    expect(serialized).not.toContain(seller.employee.email);
+  });
+
+  it("lets the Gerente Comercial change a seller's login in their sector, and an Admin Master a director's", async () => {
+    const gerente = await sessionFor({ role: 'gerente_comercial', sector: 'comercial' });
+    const seller = await createEmployee(db, { role: 'vendedor_expansao', sector: 'comercial' });
+    expect((await patch(seller.id, gerente.cookies, { email: someAddress() })).statusCode).toBe(
+      200,
+    );
+
+    const admin = await sessionFor({ role: 'admin_master', sector: 'diretoria' });
+    const director = await createEmployee(db, { role: 'diretoria', sector: 'diretoria' });
+    expect((await patch(director.id, admin.cookies, { email: someAddress() })).statusCode).toBe(
+      200,
+    );
+  });
+
+  it('tells the operator plainly when the warning to the old address did not go out', async () => {
+    for (const [mailerUnderTest, code] of [
+      [
+        {
+          enabled: false,
+          send: async () => {
+            throw new Error('must not be called');
+          },
+        },
+        'email_not_configured',
+      ],
+      [
+        {
+          enabled: true,
+          send: async () => {
+            throw new Error('smtp connection refused');
+          },
+        },
+        'send_failed',
+      ],
+    ] as const) {
+      const other = await buildApp({
+        env: loadEnv({
+          NODE_ENV: 'test',
+          DATABASE_URL: harness.url,
+          SESSION_SECRET: randomBytes(48).toString('base64'),
+          CPF_ENCRYPTION_KEY: TEST_CPF_KEY,
+          CPF_INDEX_KEY: TEST_INDEX_KEY,
+          APP_BASE_URL: 'https://staging.wingssystem.online',
+        }),
+        db,
+        mailer: mailerUnderTest,
+      });
+      const actor = await createEmployee(db, { role: 'admin_master', sector: 'diretoria' });
+      const signIn = await other.inject({
+        method: 'POST',
+        url: '/auth/login',
+        payload: { email: actor.email, password: actor.password },
+      });
+      const cookies = {
+        [SESSION_COOKIE]: signIn.cookies.find((c) => c.name === SESSION_COOKIE)?.value ?? '',
+      };
+      const target = await createEmployee(db, { role: 'marketing', sector: 'marketing' });
+      const fresh = someAddress();
+
+      const res = await other.inject({
+        method: 'PATCH',
+        url: `/employees/${target.id}`,
+        cookies,
+        payload: { email: fresh },
+      });
+      // The change itself stands; the operator is told the warning did not go out.
+      expect(res.statusCode).toBe(200);
+      expect(await storedEmail(target.id)).toBe(fresh);
+      expect(res.json().emailChange.notice).toMatchObject({ sent: false, error: { code } });
+      expect(res.json().emailChange.notice.error.message).toContain('NÃO foi enviado');
+      const audited = await db
+        .select()
+        .from(auditLog)
+        .where(eq(auditLog.targetEmployeeId, target.id));
+      expect(
+        audited.find((entry) => entry.action === 'credentials.email_change_notified')?.metadata,
+      ).toEqual({ delivered: false, reason: code });
+      await other.close();
+    }
+  });
+});
+
+describe('PATCH /employees/:id — deactivating and reactivating (security audit, 2026-10-13)', () => {
+  const patch = (id: string, cookies: Record<string, string>, payload: Record<string, unknown>) =>
+    app.inject({ method: 'PATCH', url: `/employees/${id}`, cookies, payload });
+
+  const statusOf = async (id: string) =>
+    (
+      await db.execute<{ status: string } & Record<string, unknown>>(
+        sql`select status from employees where id = ${id}`,
+      )
+    ).rows[0]?.status;
+
+  it('stops the Gerente Comercial, who lacks employees.deactivate, switching a seller off', async () => {
+    const gerente = await sessionFor({ role: 'gerente_comercial', sector: 'comercial' });
+    const seller = await sessionFor({ role: 'vendedor_expansao', sector: 'comercial' });
+
+    const res = await patch(seller.employee.id, gerente.cookies, { status: 'inactive' });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toBe('deactivate_forbidden');
+    expect(await statusOf(seller.employee.id)).toBe('active');
+    expect(
+      (await app.inject({ method: 'GET', url: '/auth/me', cookies: seller.cookies })).statusCode,
+    ).toBe(200);
+  });
+
+  it('stops the Gerente Comercial switching back on someone RH switched off', async () => {
+    const gerente = await sessionFor({ role: 'gerente_comercial', sector: 'comercial' });
+    const former = await createEmployee(db, {
+      role: 'vendedor_expansao',
+      sector: 'comercial',
+      status: 'inactive',
+    });
+
+    const res = await patch(former.id, gerente.cookies, { status: 'active' });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toBe('deactivate_forbidden');
+    expect(await statusOf(former.id)).toBe('inactive');
+    const signIn = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { email: former.email, password: former.password },
+    });
+    expect(signIn.statusCode).toBe(403);
+  });
+
+  it('still lets the Gerente Comercial mark leave, which is an ordinary edit', async () => {
+    const gerente = await sessionFor({ role: 'gerente_comercial', sector: 'comercial' });
+    const seller = await createEmployee(db, { role: 'vendedor_expansao', sector: 'comercial' });
+    expect((await patch(seller.id, gerente.cookies, { status: 'on_leave' })).statusCode).toBe(200);
+    expect((await patch(seller.id, gerente.cookies, { status: 'active' })).statusCode).toBe(200);
+  });
+
+  it('still lets RH/DP and a flagged sector manager switch someone off and back on', async () => {
+    const rh = await sessionFor({ role: 'rh_dp', sector: 'diretoria' });
+    const manager = await sessionFor({
+      role: 'gerente_comercial',
+      sector: 'comercial',
+      isSectorManager: true,
+    });
+
+    for (const cookies of [rh.cookies, manager.cookies]) {
+      const seller = await sessionFor({ role: 'vendedor_expansao', sector: 'comercial' });
+      expect((await patch(seller.employee.id, cookies, { status: 'inactive' })).statusCode).toBe(
+        200,
+      );
+      expect(
+        (await app.inject({ method: 'GET', url: '/auth/me', cookies: seller.cookies })).statusCode,
+      ).toBe(401);
+      expect((await patch(seller.employee.id, cookies, { status: 'active' })).statusCode).toBe(200);
+      expect(await statusOf(seller.employee.id)).toBe('active');
+    }
+  });
+});
+
 describe('POST /employees/:id/reveal-cpf', () => {
   it('returns the full CPF for a permitted viewer and audits it', async () => {
     const { cookies } = await sessionFor({ role: 'admin_master', sector: 'diretoria' });

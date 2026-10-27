@@ -107,6 +107,35 @@ export const INVITE_FAILURE_MESSAGE: Record<InviteFailureCode, string> = {
     'Funcionário cadastrado como inativo, portanto o convite NÃO foi enviado. Ative o cadastro e reenvie o convite.',
 };
 
+/**
+ * What followed a change of someone's login e-mail. Whoever holds the login
+ * address can reset the password, so the change ends every session of that
+ * person, cancels the set-password links still pending, and warns the previous
+ * address. Like the invite, the operator is told plainly whether the warning
+ * actually went out.
+ */
+export type EmailChangeNoticeFailureCode = 'email_not_configured' | 'send_failed';
+
+export interface EmailChangeOutcome {
+  /** Invite or reset links that were still usable and no longer work. */
+  linksCancelled: number;
+  /** The warning to the previous address. */
+  notice: {
+    sent: boolean;
+    error?: {
+      code: EmailChangeNoticeFailureCode;
+      /** Ready to show to the operator, in Portuguese. */
+      message: string;
+    };
+  };
+}
+
+export const EMAIL_CHANGE_NOTICE_FAILURE_MESSAGE: Record<EmailChangeNoticeFailureCode, string> = {
+  email_not_configured:
+    'O aviso ao endereço antigo NÃO foi enviado: o envio de e-mails não está configurado.',
+  send_failed: 'O aviso ao endereço antigo NÃO foi enviado: falha no servidor de e-mail.',
+};
+
 /** Filters accepted by GET /employees. */
 export interface EmployeeListQuery {
   search?: string;
