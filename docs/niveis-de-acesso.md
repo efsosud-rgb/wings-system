@@ -36,6 +36,7 @@ Financeiro, Processos e Projetos, Contábil/Tributário, Logística, TI).
 | CRM → Empresas, Landing pages           | yes          | yes                   | —     | yes               | —         | —                             | —                 | —                   |
 | CRM → Configurações                     | yes          | —                     | —     | yes               | —         | —                             | —                 | —                   |
 | CRM → Sofia (every conversation)        | yes          | yes                   | —     | yes               | —         | —                             | —                 | —                   |
+| CRM → WhatsApp → Modelos                | yes          | yes                   | —     | —                 | —         | —                             | —                 | —                   |
 | CRM → Prospecção                        | all          | all, no lead creation | —     | all               | —         | —                             | —                 | own                 |
 | Dashboard → Vendas                      | all          | all                   | —     | all               | —         | —                             | own, in the CRM   | own, in the CRM     |
 | Dashboard → Marketing                   | yes          | yes                   | —     | —                 | yes       | —                             | —                 | —                   |

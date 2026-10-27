@@ -66,7 +66,10 @@ describe('the call panel', () => {
     const dialog = screen.getByRole('dialog', { name: 'Ligação' });
     expect(dialog.textContent).toContain('Elena Prado');
     expect(screen.getByText('(21) 99999-0001')).toBeTruthy();
-    expect(dialog.querySelector('a[href^="tel:"]')).toBeNull();
+    // The seller's own phone dials it (Eric, 26/10).
+    expect(screen.getByRole('link', { name: 'Ligar pelo celular' }).getAttribute('href')).toBe(
+      'tel:+5521999990001',
+    );
     const whatsapp = screen.getByRole('button', {
       name: /Ligar pelo WhatsApp/,
     }) as HTMLButtonElement;

@@ -50,6 +50,8 @@ export const PERMISSIONS = {
     'Forçar agora a reconciliação de uma conta de tráfego pago com a plataforma',
   'integrations.manage':
     'Conectar e desconectar integrações do sistema (Kairogen, os números do WhatsApp dos vendedores)',
+  'whatsapp_templates.manage':
+    'Criar e editar os modelos de mensagem do WhatsApp e mandar para a aprovação da Meta',
   'marketing.media.read': 'Ver a biblioteca de mídia do marketing',
   'marketing.media.generate': 'Gerar imagens e vídeos gastando créditos',
   'marketing.media.edit': 'Editar vídeos no Studio, exportar e salvar no Drive',
@@ -192,6 +194,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'employees.assign_roles': 'all',
     'timeclock.read': 'all',
     'timeclock.adjust': 'all',
+    'whatsapp_templates.manage': 'all',
     'leads.read': 'all',
     'leads.write': 'all',
     'leads.assign': 'all',
@@ -239,6 +242,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     // Access levels only: Diretoria still cannot edit the rest of a record.
     'employees.assign_roles': 'all',
     'timeclock.read': 'all',
+    'whatsapp_templates.manage': 'all',
     'leads.read': 'all',
     'leads.assign': 'all',
     // Eric, 07/10: Diretoria reads, sends and calls on any lead's WhatsApp, though it does not edit the deal.

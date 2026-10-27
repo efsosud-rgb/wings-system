@@ -34,9 +34,10 @@ Turnstile de verdade; o envio vai para a API; o `robots` passou a vir do ambient
    `companyName`, `instagram` (usuário) e `siteUrl` (com `https://`) vão só quando preenchidos.
 4. A regra `fale-com-a-wings` vem do seed da API: cliente Wings Company, funil Formatação, formulário do site ligado,
    com as perguntas e os códigos acima e `requiredFields: ['qualifierAnswer']` (a versão curta; a API recusa com 400 um
-   envio sem a resposta). "Ainda não sei" deixa o lead **sem funil**, e quem decide é a triagem do Jev
-   ([../leads/triagem-jev.md](../leads/triagem-jev.md)), só com a triagem ligada; com ela desligada, o lead fica em
-   Formatação. As outras opções seguem o funil da regra. A frase do aceite ao lado da caixa é a `consentText` da regra,
+   envio sem a resposta). Toda resposta segue o funil da regra, Formatação: "Ainda não sei" também (Eric, 26/10; até
+   então deixava o lead sem funil para a triagem do Jev, [../leads/triagem-jev.md](../leads/triagem-jev.md), e o lead
+   775262e5 ficou três dias parado nela). A regra que o staging e a produção já têm, com `pipeline: null` nessa opção,
+   não precisa mudar: a API lê `null` como "o funil da página". A frase do aceite ao lado da caixa é a `consentText` da regra,
    palavra por palavra, e é a que o lead guarda (um teste da API confere a página contra o seed). O construtor de
    campanhas não lista nem altera esta página (409 `landing_page_spec`). O resto (dono pelo rodízio, avisos, Turnstile
    conferido no servidor, limite por IP) é o formulário do site de sempre
@@ -77,7 +78,7 @@ A página `/lp/fale-com-a-wings` do Wings System lê a mesma lista e deixa de pe
   Quem está no CRM só com e-mail (veio do RD sem telefone) e envia a página curta vira um segundo lead.
 - **Rodízio e funil:** iguais. O funil vem só da resposta (`answerPipelineOf`) e o rodízio só do funil
   (`nextInRotation`); nenhum dos dois lê e-mail, empresa ou Instagram. Vale a regra de hoje: nesta página, sem marca,
-  "Expandir minha rede" fica em Formatação, e "Ainda não sei" vai à triagem do Jev só com ela ligada.
+  "Expandir minha rede" e "Ainda não sei" ficam em Formatação (desde 26/10; antes "Ainda não sei" ia à triagem do Jev).
 - **RD Station:** o lead chega ao CRM pelo POST da API, com ou sem e-mail. O script do RD que o GTM carrega manda o
   formulário a `form_integrations`, que identifica o contato pelo e-mail: sem e-mail, o RD não cria a conversão (nem
   ecoa o lead pelo webhook); com o e-mail preenchido no bloco opcional, tudo como hoje. A cópia da API ao RD já
@@ -105,16 +106,20 @@ Turnstile é refeito (o token é de uso único).
 **Origem do lead.** As 19 chaves de endereço de `SITE_FORM_TRACKING_KEYS` (UTMs, `gclid`, `fbclid`, `gbraid`,
 `wbraid`, ids de campanha, conjunto e anúncio) mais o `referrer`. A primeira visita com alguma chave fica guardada no
 navegador (`localStorage`, `wings_ft`) e nunca é sobrescrita; o envio manda a primeira visita com as chaves da visita
-atual por cima. `utm_id`, `msclkid` e `ttclid` não vão (a API recusa chaves desconhecidas). Cada valor tem até 500
+atual por cima. `utm_id`, `msclkid` e `ttclid` não vão no envio (a API recusa chaves desconhecidas); `utm_id` é lido e
+guardado só para os eventos do servidor. Cada valor tem até 500
 caracteres. A lista é copiada em `src/lib/tracking.ts` para a página não levar o pacote compartilhado inteiro; um teste
 confere que é igual à do `@wings/shared`.
 
 **WhatsApp.** Os botões "Falar no WhatsApp" e "Chamar no WhatsApp" viram links de verdade (`target=_blank`,
 `rel=noopener`) assim que o GET responde com o link rastreado "Site" da Wings Company. A página não tem número nenhum:
-sem link, o clique leva ao formulário e põe o cursor no nome, e o botão do obrigado não aparece. O link do GET leva só o
-código do link (ainda não há lead); o do POST leva também a referência do lead, no formato `<código> <ref>` (6
-caracteres cada, gerada e guardada pela API em `leads.form_ref`), para a Sofia saber de qual formulário a conversa
-veio. A página nunca gera uma referência: usa o link que a API devolve. O e2e confere os dois formatos e, contra a API
+sem link, o clique leva ao formulário e põe o cursor no nome, e o botão do obrigado não aparece. O texto pronto é uma
+frase com o código entre parênteses no fim (`siteLinkText`, `packages/shared`): "Olá! Vim pelo site da Wings e quero
+saber como formatar a minha franquia. (J9K8WF)". Até 22/10 era só o código, e ninguém mandava. O link do GET leva só o
+código do link (ainda não há lead); o do POST leva também a referência do lead dentro dos parênteses, `(<código> <ref>)`
+(6 caracteres cada, gerada e guardada pela API em `leads.form_ref`), para a Sofia saber de qual formulário a conversa
+veio. O CRM acha o código na primeira palavra (formato antigo e das marcas) ou, senão, nos últimos parênteses da
+mensagem. A página nunca gera uma referência: usa o link que a API devolve. O e2e confere os dois formatos e, contra a API
 de teste, que a referência do link é a que o lead guardou.
 
 ## Endereços (hosts e slugs)
@@ -207,8 +212,8 @@ API (`api-staging` e `api-prod`, com `wings-env`):
    Wings com o código do link.
 5. No CRM Vendas → Negociações: a negociação nova da Wings Company no funil Formatação, origem formulário do site, com
    Instagram, empresa, site, a resposta "O que você procura?" e as UTMs do passo 1; o dono recebe o aviso de lead novo.
-6. Repetir com "Ainda não sei": a negociação nasce sem funil e a triagem do Jev decide (com a triagem ligada no
-   staging; desligada, a negociação nasce em Formatação).
+6. Repetir com "Ainda não sei": a negociação nasce em Formatação também, pelo rodízio, com ou sem a triagem do Jev
+   ligada (Eric, 26/10).
 7. Abrir `https://lpfranquias-staging.wingssystem.online/`: vai para `wingscompany.com.br`; `/fale-com-a-wings` mostra a
    página; `/qualquer-coisa` dá 404.
 
@@ -219,8 +224,9 @@ API (`api-staging` e `api-prod`, com `wings-env`):
 | `whatsapp_click` | clique num botão de WhatsApp que abre o link | `origem`: a primeira visita guardada (com `ts`) ou as chaves da visita atual |
 | `lead_submit`    | depois que a API respondeu 200               | `interesse` (o código da opção) e o mesmo `origem`                           |
 
-O GTM entra com o trecho padrão, `dataLayer` criado antes, e só quando `LANDING_GTM_ID` tem um id válido. O trecho
-`<noscript>` do GTM não entra (o id é decidido em tempo de execução).
+O GTM entra com o trecho padrão, `dataLayer` criado antes, e só quando `LANDING_GTM_ID` tem um id válido; na página,
+só na primeira interação ou 4 s depois do `load` (veja "Desempenho e primeiro quadro"), e os eventos acima esperam por
+ele (no máximo 1,5 s). O trecho `<noscript>` do GTM não entra (o id é decidido em tempo de execução).
 
 ## Eventos para o servidor (contagem sem dado pessoal)
 
@@ -243,10 +249,13 @@ conta nada.
 | `whatsapp_click` | clique num botão de WhatsApp que abre o link    | `header`, `final`, `thanks`                        |
 
 Cada linha leva `slug`, `event`, `step`, `visit` (id aleatório da aba, só em `sessionStorage`, sem cookie), `utm_source`,
-`utm_medium`, `utm_campaign` e `utm_content` (da primeira visita guardada, senão da atual) e `device`/`os`/`app` lidos do
+`utm_medium`, `utm_campaign`, `utm_content`, `utm_term` e `utm_id` (da primeira visita guardada, senão da atual; texto
+até 100 caracteres, ids de anúncio inteiros) e `device`/`os`/`app` lidos do
 User-Agent **no servidor** (`phone`/`tablet`/`desktop`, `android`/`ios`/`other`, `instagram`/`facebook`/`browser`).
-Nunca nome, e-mail, telefone, IP nem o User-Agent inteiro; uma UTM que pareça e-mail (`@`) ou telefone (8 dígitos
-seguidos) entra como `null`. A lista fechada de eventos e passos é `siteEventSchema` (`packages/shared`);
+Nunca nome, e-mail, telefone, IP nem o User-Agent inteiro; uma UTM que pareça e-mail (`@`) ou telefone (escrito com
+`+`, parênteses, traço ou espaço, ou celular brasileiro só com dígitos) entra como `null`. Os ids da Meta (15 a 19
+dígitos) e do Google (cerca de 11) ficam; um id do Google com cara de celular (11 dígitos, o terceiro 9) também vira
+`null`. A API precisa estar publicada antes da página: a rota recusa chaves que ainda não conhece. A lista fechada de eventos e passos é `siteEventSchema` (`packages/shared`);
 `events.test.ts` da landing confere que a cópia da página é igual.
 
 As contagens são **indicadores declarados pelo navegador** (a rota é pública, sem captcha): servem para ver onde o
@@ -301,10 +310,38 @@ iframe, o fundo é preto). Sem 3D e sem herói. O lead entra no mesmo registro d
 
 - O script da página bloqueia a renderização (`blocking="render"`), então o primeiro quadro já é o final: palavras
   separadas, linha do formulário preenchida. As fontes Limelight e Nunito vêm dentro do CSS (data URI) e são
-  registradas pelo script antes do primeiro quadro, sem troca de fonte depois. O Font Awesome (só os ícones das redes)
-  é um arquivo à parte com `preload`; se não carregar, aparece o nome da rede (`.no-fa`).
-- O three.js chega depois do primeiro quadro (`import()` dinâmico, ~160 kB comprimido); sem WebGL, a página mostra a
-  logo parada (`.no-gl`). `window.__wings3d()` informa partículas, pixel ratio, chamadas de desenho e memória.
+  registradas pelo script antes do primeiro quadro, sem troca de fonte depois. Os ícones das redes são o Font Awesome
+  reduzido aos 5 ícones usados (`src/assets/fa-brands-subset.woff2`, 1,2 kB, embutido no CSS como as outras fontes; o
+  original tem 118 kB); se não carregar, aparece o nome da rede (`.no-fa`).
+- O que o primeiro quadro não precisa começa **depois dele**, em `afterFirstPaint` (`src/lib/after-paint.ts`: espera a
+  primeira pintura de conteúdo e um momento livre do navegador, com limite de 2 s; sem sinal de pintura roda em 4 s):
+  o three.js (`import()` dinâmico, ~160 kB comprimido) e a verificação antirrobô (Turnstile). A verificação também
+  começa na hora se o visitante tocar no formulário antes disso; até ela terminar o botão fica desligado, como
+  sempre. O `GET` do formulário (link do WhatsApp) e o `page_view` continuam saindo na carga. Sem WebGL, a página
+  mostra a logo parada (`.no-gl`). `window.__wings3d()` informa partículas, pixel ratio, chamadas de desenho e memória.
+- Movimento reduzido (`prefers-reduced-motion`): as palavras aparecem de uma vez, o CSS desliga animações e
+  transições, e a cena é a pequena e parada (3200 pontos, um quadro só). O e2e confere (`reduced-motion-390`).
+- Medida (26/10/2026, Lighthouse 12 em modo celular simulado, 4× mais lento e 4G lenta, Chromium sem GPU, mediana de 5
+  rodadas, GTM e Turnstile **falsos**; o PageSpeed da produção marcou LCP 11,4 s e nota 40): LCP 2,93 s → 1,66 s, FCP
+  1,75 s → 1,36 s, nota 87 → 95, 357 kB → 243 kB. O LCP é o título (texto), a página não tem imagem principal. Com um
+  GTM de mentira de tamanho parecido com o real (130 kB, 60 ms de execução, mais dois scripts de tag): 3,10 s → 2,07 s
+  com a cena e o antirrobô adiados e **1,66 s** (nota 96) com o GTM também adiado (abaixo).
+- **GTM adiado (decisão do Eric, 26/10).** `deferGtm` (`src/lib/gtm.ts`) carrega o GTM no que vier primeiro: a primeira
+  interação (`pointerdown`, `touchstart`, `scroll`, `keydown`, ou o foco em qualquer campo do formulário) ou **4 s
+  depois do `load`**, uma vez só. Até lá o `window.dataLayer` já existe e funciona como fila; ao carregar, o GTM
+  processa a fila na ordem (`gtm.js` é empurrado na hora do carregamento, antes dos eventos que vêm depois do toque). O
+  `page_view` não é do GTM: é o evento para o servidor (`sendBeacon`), continua na carga. As UTMs são lidas do endereço
+  e guardadas no `localStorage` na carga (não dependem do GTM) e vão em cada evento em `origem`. **Garantia de
+  conversão:** `lead_submit` e `whatsapp_click` passam por `pushWhenLoaded`: com o GTM carregado vão direto; senão o
+  GTM é carregado na hora e o evento espera por ele no máximo 1,5 s (depois vai para a fila do mesmo jeito). O envio do
+  lead à API nunca espera o GTM. O formulário embutido no site (`/embed/formulario`) **não mudou**: continua com
+  `installGtm` na carga.
+  **Efeito esperado:** quem sai em menos de 4 s sem tocar na tela deixa de ser contado como visita no GA e no Pixel
+  (o GTM nem chegou a carregar); os leads continuam contados (o envio carrega o GTM). O número de visitas nesses dois
+  vai cair um pouco, o de servidor (`page_view`) não.
+- Para medir de novo: `pnpm --filter @wings/landing build`, servir o `dist/` com compressão gzip como o nginx e rodar
+  o Lighthouse (`lighthouse <url> --preset=perf --form-factor=mobile`); a primeira rodada num Chrome novo é mais lenta
+  que as seguintes, descartar. Não medir com `blocking="render"` desligado: o LCP não melhora e o CLS vai a 0,15.
 - Resolução da cena (pixel ratio, sempre limitado ao da tela): computador até 2; celular com toque até 2
   (`PHONE_MAX_PR` em `scene.ts`; era 1,5); celular "fraco" (4 núcleos ou menos, ou 3 GB ou menos) 1. Com movimento
   reduzido nada mudou: celular com toque continua em 1,5.
@@ -341,8 +378,11 @@ caminho), sem rede.
   tempo de execução, pontos da asa), com o bloqueio de rede do repositório.
 - `pnpm --filter @wings/landing build && pnpm --filter @wings/landing test:e2e`: abre o `dist/` no Chromium headless
   (1440×900 e 390×844) com um servidor que imita o nginx, GTM e Turnstile falsos, API simulada pelo contrato, e
-  aborta qualquer pedido para fora da máquina. Confere console limpo, sem rolagem lateral, primeiro quadro sem pulo
-  (CLS < 0,02) e sem nada que some depois, um h1 e seis seções, botão desligado no começo, envio e obrigado com o link
+  aborta qualquer pedido para fora da máquina. Roda também com movimento reduzido (390×844) e confere quando o GTM
+  carrega (nunca antes do primeiro toque nem de 4 s depois do `load`; em cada tipo de primeiro toque; presente quando
+  `lead_submit` chega ao dataLayer; um GTM lento não segura o lead e o evento espera 1,5 s). Confere console limpo,
+  sem rolagem lateral, primeiro quadro sem pulo (CLS < 0,02) e sem nada que some depois, a cena 3D e o Turnstile só
+  depois da primeira pintura, um h1 e seis seções, botão desligado no começo, envio e obrigado com o link
   da API, e as respostas de erro. `API_BASE=http://127.0.0.1:3000` usa uma API local de verdade (com `E2E_PORT` fixo
   em `LANDING_ORIGINS`). Não faz parte do `pnpm test`.
 - `DATABASE_URL=<banco local de desenvolvimento> pnpm --filter @wings/landing test:e2e:api` (depois do `build`): a
@@ -360,14 +400,15 @@ caminho), sem rede.
 ## Licenças
 
 - Ícones das redes: Font Awesome Free 6.5.2, ícones sob CC BY 4.0 e a fonte sob SIL OFL 1.1; o aviso fica no CSS
-  publicado (`/*! … */`).
+  publicado (`/*! … */`). A fonte da página é uma versão reduzida a 5 ícones, então o nome interno virou "FA Brands
+  Subset" (a OFL reserva o nome "Font Awesome" para versões modificadas); o comando para refazê-la está no CSS.
 - Fontes: Limelight (Sorkin Type Co) e Nunito (The Nunito Project Authors), SIL OFL 1.1, via `@fontsource`; o aviso
   também fica no CSS publicado.
 
 ## Não verificado ao vivo
 
 - Turnstile com as chaves reais (só o falso do teste e as chaves de teste da Cloudflare).
-- As tags do GTM disparando com `whatsapp_click` e `lead_submit` no contêiner real.
+- As tags do GTM disparando com `whatsapp_click` e `lead_submit` no contêiner real, e quanto o GTM adiado muda a contagem de visitas no GA e no Pixel.
 - Os eventos para o servidor no navegador do Instagram (só Chromium headless no e2e) e o `jq` no servidor de staging.
 - A prévia do link (imagem OG) no WhatsApp e no Facebook.
 - O nginx no Coolify (só conferido num contêiner local, sem porta publicada): hosts, raiz, 302, 404, `/healthz`,

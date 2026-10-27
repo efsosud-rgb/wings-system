@@ -31,7 +31,14 @@ export const EVENT_STEPS = [
   'network',
   'rate_limited',
 ] as const;
-export const EVENT_UTM_KEYS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content'] as const;
+export const EVENT_UTM_KEYS = [
+  'utm_source',
+  'utm_medium',
+  'utm_campaign',
+  'utm_content',
+  'utm_term',
+  'utm_id',
+] as const;
 
 export type EventName = (typeof EVENT_NAMES)[number];
 export type EventStep = (typeof EVENT_STEPS)[number];
@@ -86,7 +93,7 @@ export function visitIdOf(
   return id;
 }
 
-/** The body one event sends: only the four UTMs of the origin, cut to the API's limit; never a click id or the referrer. */
+/** The body one event sends: only the UTMs of the origin, cut to the API's limit; never a click id or the referrer. */
 export function eventBodyOf(
   event: EventName,
   step: EventStep | undefined,

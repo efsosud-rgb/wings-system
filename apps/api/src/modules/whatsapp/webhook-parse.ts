@@ -35,6 +35,8 @@ export interface WaTemplateUpdate {
   name: string;
   language: string | null;
   status: string;
+  /** Meta's reason for a refusal; NONE otherwise. */
+  reason: string | null;
 }
 
 export interface WaChange {
@@ -293,6 +295,7 @@ export function whatsappChangesOf(body: unknown): WaChange[] {
             name,
             language: str(value.message_template_language),
             status: event,
+            reason: str(value.reason),
           });
       } else if (field === 'account_update') {
         const event = str(value.event);

@@ -31,6 +31,7 @@ import { DealWhatsAppPage } from './pages/crm/DealWhatsAppPage.js';
 import { WhatsAppInboxPage, WhatsAppWaitingPage } from './pages/crm/WhatsAppInboxPage.js';
 import { WhatsAppBulkImportPage } from './pages/crm/WhatsAppBulkImportPage.js';
 import { WhatsAppNumbersPage } from './pages/crm/WhatsAppNumbersPage.js';
+import { WhatsAppTemplatesPage } from './pages/crm/WhatsAppTemplatesPage.js';
 import { SofiaPage } from './pages/crm/SofiaPage.js';
 import { DealsPage } from './pages/crm/DealsPage.js';
 import { ProspectingPage } from './pages/crm/ProspectingPage.js';
@@ -94,6 +95,7 @@ const SCREENS: Record<string, RouteObject[]> = {
     { path: ':id', element: <WhatsAppWaitingPage /> },
     { path: 'numeros', element: <WhatsAppNumbersPage /> },
   ],
+  '/crm-vendas/whatsapp/modelos': [{ index: true, element: <WhatsAppTemplatesPage /> }],
   '/crm-vendas/sofia': [
     { index: true, element: <SofiaPage /> },
     { path: ':id', element: <SofiaPage /> },

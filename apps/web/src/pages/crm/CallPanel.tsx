@@ -10,10 +10,11 @@ import { useWhatsAppCallCenter, WhatsAppCallSection } from './WhatsAppCalls.js';
 
 /**
  * The call panel (Eric, 07/10/2026): "Ligar" opens this inside the system
- * instead of the browser's tel: link, whose "open the app?" prompt led
- * nowhere. Three things: call through WhatsApp (Calling API, `WhatsAppCalls.tsx`:
- * on once calling is on for the number and the person allows calls), copy the
- * number to dial from a phone, and register a call made outside the system (a
+ * instead of going straight to the browser's tel: link, whose "open the app?"
+ * prompt led nowhere on a desktop. Four things: call through WhatsApp (Calling API, `WhatsAppCalls.tsx`:
+ * on once calling is on for the number and the person allows calls), call from
+ * the seller's own phone (a tel: link, Eric 26/10), copy the number, and
+ * register a call made outside the system (a
  * WhatsApp call registers itself). Drawn in a portal and stopping its events, so that a click in it
  * never reaches a kanban card underneath (which opens the deal).
  */
@@ -121,13 +122,16 @@ export function CallPanel({
                 Abrir no WhatsApp do vendedor
               </a>
             )}
+            <a className="crm-btn" href={`tel:+${phone}`}>
+              Ligar pelo celular
+            </a>
             <CopyNumber phone={phone} />
           </div>
         )}
         {phone && (
           <p className="crm-sub">
-            Para ligar pelo seu WhatsApp ou do seu telefone, abra a conversa ou copie o número, e
-            registre a ligação aqui.
+            Para ligar pelo seu WhatsApp ou do seu celular, abra a conversa, toque em "Ligar pelo
+            celular" ou copie o número, e registre a ligação aqui.
           </p>
         )}
         {canWrite && <RegisterCall leadId={leadId} />}

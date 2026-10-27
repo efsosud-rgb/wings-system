@@ -12,6 +12,7 @@ import {
   crmContacts,
   leadContacts,
   leadEvents,
+  leadTasks,
   leadTrackingLinks,
   leads,
   sofiaAiRuns,
@@ -33,6 +34,12 @@ import { loadSofiaSettings } from '../sofia/settings.js';
 import { factsOf, routeInbound } from '../sofia/state.js';
 import { ART_MEDIA_GONE_CODES, invalidateArtMedia } from './art.js';
 import { notifyCallsChanged } from './call-signal.js';
+import { callingOn } from './calling.js';
+import { callPermissionPayload, type WhatsAppConfig } from './graph.js';
+import { officialNumberLive } from './official-number.js';
+import { deliverWhatsApp, type Contact } from './outbox.js';
+import { reasonOf } from './templates.js';
+import { brandOf, callPermissionText, permissionOf } from './thread.js';
 import { applyNumberChange, isSellerNumberChange } from './numbers.js';
 import {
   isOptOut,
@@ -72,6 +79,8 @@ export interface WhatsAppIntakeDeps {
   wabaId?: string | null;
   log: (facts: Record<string, unknown>) => void;
   now?: () => Date;
+  /** How Meta's call-permission request answers a "Prefiro uma ligação"; absent, the owner's task only. */
+  send?: { config: WhatsAppConfig; fetch: typeof fetch } | null;
 }
 
 export interface WhatsAppIntakeResult {
@@ -161,7 +170,7 @@ export async function applyWhatsAppPayload(deps: WhatsAppIntakeDeps, body: unkno
     if (deps.phoneNumberId && change.phoneNumberId && change.phoneNumberId !== deps.phoneNumberId)
       continue;
     for (const message of change.messages)
-      await applyInbound(deps.db, message, deps.now?.() ?? new Date());
+      await applyInbound(deps, message, deps.now?.() ?? new Date());
     for (const status of change.statuses) await applyStatus(deps.db, status);
     for (const template of change.templates) await applyTemplateReview(deps.db, template);
     for (const call of change.calls) await applyCallEvent(deps.db, call);
@@ -292,7 +301,8 @@ export async function conversationFor(
   return (await openConversation(db, contactId, leadId, first)).conversation;
 }
 
-async function applyInbound(db: Database, message: WaInboundMessage, now: Date) {
+async function applyInbound(deps: WhatsAppIntakeDeps, message: WaInboundMessage, now: Date) {
+  const { db } = deps;
   // A re-sent webhook: the message is already here, and nothing runs twice.
   const known = await db.query.waMessages.findFirst({
     where: eq(waMessages.wamid, message.wamid),
@@ -419,6 +429,7 @@ async function applyInbound(db: Database, message: WaInboundMessage, now: Date) 
   // needed. It goes on the triage's list inside the transaction that stores the message, so a
   // restart or an error before the triage runs cannot leave the conversation unnoticed.
   let triageQueued = false;
+  let storedNow = false;
   // The message and who answers it are one step: a failure in between is
   // retried whole (a stored message is never left without its routing).
   await db.transaction(async (tx) => {
@@ -439,6 +450,7 @@ async function applyInbound(db: Database, message: WaInboundMessage, now: Date) 
       .onConflictDoNothing()
       .returning({ id: waMessages.id });
     if (!stored) return;
+    storedNow = true;
     await tx
       .update(waConversations)
       .set({
@@ -498,6 +510,98 @@ async function applyInbound(db: Database, message: WaInboundMessage, now: Date) 
   });
   // Otherwise the conversation just waits for an attendant.
   if (triageQueued) scheduleLeadTriage({ conversationId: conversation.id });
+  if (storedNow && talks && message.text?.trim().toLowerCase() === CALL_REQUEST)
+    await answerCallRequest(deps, {
+      contact: contact!,
+      conversationId: conversation.id,
+      leadId,
+      at,
+    });
+}
+
+/** The quick reply of our welcome templates where the person asks for a call. */
+const CALL_REQUEST = 'prefiro uma ligação';
+export const CALL_REQUEST_TASK = 'Ligar: o lead pediu uma ligação pelo WhatsApp';
+const DAY_MS = 24 * 3_600_000;
+
+/**
+ * "Prefiro uma ligação" (Eric, 26/10): the deal's owner gets a task to call
+ * now, and, with the official number live and calling on, Meta's call-permission
+ * request goes at once (the tap just opened the 24 h window). Not again while
+ * the person allows calls or within a day of the last request (Meta allows 1 a
+ * day); sent once, never retried, nothing about the person logged.
+ */
+async function answerCallRequest(
+  deps: WhatsAppIntakeDeps,
+  target: { contact: Contact; conversationId: string; leadId: string | null; at: Date },
+) {
+  const { db } = deps;
+  const { contact, leadId, at } = target;
+  const [lead] = leadId
+    ? await db.select({ owner: leads.ownerEmployeeId }).from(leads).where(eq(leads.id, leadId))
+    : [];
+  if (leadId && lead?.owner) {
+    const open = await db.query.leadTasks.findFirst({
+      where: and(
+        eq(leadTasks.leadId, leadId),
+        eq(leadTasks.title, CALL_REQUEST_TASK),
+        isNull(leadTasks.doneAt),
+      ),
+      columns: { id: true },
+    });
+    if (!open) {
+      const [task] = await db
+        .insert(leadTasks)
+        .values({
+          leadId,
+          kind: 'call',
+          title: CALL_REQUEST_TASK,
+          dueAt: at,
+          assigneeEmployeeId: lead.owner,
+          auto: true,
+        })
+        .returning({ id: leadTasks.id });
+      await db.insert(leadEvents).values({
+        leadId,
+        kind: 'lead.task_created',
+        detail: { taskId: task!.id, kind: 'call', auto: true, dueAt: at.toISOString() },
+      });
+    }
+  }
+  const send = deps.send;
+  const state = permissionOf(contact, at).status;
+  const askedToday =
+    contact.callPermissionRequestedAt !== null &&
+    at.getTime() - contact.callPermissionRequestedAt.getTime() < DAY_MS;
+  // No open deal: nobody to call and no known brand voice, so nothing goes.
+  if (
+    !send ||
+    !leadId ||
+    state === 'temporary' ||
+    state === 'permanent' ||
+    askedToday ||
+    !(await officialNumberLive(db)) ||
+    !(await callingOn(send.fetch, send.config))
+  )
+    return;
+  const shown = callPermissionText(await brandOf(db, leadId, target.conversationId));
+  const delivered = await deliverWhatsApp(db, send.fetch, send.config, {
+    contact,
+    conversationId: target.conversationId,
+    leadId,
+    author: 'system',
+    employeeId: null,
+    kind: 'interactive',
+    shown,
+    content: { callPermissionRequest: true },
+    payload: callPermissionPayload(shown),
+    at,
+  });
+  if (delivered.outcome === 'sent')
+    await db
+      .update(waContacts)
+      .set({ callPermission: 'requested', callPermissionRequestedAt: at })
+      .where(eq(waContacts.id, contact.id));
 }
 
 /** How long a seller's message from a closed deal keeps the person's answers with that seller. */
@@ -577,7 +681,7 @@ async function applyStatus(db: Database, update: WaStatusUpdate) {
 async function applyTemplateReview(db: Database, update: WaTemplateUpdate) {
   await db
     .update(waTemplates)
-    .set({ status: update.status, syncedAt: new Date() })
+    .set({ status: update.status, rejectedReason: reasonOf(update.reason), syncedAt: new Date() })
     .where(
       and(
         eq(waTemplates.name, update.name),
