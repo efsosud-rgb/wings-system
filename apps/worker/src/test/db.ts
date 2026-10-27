@@ -48,6 +48,15 @@ export async function createTestDatabase(): Promise<TestDatabase> {
   testUrl.pathname = `/${name}`;
 
   const pool = new pg.Pool({ connectionString: testUrl.toString() });
+  // pool.end() resolves before its sockets finish closing; a forced drop would then kill them
+  // mid-close, and the late 57P01 is thrown as an unhandled error into whatever test is running.
+  let open = 0;
+  let allClosed = () => {};
+  pool.on('connect', () => (open += 1));
+  pool.on('remove', () => {
+    open -= 1;
+    if (!open) allClosed();
+  });
   await migrate(drizzle(pool), {
     migrationsFolder: resolve(import.meta.dirname, '../../../api/migrations'),
   });
@@ -55,7 +64,9 @@ export async function createTestDatabase(): Promise<TestDatabase> {
   return {
     pool,
     drop: async () => {
+      const closed = new Promise<void>((resolve) => (allClosed = resolve));
       await pool.end();
+      if (open) await closed;
       const cleanup = new pg.Client({ connectionString: admin });
       await cleanup.connect();
       await cleanup.query(`drop database if exists "${name}" with (force)`);
