@@ -54,7 +54,11 @@ const refuse = (reply: FastifyReply, error: ImportError) =>
 export const whatsappImportRoutes: FastifyPluginAsync = async (app) => {
   const { db } = app.wings;
   const use = { preHandler: app.requirePermission('leads.whatsapp') };
-  const upload = { ...use, bodyLimit: BODY_LIMIT };
+  // Importing or undoing a history changes the deal: Diretoria reads it, never writes it (audit A4).
+  const write = {
+    preHandler: [app.requirePermission('leads.whatsapp'), app.requirePermission('leads.write')],
+  };
+  const upload = { ...write, bodyLimit: BODY_LIMIT };
   type Req = Parameters<typeof app.can>[0];
 
   const notFound = (reply: FastifyReply) =>
@@ -130,7 +134,7 @@ export const whatsappImportRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({ imports: await listImports(db, lead.id) });
   });
 
-  app.delete('/leads/:id/whatsapp/imports/:batchId', use, async (request, reply) => {
+  app.delete('/leads/:id/whatsapp/imports/:batchId', write, async (request, reply) => {
     const params = batchParams.safeParse(request.params);
     if (!params.success) return notFound(reply);
     const lead = await visibleLead(request, params.data.id);
