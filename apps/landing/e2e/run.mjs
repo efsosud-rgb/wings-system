@@ -86,17 +86,23 @@ const CONSENT_TEXT =
   'Li a Política de Privacidade e autorizo a Wings a falar comigo por WhatsApp e e-mail sobre este pedido.';
 
 /** The GET's link has the tracking code alone; the POST's adds the lead's form ref (`<code> <ref>`). */
-const GET_WHATSAPP = 'https://wa.me/550000000000?text=E2EGET';
-const POST_WHATSAPP = 'https://wa.me/550000000000?text=E2EGET%20REF234';
+// The API's shape for Wings' own page (siteLinkText): a sentence, the code (and the ref) in brackets at the end.
+const SITE_SENTENCE = 'Olá! Vim pelo site da Wings e quero saber como formatar a minha franquia.';
+const waOf = (codes) =>
+  `https://wa.me/550000000000?text=${encodeURIComponent(`${SITE_SENTENCE} (${codes})`)}`;
+const GET_WHATSAPP = waOf('E2EGET');
+const POST_WHATSAPP = waOf('E2EGET REF234');
 /** A tracking code and a form ref share the alphabet (no I, O, 0, 1) and the length. */
 const CODE_RE = /^[A-HJ-NP-Z2-9]{6}$/;
 
-/** The wa.me link's number path and its text's words, or null when it is not one. */
+/** The wa.me link's number path and its codes (in the closing brackets, else the whole text), or null when it is not one. */
 function waParts(href) {
   try {
     const url = new URL(href);
     if (url.protocol !== 'https:' || url.hostname !== 'wa.me') return null;
-    return { path: url.pathname, words: (url.searchParams.get('text') ?? '').split(' ') };
+    const text = url.searchParams.get('text') ?? '';
+    const bracketed = /\(([^()]*)\)$/.exec(text)?.[1];
+    return { path: url.pathname, words: (bracketed ?? text).split(' ') };
   } catch {
     return null;
   }
@@ -739,7 +745,7 @@ async function runViewport(
   // before the form there is no lead yet: the text is the code alone, no ref
   const getParts = waParts(wa[0]?.[0] ?? '');
   check(
-    `${label}: the GET's link text is the tracking code only`,
+    `${label}: the GET's link carries the tracking code only`,
     getParts !== null && getParts.words.length === 1 && CODE_RE.test(getParts.words[0]),
     JSON.stringify(getParts?.words),
   );
@@ -851,9 +857,10 @@ async function runViewport(
       ref: postRef ?? null,
     });
     check(
-      `${label}: thank-you button opens the POST's link (the GET's plus the ref)`,
+      `${label}: thank-you button opens the POST's link (the GET's with the ref in the brackets)`,
       EXPECT_WHATSAPP
-        ? done.href === `${EXPECT_WHATSAPP}%20${postRef}` && !done.buttonHidden
+        ? // the ref goes inside the closing bracket: "(<code>)" becomes "(<code> <ref>)"
+          done.href === `${EXPECT_WHATSAPP.replace(/\)$/, '')}%20${postRef})` && !done.buttonHidden
         : done.buttonHidden || /^https:\/\/wa\.me\//.test(done.href ?? ''),
       done.href ?? 'hidden',
     );
@@ -993,8 +1000,8 @@ async function checkServerEvents(page, { label, events, errorSteps: expectedStep
         (e) =>
           e.event.utm_source === 'e2e' &&
           e.event.utm_campaign === 'lancamento' &&
-          !('gclid' in e.event) &&
-          !('utm_id' in e.event),
+          e.event.utm_id === '9' &&
+          !('gclid' in e.event),
       ) &&
       !text.includes(person.name) &&
       !text.includes(person.phone) &&

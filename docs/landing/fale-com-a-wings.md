@@ -34,9 +34,10 @@ Turnstile de verdade; o envio vai para a API; o `robots` passou a vir do ambient
    `companyName`, `instagram` (usuário) e `siteUrl` (com `https://`) vão só quando preenchidos.
 4. A regra `fale-com-a-wings` vem do seed da API: cliente Wings Company, funil Formatação, formulário do site ligado,
    com as perguntas e os códigos acima e `requiredFields: ['qualifierAnswer']` (a versão curta; a API recusa com 400 um
-   envio sem a resposta). "Ainda não sei" deixa o lead **sem funil**, e quem decide é a triagem do Jev
-   ([../leads/triagem-jev.md](../leads/triagem-jev.md)), só com a triagem ligada; com ela desligada, o lead fica em
-   Formatação. As outras opções seguem o funil da regra. A frase do aceite ao lado da caixa é a `consentText` da regra,
+   envio sem a resposta). Toda resposta segue o funil da regra, Formatação: "Ainda não sei" também (Eric, 26/10; até
+   então deixava o lead sem funil para a triagem do Jev, [../leads/triagem-jev.md](../leads/triagem-jev.md), e o lead
+   775262e5 ficou três dias parado nela). A regra que o staging e a produção já têm, com `pipeline: null` nessa opção,
+   não precisa mudar: a API lê `null` como "o funil da página". A frase do aceite ao lado da caixa é a `consentText` da regra,
    palavra por palavra, e é a que o lead guarda (um teste da API confere a página contra o seed). O construtor de
    campanhas não lista nem altera esta página (409 `landing_page_spec`). O resto (dono pelo rodízio, avisos, Turnstile
    conferido no servidor, limite por IP) é o formulário do site de sempre
@@ -77,7 +78,7 @@ A página `/lp/fale-com-a-wings` do Wings System lê a mesma lista e deixa de pe
   Quem está no CRM só com e-mail (veio do RD sem telefone) e envia a página curta vira um segundo lead.
 - **Rodízio e funil:** iguais. O funil vem só da resposta (`answerPipelineOf`) e o rodízio só do funil
   (`nextInRotation`); nenhum dos dois lê e-mail, empresa ou Instagram. Vale a regra de hoje: nesta página, sem marca,
-  "Expandir minha rede" fica em Formatação, e "Ainda não sei" vai à triagem do Jev só com ela ligada.
+  "Expandir minha rede" e "Ainda não sei" ficam em Formatação (desde 26/10; antes "Ainda não sei" ia à triagem do Jev).
 - **RD Station:** o lead chega ao CRM pelo POST da API, com ou sem e-mail. O script do RD que o GTM carrega manda o
   formulário a `form_integrations`, que identifica o contato pelo e-mail: sem e-mail, o RD não cria a conversão (nem
   ecoa o lead pelo webhook); com o e-mail preenchido no bloco opcional, tudo como hoje. A cópia da API ao RD já
@@ -105,16 +106,20 @@ Turnstile é refeito (o token é de uso único).
 **Origem do lead.** As 19 chaves de endereço de `SITE_FORM_TRACKING_KEYS` (UTMs, `gclid`, `fbclid`, `gbraid`,
 `wbraid`, ids de campanha, conjunto e anúncio) mais o `referrer`. A primeira visita com alguma chave fica guardada no
 navegador (`localStorage`, `wings_ft`) e nunca é sobrescrita; o envio manda a primeira visita com as chaves da visita
-atual por cima. `utm_id`, `msclkid` e `ttclid` não vão (a API recusa chaves desconhecidas). Cada valor tem até 500
+atual por cima. `utm_id`, `msclkid` e `ttclid` não vão no envio (a API recusa chaves desconhecidas); `utm_id` é lido e
+guardado só para os eventos do servidor. Cada valor tem até 500
 caracteres. A lista é copiada em `src/lib/tracking.ts` para a página não levar o pacote compartilhado inteiro; um teste
 confere que é igual à do `@wings/shared`.
 
 **WhatsApp.** Os botões "Falar no WhatsApp" e "Chamar no WhatsApp" viram links de verdade (`target=_blank`,
 `rel=noopener`) assim que o GET responde com o link rastreado "Site" da Wings Company. A página não tem número nenhum:
-sem link, o clique leva ao formulário e põe o cursor no nome, e o botão do obrigado não aparece. O link do GET leva só o
-código do link (ainda não há lead); o do POST leva também a referência do lead, no formato `<código> <ref>` (6
-caracteres cada, gerada e guardada pela API em `leads.form_ref`), para a Sofia saber de qual formulário a conversa
-veio. A página nunca gera uma referência: usa o link que a API devolve. O e2e confere os dois formatos e, contra a API
+sem link, o clique leva ao formulário e põe o cursor no nome, e o botão do obrigado não aparece. O texto pronto é uma
+frase com o código entre parênteses no fim (`siteLinkText`, `packages/shared`): "Olá! Vim pelo site da Wings e quero
+saber como formatar a minha franquia. (J9K8WF)". Até 22/10 era só o código, e ninguém mandava. O link do GET leva só o
+código do link (ainda não há lead); o do POST leva também a referência do lead dentro dos parênteses, `(<código> <ref>)`
+(6 caracteres cada, gerada e guardada pela API em `leads.form_ref`), para a Sofia saber de qual formulário a conversa
+veio. O CRM acha o código na primeira palavra (formato antigo e das marcas) ou, senão, nos últimos parênteses da
+mensagem. A página nunca gera uma referência: usa o link que a API devolve. O e2e confere os dois formatos e, contra a API
 de teste, que a referência do link é a que o lead guardou.
 
 ## Endereços (hosts e slugs)
@@ -207,8 +212,8 @@ API (`api-staging` e `api-prod`, com `wings-env`):
    Wings com o código do link.
 5. No CRM Vendas → Negociações: a negociação nova da Wings Company no funil Formatação, origem formulário do site, com
    Instagram, empresa, site, a resposta "O que você procura?" e as UTMs do passo 1; o dono recebe o aviso de lead novo.
-6. Repetir com "Ainda não sei": a negociação nasce sem funil e a triagem do Jev decide (com a triagem ligada no
-   staging; desligada, a negociação nasce em Formatação).
+6. Repetir com "Ainda não sei": a negociação nasce em Formatação também, pelo rodízio, com ou sem a triagem do Jev
+   ligada (Eric, 26/10).
 7. Abrir `https://lpfranquias-staging.wingssystem.online/`: vai para `wingscompany.com.br`; `/fale-com-a-wings` mostra a
    página; `/qualquer-coisa` dá 404.
 
@@ -243,10 +248,13 @@ conta nada.
 | `whatsapp_click` | clique num botão de WhatsApp que abre o link    | `header`, `final`, `thanks`                        |
 
 Cada linha leva `slug`, `event`, `step`, `visit` (id aleatório da aba, só em `sessionStorage`, sem cookie), `utm_source`,
-`utm_medium`, `utm_campaign` e `utm_content` (da primeira visita guardada, senão da atual) e `device`/`os`/`app` lidos do
+`utm_medium`, `utm_campaign`, `utm_content`, `utm_term` e `utm_id` (da primeira visita guardada, senão da atual; texto
+até 100 caracteres, ids de anúncio inteiros) e `device`/`os`/`app` lidos do
 User-Agent **no servidor** (`phone`/`tablet`/`desktop`, `android`/`ios`/`other`, `instagram`/`facebook`/`browser`).
-Nunca nome, e-mail, telefone, IP nem o User-Agent inteiro; uma UTM que pareça e-mail (`@`) ou telefone (8 dígitos
-seguidos) entra como `null`. A lista fechada de eventos e passos é `siteEventSchema` (`packages/shared`);
+Nunca nome, e-mail, telefone, IP nem o User-Agent inteiro; uma UTM que pareça e-mail (`@`) ou telefone (escrito com
+`+`, parênteses, traço ou espaço, ou celular brasileiro só com dígitos) entra como `null`. Os ids da Meta (15 a 19
+dígitos) e do Google (cerca de 11) ficam; um id do Google com cara de celular (11 dígitos, o terceiro 9) também vira
+`null`. A API precisa estar publicada antes da página: a rota recusa chaves que ainda não conhece. A lista fechada de eventos e passos é `siteEventSchema` (`packages/shared`);
 `events.test.ts` da landing confere que a cópia da página é igual.
 
 As contagens são **indicadores declarados pelo navegador** (a rota é pública, sem captcha): servem para ver onde o
