@@ -55,10 +55,9 @@ permissão. O que o Eric faz na Meta e o roteiro da troca do número ficam em `/
   antes só tem a quantidade); a localização mostra nome, endereço e um link para o Google Maps. A API acha a
   mensagem citada ou reagida **só na mesma negociação** (ou na mesma conversa sem negociação), nunca em
   outra. O que não dá para mostrar aparece com "—" e o motivo, nunca some.
-- **Ordem de entrada da migração 0096:** depois da 0094 (pacote de 20/10) e da 0095 (PR #8, `wa_numbers`),
-  nesta ordem. O drizzle aplica pela data: a 0096 aplicada antes da 0095 faz a 0095 ser pulada para sempre, e
-  a fila do webhook passa a falhar na tabela `wa_numbers` que não existe. O snapshot da 0096 já contém
-  `wa_numbers`.
+- **Ordem de entrada da migração 0097:** depois da 0096 (PR #26, `wa_template_fields`), gerada de novo
+  sobre ela para que a data cresça. O drizzle aplica pela data: uma migração com data menor que a última
+  aplicada é pulada para sempre, sem erro (`journal.test.ts` confere a ordem).
 - **Números dos vendedores (próximo bloco):** a fila e a rota usam o token do número oficial. Antes de guardar
   mensagens dos números dos vendedores, a mensagem precisa dizer de qual número veio, e a cópia usar o token
   desse número (`wa_numbers`); senão a Meta recusa e o arquivo se perde nos 30 dias.
@@ -155,7 +154,7 @@ Migrações 0077, 0079 (`wa_calls`; permissão de ligação no contato) e 0081 (
 Meta, só ids e datas, legível pelo `wings_ro`; arte e artigo em `clients`): `wa_contacts` (telefone único, `wa_id`, nome do perfil, última mensagem recebida, opt-out),
 `wa_conversations` (uma por telefone e negociação; a sem negociação é única por telefone), `wa_messages`,
 `wa_webhook_events`, `wa_templates`; 0093 (`wa_import_batches`, as importações do celular; visão
-`wa_imports_analysis` para o `wings_ro`, ver `importar-conversa.md`); 0096 (`wa_message_files`, a fila e o
+`wa_imports_analysis` para o `wings_ro`, ver `importar-conversa.md`); 0097 (`wa_message_files`, a fila e o
 endereço no armazenamento de cada arquivo recebido; visão `wa_message_files_analysis` para o `wings_ro`, sem a
 chave do arquivo). Telefone e texto são dados pessoais: sem GRANT ao `wings_ro`, nada disso
 em log (o webhook registra só o formato do corpo, `shapeOf`). A auditoria `whatsapp.message_sent` guarda ids,
