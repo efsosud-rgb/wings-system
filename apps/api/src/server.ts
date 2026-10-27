@@ -119,11 +119,14 @@ async function main() {
   // WhatsApp (Cloud API) queue: runs whenever the webhook can receive. The
   // webhook stores each signed body; this reads them into the deals.
   if (env.WHATSAPP_APP_SECRET && env.WHATSAPP_WEBHOOK_VERIFY_TOKEN) {
+    const whatsappConfig = whatsappConfigOf(env);
+    const whatsappSend = whatsappConfig ? { config: whatsappConfig, fetch } : null;
     const intake = startWhatsAppIntake({
       db,
       phoneNumberId: env.WHATSAPP_PHONE_NUMBER_ID ?? null,
       wabaId: env.WHATSAPP_WABA_ID ?? null,
       log: (facts) => app.log.info(facts),
+      send: whatsappSend,
     });
     app.wings.whatsappKick = intake.kick;
     app.addHook('onClose', async () => intake.stop());

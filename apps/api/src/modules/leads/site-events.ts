@@ -44,10 +44,24 @@ export function deviceOf(userAgent: string | undefined): Device {
   };
 }
 
-/** A UTM that looks like an e-mail or a phone (a campaign link may carry one) is not logged. */
+/** A phone as people write it: digits with a "+", brackets, dashes or spaces between them. */
+const FORMATTED_PHONE = /^\+?[\d\s().-]+$/;
+/** A Brazilian mobile written bare: optional 55, two-digit area code, 9 and eight digits. */
+const BARE_MOBILE = /^(55)?[1-9]{2}9\d{8}$/;
+
+/**
+ * A UTM is kept as text, ad ids included (Meta's are 15 to 19 digits,
+ * Google's about 11). One that looks like an e-mail or a phone (a campaign
+ * link may carry one) is not logged.
+ * shortcut: a Google id shaped like a mobile (11 digits, the third a 9) is dropped too; tell them apart by the source if that matters.
+ */
 export function loggedUtm(value: string | undefined): string | null {
   if (!value) return null;
-  return value.includes('@') || /\d{8,}/.test(value) ? null : value;
+  if (value.includes('@')) return null;
+  const digits = value.replace(/\D/g, '');
+  const phoneLength = digits.length >= 10 && digits.length <= 13;
+  if (phoneLength && FORMATTED_PHONE.test(value) && /[+\s()-]/.test(value)) return null;
+  return BARE_MOBILE.test(value) ? null : value;
 }
 
 /** The log line one event becomes: the event as sent, the page's slug and the device; no IP, no User-Agent. */
@@ -63,6 +77,8 @@ export function siteEventLineOf(slug: string, event: SiteEvent, userAgent: strin
     utm_medium: loggedUtm(event.utm_medium),
     utm_campaign: loggedUtm(event.utm_campaign),
     utm_content: loggedUtm(event.utm_content),
+    utm_term: loggedUtm(event.utm_term),
+    utm_id: loggedUtm(event.utm_id),
     device: device.kind,
     os: device.os,
     app: device.app,

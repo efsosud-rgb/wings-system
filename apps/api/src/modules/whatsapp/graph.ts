@@ -387,8 +387,12 @@ export interface GraphTemplate {
   language?: string;
   status?: string;
   category?: string;
+  rejected_reason?: string;
   components?: unknown[];
 }
+
+/** At most 10 pages of 100: a list this long may be cut short. */
+export const TEMPLATE_LIST_MAX = 1000;
 
 /** GET /{waba-id}/message_templates, following Meta's pages (at most 10). */
 export async function listWhatsAppTemplates(
@@ -399,7 +403,7 @@ export async function listWhatsAppTemplates(
   let after: string | null = null;
   for (let page = 0; page < 10; page++) {
     const query = new URLSearchParams({
-      fields: 'id,name,language,status,category,components',
+      fields: 'id,name,language,status,category,rejected_reason,components',
       limit: '100',
     });
     if (after) query.set('after', after);
@@ -413,6 +417,33 @@ export async function listWhatsAppTemplates(
     if (!after) break;
   }
   return { ok: true, data: out };
+}
+
+/** POST /{waba-id}/message_templates: the template goes to Meta's review (PENDING). */
+export function createWhatsAppTemplate(
+  fetchImpl: Fetch,
+  config: WhatsAppConfig & { wabaId: string },
+  template: { name: string; language: string; category: string; components: unknown[] },
+) {
+  return graph<{ id?: string; status?: string; category?: string }>(
+    fetchImpl,
+    config.token,
+    'POST',
+    `/${config.wabaId}/message_templates`,
+    template,
+  );
+}
+
+/** POST /{template-id}: new words go back to Meta's review (at most once a day, 10 times in 30 days). */
+export function editWhatsAppTemplate(
+  fetchImpl: Fetch,
+  config: WhatsAppConfig,
+  metaId: string,
+  components: unknown[],
+) {
+  return graph<{ success?: boolean }>(fetchImpl, config.token, 'POST', `/${metaId}`, {
+    components,
+  });
 }
 
 // --- received files ---------------------------------------------------------------------
@@ -582,6 +613,9 @@ export async function requestSmbSync(
 const ERRORS: Record<number, string> = {
   131047: 'Fora das 24 horas: só um modelo aprovado pode ir agora.',
   131026: 'Não entregue: o número pode não ter WhatsApp ou não aceitar mensagens da empresa.',
+  // The staging still runs on Meta's test number, which only delivers to the numbers listed in the app.
+  131030:
+    'Não entregue: o sistema está no número de teste da Meta, que só manda para até 5 números cadastrados no app. Para falar com lead de verdade, falta ligar o número da Wings na API (veja docs/whatsapp/cloud-api.md).',
   131049:
     'A Meta segurou a mensagem para não cansar a pessoa com mensagens de empresa. Tente outro dia.',
   131050: 'A pessoa pediu para não receber mensagens de marketing.',

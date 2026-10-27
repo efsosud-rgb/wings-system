@@ -58,11 +58,12 @@ a página do site tem (o formulário da Meta não):
 - `qualifierValues`: um código para cada opção da pergunta de múltipla escolha. A página manda o
   código (o texto da opção também vale, como a página `/lp/<slug>` manda), e o lead guarda o texto
   da opção em "Respostas do formulário". O código pode mandar o lead a outro funil (`pipeline`);
-  `null` deixa o lead sem funil, e quem decide é a triagem do Jev ([triagem-jev.md](triagem-jev.md)),
-  **só com a triagem ligada**: com ela desligada, o lead fica no funil da página, porque ninguém
-  daria um funil a ele depois. Expansão só vale numa página ligada a uma marca; sem marca, o lead
-  fica no funil da página. No "Fale com a Wings", "Ainda não sei" fica sem funil (com a triagem
-  ligada) e as outras três opções seguem o funil da página. O `GET` mostra os códigos sem os funis.
+  sem funil no código (ausente ou `null`), o lead fica no funil da página (Eric, 26/10: a origem
+  decide, o rodízio atende; até então `null` deixava o lead para a triagem do Jev,
+  [triagem-jev.md](triagem-jev.md), que agora só lê páginas sem funil). Expansão só vale numa
+  página ligada a uma marca; sem marca, o lead fica no funil da página. No "Fale com a Wings", as
+  quatro opções, "Ainda não sei" incluída, seguem o funil da página. O `GET` mostra os códigos sem
+  os funis.
 - `consentText`: a frase de aceite que a própria página mostra ao lado da caixa (10 a 300
   caracteres). O lead guarda essa frase, a que a pessoa marcou (LGPD); sem ela, vale a frase do
   funil (`siteFormCopyOf`), a da página `/lp/<slug>`. O "Fale com a Wings" traz a frase da página
