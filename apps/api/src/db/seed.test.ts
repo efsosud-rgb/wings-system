@@ -55,7 +55,7 @@ describe('seed: "Fale com a Wings"', () => {
       ['formatacao', undefined],
       ['expansao', undefined],
       ['consultoria', undefined],
-      ['nao-sei', null],
+      ['nao-sei', undefined],
     ]);
   });
 

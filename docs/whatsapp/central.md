@@ -99,7 +99,7 @@ liberar o app (Tech Provider e App Review, ainda não pedidos).
   `numberId`), `whatsapp.conversation_linked`, `whatsapp.webhook_event_retried`.
 - `wa_numbers`, `wa_conversations`, `wa_messages` e `wa_webhook_events` continuam sem GRANT ao `wings_ro`.
 
-### Atendimento: quem responde cada conversa (fase 2, migração 0101)
+### Atendimento: quem responde cada conversa (fase 2, migração 0099)
 
 - **Quem está com a conversa:** a pessoa atribuída; sem atribuição, o dono da negociação (número oficial) ou o dono
   do número (número de trabalho); sem nenhum, ela espera na **fila** do departamento (`wa_conversations.queue`) ou
@@ -196,9 +196,8 @@ Por número:
 
 ## Ordem de merge e rollback
 
-- Ordem exigida: **#9 → #10 → #12 → #26 → esta**. A 0098 vem depois da 0097 do #26 (`when` crescente); o
-  `0097_snapshot.json` foi encadeado depois do `0096` (#9) para o drizzle-kit gerar de novo. O #25 também tem uma
-  0097: quem entrar por último renumera.
+- Ordem exigida: **#26 (0096, já na `develop`) → #9 (0097) → #10 → #12 → esta (0098)**, com `when` crescente
+  (`journal.test.ts`). Quem entrar depois renumera para o próximo número livre.
 - **Rollback do código:** reverter o merge. **Rollback do banco** (só se nenhum número tiver sido conectado; com
   conversas de número, apague antes as mensagens e conversas com `number_id`):
 
@@ -229,9 +228,9 @@ DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1793036092766;
 - Fase 2b: confiabilidade do recebimento e dos envios, itens quebrados da auditoria, modelos por número.
 - Fase 3: indicadores (o DW do #25), tela de configuração completa.
 
-## Migração 0101 (fase 2a) e rollback
+## Migração 0099 (fase 2a) e rollback
 
-`0101_wa_attendance` (número provisório: renumerar no rebase, um arquivo e uma linha do journal). Acrescenta em
+`0099_wa_attendance` (depois da 0098 da fase 1, `when` crescente). Acrescenta em
 `wa_conversations` `assignee_employee_id`, `queue`, `version`, `replying_employee_id`, `replying_until` e
 `sofia_paused`; a tabela `wa_conversation_events`; e `whatsapp_settings.assignment_mode` (padrão `manual`). Nada
 existente muda de valor. Sem GRANT ao `wings_ro`. Rollback do banco:
