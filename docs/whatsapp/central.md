@@ -155,9 +155,8 @@ Por número:
 
 ## Ordem de merge e rollback
 
-- Ordem exigida: **#9 → #10 → #12 → #26 → esta**. A 0098 vem depois da 0097 do #26 (`when` crescente); o
-  `0097_snapshot.json` foi encadeado depois do `0096` (#9) para o drizzle-kit gerar de novo. O #25 também tem uma
-  0097: quem entrar por último renumera.
+- Ordem exigida: **#26 (0096, já na `develop`) → #9 (0097) → #10 → #12 → esta (0098)**, com `when` crescente
+  (`journal.test.ts`). Quem entrar depois renumera para o próximo número livre.
 - **Rollback do código:** reverter o merge. **Rollback do banco** (só se nenhum número tiver sido conectado; com
   conversas de número, apague antes as mensagens e conversas com `number_id`):
 
