@@ -140,7 +140,7 @@ Banco efêmero `audit-pg` (postgres 17, 127.0.0.1:55432, tmpfs). Cada teste de i
 | Hotfix de produção                           | employees, auth, frame-guard, rbac, tela                                         | 103/103, 52/52, 28/28 (o lint da main já falha antes, em `scripts/gtm`)                                                                                                                                       |
 | Auditores                                    | testes `*.audit.test.ts` nas worktrees                                           | auth/CRM: 29 testes (14 vermelhos = achados); WhatsApp/Sofia: 14 (develop 9 ok, 5 achados); Marketing: 9 arquivos                                                                                             |
 
-CI do GitHub (build, typecheck, lint, migrations, seed 2×, testes): **#43, #44 e #45 passaram**; o #46 falhou em 1 de 2157 testes, exatamente o teste instável da fila do Meta, sem relação com o PR (job reexecutado; causa corrigida no #48); #47 e #48 ainda rodavam no fechamento deste relatório.
+CI do GitHub (build, typecheck, lint, migrations, seed 2×, testes): **os seis PRs passaram** (#43, #44, #45, #46, #47, #48). O #46 falhou na primeira execução em 1 de 2157 testes, exatamente o teste instável da fila do Meta, sem relação com o PR; passou ao reexecutar, e a causa está corrigida no #48.
 
 ## 9. Resultado dos testes ponta a ponta (os 10 fluxos pedidos)
 
