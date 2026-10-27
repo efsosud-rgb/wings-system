@@ -6,12 +6,12 @@
 2. Na develop/staging achei e **corrigi** duas escaladas de privilégio (P0): um gestor criava contas com poderes que ele não tem (por exemplo, o Jurídico, que vê CPF de sócios) e inativava ou reativava quem está acima dele.
 3. Também corrigi: rajada de senhas que burlava o bloqueio de conta, Diretoria gravando histórico de WhatsApp, vendedor criando etapa do funil pelo CSV, vendedor "roubando" a conversa da Sofia e o "esqueci a senha" que revelava contas quando o e-mail falha.
 4. As correções estão em **PRs de rascunho #43 (P0), #44, #45**, e a prospecção Google Places atualizada no **#46**. Nada foi mesclado nem publicado.
-5. **Validado** num ambiente isolado sem internet (banco criado do zero, dados fictícios): 41 fluxos ponta a ponta passam, e os 4 ataques de escalada são bloqueados com as correções.
+5. **Validado** num ambiente isolado sem internet (banco criado do zero, dados fictícios): as 41 verificações ponta a ponta passam (lead, escopo, convite, falha de integração, auditoria), e os 4 ataques de escalada são bloqueados com as correções.
 6. Confirmado: o painel de vendas bate com uma conta independente no banco, um vendedor não vê dado de outro e nenhum segredo vai para log ou auditoria.
 7. **Não corrigido, mas documentado (P1 de dinheiro):** a trava de teto de verba dos anúncios pode ser ultrapassada mesmo com aprovação manual, porque o reconcile de 15 em 15 minutos apaga as reservas. Também: campanha que gastou aparece como "Sem veiculação".
 8. A Central WhatsApp (PRs #9→#39) não está integrada nem conectada à Meta (sem Tech Provider). As 87 conversas da Sofia (#31) são avaliação de qualidade, não teste de integração.
 9. **Depende de você:** abrir o PR do hotfix de produção (a branch já está pronta e testada) e autorizar o deploy; revisar e mesclar os PRs #43–#46; decidir sobre as travas de verba e sobre o RH/DP poder inativar a Diretoria.
-10. Os checkouts compartilhados ficaram intactos (o estado antes/depois bate). Nenhuma mensagem foi enviada, nenhuma API real foi chamada e nenhum banco existente foi alterado.
+10. Os checkouts compartilhados ficaram intactos (o estado antes/depois bate). Nenhuma mensagem foi enviada, nenhuma API de terceiros (Meta, Google, IA, RD) foi chamada e nenhum banco existente foi alterado; o GitHub foi usado só para branches novas e PRs em rascunho.
 
 ---
 
