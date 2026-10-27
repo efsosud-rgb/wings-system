@@ -1,4 +1,5 @@
 import {
+  brazilianPhoneVariants,
   companyKey,
   isValidCnpj,
   normalizeBrazilianPhone,
@@ -11,7 +12,7 @@ import {
   type LeadContactRef,
   type LeadPipeline,
 } from '@wings/shared';
-import { and, asc, desc, eq, isNull, ne, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, ne, or, sql, type SQL } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   clients,
@@ -21,6 +22,8 @@ import {
   leadContacts,
   leadEvents,
   leads,
+  waContacts,
+  waConversations,
 } from '../../db/schema/index.js';
 import { createClientRecord } from '../clients/create.js';
 import type { Executor } from './crm.js';
@@ -618,6 +621,27 @@ export async function contactOnForeignDeal(
     .where(eq(leadContacts.contactId, known.id))
     .limit(1);
   return Boolean(tied);
+}
+
+/**
+ * A number Sofia or the team is attending with no deal yet (the "busy" of GET /whatsapp/targets).
+ * An owner-scoped caller may not open it as their own deal: the conversation, and what the person
+ * said in it, would move to that deal and skip the funnel's rotation (audit 2026-10-27, WA-03).
+ */
+export async function numberInAttendance(db: Executor, phone: string): Promise<boolean> {
+  const [busy] = await db
+    .select({ one: sql<number>`1` })
+    .from(waConversations)
+    .innerJoin(waContacts, eq(waContacts.id, waConversations.contactId))
+    .where(
+      and(
+        inArray(waContacts.phone, brazilianPhoneVariants(phone)),
+        isNull(waConversations.leadId),
+        sql`${waConversations.attendance} is distinct from 'closed'`,
+      ),
+    )
+    .limit(1);
+  return Boolean(busy);
 }
 
 /**

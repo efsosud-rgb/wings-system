@@ -27,7 +27,13 @@ import type { Database } from '../../db/client.js';
 import { crmStages, employees, leads } from '../../db/schema/index.js';
 import { addNote, changeLead, ensureStage, type Executor } from './crm.js';
 import { brandsOnSale } from './deal.js';
-import { ForeignLeadError, upsertLead, type LeadListFilter, listLeads } from './service.js';
+import {
+  ForeignLeadError,
+  NumberInAttendanceError,
+  upsertLead,
+  type LeadListFilter,
+  listLeads,
+} from './service.js';
 
 /**
  * The Funil's spreadsheet door (CRM núcleo). Import: the file is parsed, each
@@ -343,7 +349,10 @@ export async function runImport(db: Database, input: ImportInput): Promise<CsvIm
       report.skipped++;
       report.errors.push({
         line: row.line,
-        message: 'Já existe uma negociação com este telefone ou e-mail.',
+        message:
+          error instanceof NumberInAttendanceError
+            ? 'Esta pessoa já está em atendimento (Sofia ou equipe) e ainda não tem negociação.'
+            : 'Já existe uma negociação com este telefone ou e-mail.',
       });
       continue;
     }
