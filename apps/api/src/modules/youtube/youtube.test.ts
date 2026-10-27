@@ -395,6 +395,7 @@ describe('the screen', () => {
     expect((await latestIngestRun(db, { kind: 'youtube' }))?.status).toBe('ok');
   });
 
+  // 60 s: a whole database is migrated and seeded inside this test, like a beforeAll.
   it('says why there is nothing: no key, no channel, never ran', async () => {
     const noKey = await youtubeChannelView(db, { ...env, YOUTUBE_API_KEY: undefined });
     expect(noKey).toMatchObject({ gap: 'no_key', nextRunAt: null });
@@ -422,7 +423,7 @@ describe('the screen', () => {
     } finally {
       await fresh.drop();
     }
-  });
+  }, 60_000);
 
   it('shows a failed newest run without losing the last good reading', async () => {
     await ingest('2026-10-10', {

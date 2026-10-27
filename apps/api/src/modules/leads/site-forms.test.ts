@@ -7,11 +7,15 @@ import type { Database } from '../../db/client.js';
 import {
   auditLog,
   clients,
+  crmDistributionMembers,
+  crmNotifications,
   jobs,
   leadEvents,
   leads,
   leadSourceRules,
+  leadTasks,
   leadTrackingLinks,
+  leadTriageQueue,
 } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
@@ -503,21 +507,23 @@ describe('site form (T5)', () => {
     );
   });
 
-  it("picks the answer's funnel: none only with the triage on, Expansão only with a brand", () => {
+  it("picks the answer's funnel: an option naming none keeps the page's, Expansão only with a brand", () => {
     const page = { pipeline: 'formatacao' as const, brand: null };
     const brand = { pipeline: 'formatacao' as const, brand: 'Cenoritas' };
+    const bare = { pipeline: null, brand: null };
     const code = (pipeline?: 'expansao' | 'consultoria' | null) => ({
       value: 'x',
       option: 'X',
       ...(pipeline === undefined ? {} : { pipeline }),
     });
-    expect(answerPipelineOf(null, page, true)).toBe('formatacao');
-    expect(answerPipelineOf(code(), page, true)).toBe('formatacao');
-    expect(answerPipelineOf(code(null), page, true)).toBeNull();
-    expect(answerPipelineOf(code(null), page, false)).toBe('formatacao');
-    expect(answerPipelineOf(code('consultoria'), page, false)).toBe('consultoria');
-    expect(answerPipelineOf(code('expansao'), page, true)).toBe('formatacao');
-    expect(answerPipelineOf(code('expansao'), brand, true)).toBe('expansao');
+    expect(answerPipelineOf(null, page)).toBe('formatacao');
+    expect(answerPipelineOf(code(), page)).toBe('formatacao');
+    // "Ainda não sei" (pipeline: null, as the rules seeded before 26/10 still say) stays with the page.
+    expect(answerPipelineOf(code(null), page)).toBe('formatacao');
+    expect(answerPipelineOf(code(null), bare)).toBeNull();
+    expect(answerPipelineOf(code('consultoria'), page)).toBe('consultoria');
+    expect(answerPipelineOf(code('expansao'), page)).toBe('formatacao');
+    expect(answerPipelineOf(code('expansao'), brand)).toBe('expansao');
   });
 
   it('reads the Instagram handle however the record keeps it', () => {
@@ -717,7 +723,23 @@ describe('"Fale com a Wings" (the page the seed makes)', () => {
     });
   });
 
-  it('"Ainda não sei" leaves the lead without a funnel while the Jev triage is on', async () => {
+  it('"Ainda não sei" from the Formatação page with the triage on (lead 775262e5, 23/10): Formatação by the rotation, never the Jev', async () => {
+    // The rule as staging and production still hold it: "nao-sei" with pipeline: null (seeded before 26/10).
+    await db
+      .update(leadSourceRules)
+      .set({
+        siteFormSpec: {
+          ...FALE_COM_A_WINGS.spec,
+          qualifierValues: FALE_COM_A_WINGS.spec.qualifierValues.map((entry) =>
+            entry.value === 'nao-sei' ? { ...entry, pipeline: null } : entry,
+          ),
+        },
+      })
+      .where(eq(leadSourceRules.pattern, SLUG));
+    const seller = await createEmployee(db, { role: 'vendedor_formatacao', sector: 'comercial' });
+    await db
+      .insert(crmDistributionMembers)
+      .values({ pipeline: 'formatacao', employeeId: seller.id, active: true });
     const turnstile = captcha();
     const app = await makeApp(keys, { captchaFetch: turnstile.fetchImpl });
     const scheduled: TriageTarget[] = [];
@@ -729,6 +751,8 @@ describe('"Fale com a Wings" (the page the seed makes)', () => {
           email: 'nao.sei@example.com',
           phone: '(21) 98888-0003',
           qualifierAnswer: 'nao-sei',
+          page: 'https://fale.wingscompany.com.br/?utm_source=ig&utm_medium=paid&utm_campaign=formatacao_video_metodo_out26',
+          tracking: { utm_campaign: 'formatacao_video_metodo_out26', fbclid: 'fb.xyz' },
         }),
       );
       expect(response.statusCode).toBe(200);
@@ -737,42 +761,27 @@ describe('"Fale com a Wings" (the page the seed makes)', () => {
     }
     const [lead] = await db.select().from(leads).where(eq(leads.email, 'nao.sei@example.com'));
     expect(lead).toMatchObject({
-      pipeline: null,
-      stageId: null,
-      ownerEmployeeId: null,
-      formAnswers: { [QUESTION]: 'Ainda não sei' },
-    });
-    const event = await receivedEvent(lead!.id);
-    expect(event?.detail).toMatchObject({ qualifier: 'nao-sei', pipeline: null });
-    const [audit] = await db.select().from(auditLog).where(eq(auditLog.entityId, lead!.id));
-    expect(audit?.metadata).toMatchObject({ pipeline: null });
-    // The triage got it: a lead without a funnel is never left without someone to decide.
-    expect(scheduled).toContainEqual({ leadId: lead!.id });
-  });
-
-  it('"Ainda não sei" keeps the page\'s Formatação while the Jev triage is off', async () => {
-    const turnstile = captcha();
-    const app = await makeApp(keys, { captchaFetch: turnstile.fetchImpl });
-    const response = await post(
-      app,
-      fale({
-        email: 'nao.sei.sem.triagem@example.com',
-        phone: '(21) 98888-0011',
-        qualifierAnswer: 'nao-sei',
-      }),
-    );
-    expect(response.statusCode).toBe(200);
-    const [lead] = await db
-      .select()
-      .from(leads)
-      .where(eq(leads.email, 'nao.sei.sem.triagem@example.com'));
-    expect(lead).toMatchObject({
       pipeline: 'formatacao',
+      ownerEmployeeId: seller.id,
+      adPlatform: 'meta',
       formAnswers: { [QUESTION]: 'Ainda não sei' },
     });
     expect(lead?.stageId).not.toBeNull();
+    expect(
+      await db.query.leadTasks.findFirst({ where: eq(leadTasks.leadId, lead!.id) }),
+    ).toMatchObject({ kind: 'first_contact', assigneeEmployeeId: seller.id });
+    expect(
+      (await db.select().from(crmNotifications).where(eq(crmNotifications.leadId, lead!.id))).map(
+        (n) => [n.kind, n.recipientEmployeeId],
+      ),
+    ).toEqual([['new_lead', seller.id]]);
     const event = await receivedEvent(lead!.id);
     expect(event?.detail).toMatchObject({ qualifier: 'nao-sei', pipeline: 'formatacao' });
+    // The Jev was never asked: no queue row, nothing scheduled.
+    expect(scheduled).toEqual([]);
+    expect(
+      await db.query.leadTriageQueue.findFirst({ where: eq(leadTriageQueue.leadId, lead!.id) }),
+    ).toBeUndefined();
   });
 
   it('a code naming Expansão sends the lead there only from a page tied to a brand', async () => {
