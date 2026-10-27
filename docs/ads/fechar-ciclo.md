@@ -134,8 +134,8 @@ está fechado.** O Google recomenda a Data Manager API.
   `https://www.googleapis.com/auth/datamanager`; uma conta de usuário ou de serviço com acesso à conta
   de anúncios. **Não pede developer token.** A autorização atual (`GOOGLE_ADS_*`) foi dada para o
   Google Ads; a Data Manager pede o escopo dela, então é preciso autorizar de novo (Eric).
-- É outra API, não a v22 da Google Ads API. O fim da v22 (ver [google-escrita.md](google-escrita.md))
-  não a atinge.
+- É outra API, não a Google Ads API (v26 desde 20/10/2026, ver [google-escrita.md](google-escrita.md)).
+  O fim de versão da Google Ads API não a atinge.
 
 O que a ordem cita, e onde fica na Data Manager:
 

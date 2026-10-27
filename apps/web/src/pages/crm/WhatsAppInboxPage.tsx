@@ -95,6 +95,11 @@ function WhatsAppWeb({ openId }: { openId?: string }) {
           >
             Nova conversa
           </button>
+          {hasPermission(session.data, 'whatsapp.import_bulk') && (
+            <Link className="crm-btn" to="/crm-vendas/whatsapp/importar-lote">
+              Importar em lote
+            </Link>
+          )}
         </header>
         {soon && (
           <p className="crm-wa-soon" role="status">
@@ -103,7 +108,12 @@ function WhatsAppWeb({ openId }: { openId?: string }) {
           </p>
         )}
         {hasPermission(session.data, 'integrations.manage') && (
-          <OfficialNumberSwitch live={official.data?.live} />
+          <>
+            <OfficialNumberSwitch live={official.data?.live} />
+            <Link className="crm-muted" to="/crm-vendas/whatsapp/numeros">
+              Números dos vendedores
+            </Link>
+          </>
         )}
         <input
           className="crm-input"

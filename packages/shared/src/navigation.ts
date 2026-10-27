@@ -157,6 +157,16 @@ export const NAVIGATION: readonly NavModule[] = [
         kind: 'crud',
       },
       {
+        path: '/crm-vendas/whatsapp/modelos',
+        label: 'Modelos',
+        icon: 'file-text',
+        description:
+          'Os modelos de mensagem do WhatsApp: escrever, mandar para a Meta e o que preenche cada campo',
+        permission: 'whatsapp_templates.manage',
+        status: 'ready',
+        kind: 'crud',
+      },
+      {
         path: '/crm-vendas/contatos',
         label: 'Contatos',
         icon: 'users',

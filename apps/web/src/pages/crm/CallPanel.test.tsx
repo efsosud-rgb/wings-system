@@ -66,7 +66,10 @@ describe('the call panel', () => {
     const dialog = screen.getByRole('dialog', { name: 'Ligação' });
     expect(dialog.textContent).toContain('Elena Prado');
     expect(screen.getByText('(21) 99999-0001')).toBeTruthy();
-    expect(dialog.querySelector('a[href^="tel:"]')).toBeNull();
+    // The seller's own phone dials it (Eric, 26/10).
+    expect(screen.getByRole('link', { name: 'Ligar pelo celular' }).getAttribute('href')).toBe(
+      'tel:+5521999990001',
+    );
     const whatsapp = screen.getByRole('button', {
       name: /Ligar pelo WhatsApp/,
     }) as HTMLButtonElement;
@@ -108,6 +111,15 @@ describe('the call panel', () => {
     show({ phone: null });
     expect(screen.getByText('Sem telefone')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Copiar número' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Abrir no WhatsApp do vendedor' })).toBeNull();
+  });
+
+  it("opens the lead's chat in the seller's own WhatsApp, where calls are made", () => {
+    show();
+    const link = screen.getByRole('link', { name: 'Abrir no WhatsApp do vendedor' });
+    expect(link.getAttribute('href')).toBe('https://wa.me/5521999990001');
+    expect(link.getAttribute('target')).toBe('_blank');
+    expect(link.getAttribute('rel')).toContain('noopener');
   });
 
   it('copies the number with the country code', async () => {

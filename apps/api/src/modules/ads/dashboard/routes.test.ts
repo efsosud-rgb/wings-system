@@ -570,6 +570,35 @@ describe('campaigns down to the ad', () => {
     expect(google?.adSets).toEqual([]);
     expect(google?.totals.conversions).toBe(2);
   });
+
+  it('says when a campaign ended and when it last spent, in any window', async () => {
+    const before = await read<DashboardCampaigns>('/ads/dashboard/campaigns?days=7', 'campaigns');
+    const leads = before.campaigns.find((campaign) => campaign.name === 'LEAD | FORMS');
+    expect(leads).toMatchObject({ ended: false, lastSpendDate: META_DAYS.at(-1) });
+    const idle = before.campaigns.find((campaign) => campaign.name === 'Institucional parada');
+    expect(idle).toMatchObject({ ended: false, lastSpendDate: null });
+
+    // Google keeps ENABLED after the end; serving_status ENDED is what says it.
+    await db
+      .update(adCampaigns)
+      .set({ deliveryStatus: 'ENDED' })
+      .where(eq(adCampaigns.externalId, '100'));
+    await db.update(adSets).set({ endDate: '2026-09-15' }).where(eq(adSets.externalId, 'as1'));
+    try {
+      const after = await read<DashboardCampaigns>('/ads/dashboard/campaigns?days=7', 'campaigns');
+      const ended = (name: string) => after.campaigns.find((c) => c.name === name)?.ended;
+      expect(ended('Pesquisa | Franquia')).toBe(true);
+      // Meta has no such status: the last day of the ad sets that are on passed.
+      expect(ended('LEAD | FORMS')).toBe(true);
+      expect(ended('Institucional parada')).toBe(false);
+    } finally {
+      await db
+        .update(adCampaigns)
+        .set({ deliveryStatus: 'SERVING' })
+        .where(eq(adCampaigns.externalId, '100'));
+      await db.update(adSets).set({ endDate: null }).where(eq(adSets.externalId, 'as1'));
+    }
+  });
 });
 
 describe('campaigns the system created', () => {

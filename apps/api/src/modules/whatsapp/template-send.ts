@@ -1,16 +1,19 @@
 import {
   WA_ART_SUFFIX,
+  WA_COMPANY_FALLBACK,
   WA_FIELD_LABELS,
   WA_TEMPLATE_FIELDS,
   WINGS_CLIENT_ID,
   templateParamCount,
   waArticleBefore,
+  waFieldFallback,
   waFieldForm,
   waTemplateFamily,
   waTemplateFields,
   withArticle,
   withoutArticle,
   type BrandArticle,
+  type WaFieldSpec,
   type WaTemplateField,
   type WaTemplatePreview,
 } from '@wings/shared';
@@ -53,6 +56,8 @@ export interface TemplateRow {
   language: string;
   category: string | null;
   components: unknown;
+  /** Set on the Modelos screen: what fills each {{n}} and its fallback. */
+  fields?: WaFieldSpec[] | null;
 }
 
 interface Component {
@@ -82,6 +87,13 @@ export function fillTemplate(body: string | null, params: string[]): string | nu
 }
 
 const bodyOf = (row: TemplateRow) => templateBody(row.components);
+
+/** Whether the template carries Meta's "Permitir ligações" request. */
+export const asksCallPermission = (row: Pick<TemplateRow, 'components'>) =>
+  Array.isArray(row.components) &&
+  (row.components as Component[]).some(
+    (c) => c && typeof c === 'object' && c.type?.toUpperCase() === 'CALL_PERMISSION_REQUEST',
+  );
 const headerFormat = (row: TemplateRow) => componentOf(row, 'HEADER')?.format ?? null;
 
 // --- the plan (no database, no Meta) -------------------------------------------------------
@@ -176,8 +188,16 @@ export function planTemplate(input: PlanInput): TemplatePlan {
 
   // The fields: what the seller typed (names without their article), or what the server knows.
   const body = bodyOf(version);
-  const specs = waTemplateFields(version.name, count);
+  // Saved fields: the version's own, or the base's (an `_arte` keeps its own form: "da Malkuth").
+  const saved = [version, base].find((row) => row?.fields?.length === count)?.fields ?? null;
+  const specs =
+    version.fields?.length === count
+      ? version.fields
+      : waTemplateFields(version.name, count).map((spec, i) =>
+          saved?.[i] ? { ...saved[i], form: spec.form } : spec,
+        );
   const given = request.params.length === count ? request.params : null;
+  const fellBack: string[] = [];
   const fields: WaTemplateField[] = specs.map((spec, i) => {
     const locked = spec.role === 'brand' && voice !== null;
     const typed = given?.[i]?.trim() ?? '';
@@ -189,15 +209,23 @@ export function planTemplate(input: PlanInput): TemplatePlan {
           : spec.role === 'company'
             ? input.defaults.company
             : '';
+    const value = given ? typed : known;
+    const label =
+      spec.label ?? (spec.role === 'free' ? `Campo {{${i + 1}}}` : WA_FIELD_LABELS[spec.role]);
+    if (!locked && !value && waFieldFallback(spec))
+      fellBack.push(`${label.toLowerCase()} → "${waFieldFallback(spec)}"`);
     return {
       index: i + 1,
       role: spec.role,
-      label:
-        spec.label ?? (spec.role === 'free' ? `Campo {{${i + 1}}}` : WA_FIELD_LABELS[spec.role]),
-      value: locked ? (voice?.name ?? '') : given ? typed : known,
+      label,
+      value: locked ? (voice?.name ?? '') : value || waFieldFallback(spec),
       locked,
     };
   });
+  if (fellBack.length > 0)
+    notices.push(
+      `Sem dado no CRM, vai o texto padrão: ${fellBack.join(', ')}. Troque no campo, se souber.`,
+    );
   let usesCompanyArticle = false;
   let brandArticleMissing = false;
   const params = fields.map((field, i) => {
@@ -210,7 +238,9 @@ export function planTemplate(input: PlanInput): TemplatePlan {
     }
     if (field.role === 'company') {
       usesCompanyArticle = true;
-      return withArticle(field.value, request.companyArticle, form);
+      // "sua empresa" is feminine whatever the seller ticked: never "o sua empresa".
+      const feminine = field.value === WA_COMPANY_FALLBACK;
+      return withArticle(field.value, feminine ? 'a' : request.companyArticle, form);
     }
     if (field.role === 'brand') {
       if (voice && !voice.article) brandArticleMissing = true;
@@ -276,6 +306,8 @@ export function toFreeMessage(
   text: string,
   hasArt: boolean,
 ): FreeMessage | string {
+  if (asksCallPermission(version))
+    return 'Este modelo pede a permissão para ligar, e esse pedido só vai dentro do modelo.';
   const header = componentOf(version, 'HEADER');
   let head: FreeMessage['header'] = null;
   if (header) {
@@ -438,6 +470,7 @@ export async function familyTemplates(
       language: waTemplates.language,
       category: waTemplates.category,
       components: waTemplates.components,
+      fields: waTemplates.fields,
     })
     .from(waTemplates)
     .where(

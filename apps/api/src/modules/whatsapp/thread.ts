@@ -5,6 +5,7 @@ import {
   WA_MEDIA_KINDS,
   WA_MESSAGES_PAGE,
   WA_WINDOW_HOURS,
+  withArticle,
   type BrandArticle,
   type DealWhatsApp,
   type WaConversationItem,
@@ -217,6 +218,16 @@ export async function contactOfPhone(db: Database, phone: string | null) {
   return found[0] ?? null;
 }
 
+/**
+ * What the person sees above Meta's "Permitir ligações" buttons (a brand's
+ * lead hears the brand, with its own article: "O Casal do Churros", "A Cabana
+ * da Barra" — never "A A Cabana").
+ */
+export const callPermissionText = (brand: Pick<BrandVoice, 'name' | 'article'> | null) => {
+  const who = brand ? withArticle(brand.name, brand.article ?? 'a', 'article') : 'a Wings';
+  return `${who.charAt(0).toUpperCase()}${who.slice(1)} gostaria de poder te ligar pelo WhatsApp para continuar o seu atendimento.`;
+};
+
 /** The brand a conversation speaks for, with what its WhatsApp header needs. */
 export interface BrandVoice {
   clientId: string;
@@ -344,7 +355,7 @@ export function conversationListSql(input: {
                  (select r.read_at from wa_conversation_reads r
                    where r.conversation_id = c.id and r.employee_id = ${input.readerId}),
                  (select max(o.created_at) from wa_messages o
-                   where o.conversation_id = c.id and o.direction = 'out'),
+                   where o.conversation_id = c.id and o.direction = 'out' and o.author <> 'system'),
                  '-infinity'::timestamptz)) as unread
     from wa_conversations c
     join wa_contacts k on k.id = c.contact_id
@@ -353,7 +364,8 @@ export function conversationListSql(input: {
     left join clients b on b.id = c.brand_client_id
     left join lateral (
       select direction, kind, text, status from wa_messages
-      where conversation_id = c.id order by created_at desc limit 1
+      -- The system's own call-permission request is not an answer: the conversation stays waiting.
+      where conversation_id = c.id and author <> 'system' order by created_at desc limit 1
     ) m on true
     where c.last_message_at is not null
       ${input.owner === undefined ? sql`` : sql`and l.owner_employee_id = ${input.owner}`}

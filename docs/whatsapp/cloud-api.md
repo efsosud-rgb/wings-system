@@ -131,18 +131,19 @@ cadastrados na Meta. Os outros níveis não mudam.
 
 ## Rotas (com sessão)
 
-| Rota                                                                     | O quê                                                   |
-| ------------------------------------------------------------------------ | ------------------------------------------------------- |
-| `GET /leads/:id/whatsapp`                                                | Conversa da negociação, janela, opt-out, `configured`   |
-| `POST /leads/:id/whatsapp/text`                                          | Texto livre (só dentro das 24 h)                        |
-| `POST /leads/:id/whatsapp/template`                                      | Modelo aprovado com os campos `{{n}}`                   |
-| `GET /whatsapp/conversations[?unanswered=1]`                             | Lista no escopo de quem lê                              |
-| `GET /whatsapp/conversations/:id` e `POST …/text`, `…/template`          | Conversa sem negociação (escopo total)                  |
-| `GET /whatsapp/templates[?refresh=1]`                                    | Modelos aprovados                                       |
-| `GET /whatsapp/messages/:id/media`                                       | Arquivo recebido                                        |
-| `POST /leads/:id/whatsapp/template-preview`, `GET …/art`                 | O que o modelo vira agora e a arte (`arte-modelos.md`)  |
-| `POST /leads/:id/whatsapp/imports[/preview]`, `GET`, `DELETE …/:batchId` | Conversa exportada do celular (`importar-conversa.md`)  |
-| `GET /leads/:id/whatsapp/messages?before=<id>`                           | Mensagens anteriores às 500 da tela, uma página por vez |
+| Rota                                                                      | O quê                                                   |
+| ------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `GET /leads/:id/whatsapp`                                                 | Conversa da negociação, janela, opt-out, `configured`   |
+| `POST /leads/:id/whatsapp/text`                                           | Texto livre (só dentro das 24 h)                        |
+| `POST /leads/:id/whatsapp/template`                                       | Modelo aprovado com os campos `{{n}}`                   |
+| `GET /whatsapp/conversations[?unanswered=1]`                              | Lista no escopo de quem lê                              |
+| `GET /whatsapp/conversations/:id` e `POST …/text`, `…/template`           | Conversa sem negociação (escopo total)                  |
+| `GET /whatsapp/templates[?refresh=1]`                                     | Modelos aprovados                                       |
+| `GET`, `POST /whatsapp/templates/manage`, `PUT …/:id`, `PUT …/:id/fields` | Tela de modelos (`modelos.md`)                          |
+| `GET /whatsapp/messages/:id/media`                                        | Arquivo recebido                                        |
+| `POST /leads/:id/whatsapp/template-preview`, `GET …/art`                  | O que o modelo vira agora e a arte (`arte-modelos.md`)  |
+| `POST /leads/:id/whatsapp/imports[/preview]`, `GET`, `DELETE …/:batchId`  | Conversa exportada do celular (`importar-conversa.md`)  |
+| `GET /leads/:id/whatsapp/messages?before=<id>`                            | Mensagens anteriores às 500 da tela, uma página por vez |
 
 A tela da conversa se atualiza a cada 5 s e a lista a cada 15 s, com o cabeçalho `x-wings-passive: 1`: o
 servidor responde sem contar como atividade da pessoa, para uma tela aberta não segurar uma sessão ociosa nem
@@ -166,6 +167,30 @@ tipo, nome do modelo e resultado, nunca o texto.
 `WHATSAPP_WEBHOOK_VERIFY_TOKEN` (16+ caracteres), `WHATSAPP_APP_SECRET`, `WHATSAPP_ACCESS_TOKEN` (segredos, só
 no Coolify). Sem token e número, a conversa diz que está desligada; sem segredo e token de verificação, o
 webhook responde 503. Uma mudança chegada para outro número do mesmo app é ignorada.
+
+Os números dos vendedores em coexistência (`wa_numbers`, migração 0095) têm a própria tela e o próprio token:
+ver `conectar-numero.md` (`WHATSAPP_ES_CONFIG_ID`).
+
+## Estado do staging (lido em 26/10/2026)
+
+Leitura sem nenhum envio: Graph API só com GET, dentro do contêiner da API, sem imprimir o token; banco pelo
+`wings_ro`; e os logs.
+
+- **O staging usa o número de teste da Meta** (+1 555-669-6643, "Test Number", conta 2116475762622670). Esse
+  número só entrega para até 5 números cadastrados no app da Meta. Para um lead de verdade, a Meta recusa com
+  o erro 131030, que a tela mostra em português. Token, número CONECTADO e os 31 modelos aprovados estão ok, e o
+  app Wings CRM Vendas está assinado no webhook.
+- O switch `official_number_live` está desligado desde 19/10, e o vendedor não envia nem liga pelo sistema. Em 3
+  dias de log nenhum corpo de webhook chegou, e só 2 mensagens saíram pelo sistema na história toda (14/10).
+- As ligações estão ativadas no número (`calling.status` ENABLED); `callback_permission_status` está DISABLED.
+- **Para falar com lead real** (passos na Meta, do Eric):
+  1. passar o número comercial (final 0288) para a Cloud API na conta Wings Company (558704303984649), com forma de
+     pagamento na conta, registro do número com PIN e o app Wings CRM Vendas assinado na conta;
+  2. trocar no api-staging `WHATSAPP_WABA_ID`, `WHATSAPP_PHONE_NUMBER_ID` e `WINGS_WHATSAPP_NUMBER`, e reiniciar;
+  3. ligar o switch na tela da caixa.
+
+  Os modelos aprovados da conta de teste não passam para a outra conta: a conta Wings Company tem os seus
+  (`modelos.md`).
 
 ## Não verificado ao vivo
 

@@ -6,7 +6,7 @@ Wings System — the internal system of Wings Company (CRM, RH/DP, marketing aut
 
 The first module under construction is **Cadastro de Funcionários** (employee registration) with role-based access control.
 
-Three sections: [1. Folder structure](#1-folder-structure) · [2. Code standard](#2-code-standard) · [3. What never to do](#3-what-never-to-do).
+Four sections: [1. Folder structure](#1-folder-structure) · [2. Code standard](#2-code-standard) · [3. What never to do](#3-what-never-to-do) · [4. Ponytail: escrever o mínimo de código](#4-ponytail-escrever-o-mínimo-de-código).
 
 ## 1. Folder structure
 
@@ -158,3 +158,38 @@ A push does not deploy: the repository has no webhook. Deploys are started throu
 - **Time entries are append-only.** Corrections are new adjustment rows with a reason and an approver; nothing is ever updated in place.
 
 > ⚠️ Portaria MTP 671/2021 compliance for the time clock is **not yet legally confirmed**. Keep the model compliance-ready (append-only, sourced entries, exportable) and keep this warning visible until Jurídico signs off.
+
+## 4. Ponytail: escrever o mínimo de código
+
+Regras do [Ponytail](https://github.com/DietrichGebert/ponytail) (DietrichGebert, licença MIT, commit `09c434ab73ca`), em português e para todas as IAs do repositório: Claude Code, Codex, Jules e as demais. O texto original está em `.claude/skills/ponytail/SKILL.md`. É só texto: nenhum plugin, hook ou script foi instalado com ele. Nível: o padrão do Ponytail (`full`).
+
+**As regras do Wings System vêm antes.** O Ponytail diz como escrever menos código, nunca o que pode ficar de fora. Não se corta, nem para o diff ficar menor: segurança, RBAC (a decisão é da API, com o escopo próprio / setor / todos), tenant (`tenant_id`, `client_id`), LGPD e dados pessoais, testes, auditoria, e tudo o que o Eric pediu de forma explícita (por exemplo, a modelagem 5D). Onde uma regra abaixo bater com as seções 1 a 3, vale a das seções 1 a 3. Dois casos que já aparecem: "mudança trivial dispensa teste" não vale aqui, porque comportamento novo traz teste na mesma mudança (seção 2, Tests); e "não crie camada" não autoriza pôr consulta dentro do handler (seção 2, Where logic lives).
+
+Você é um desenvolvedor sênior preguiçoso. O melhor código é o que nunca foi escrito. Resolva o problema inteiro com o mínimo de código novo. Termine a resposta com uma ou duas linhas: o que você deixou de fora ou não conferiu, e qualquer risco que o Eric precise saber.
+
+### Antes de escrever
+
+Leia a tarefa e o código que ela toca. Liste todo lugar que a mudança precisa alcançar: quem chama, testes, fixtures, configuração, exports. Veja o que a mudança pode quebrar para quem usa: dado que ela destruiria ou exporia, chamadores que deixam de funcionar. Isso é escopo. Funcionalidade extra não é.
+
+### A menor mudança completa
+
+Fique com a primeira opção que resolve de verdade:
+
+1. Precisa existir? Pule funcionalidade, opção e flexibilidade que ninguém pediu, e diga o que pulou em uma linha. Um pedido vago ("faça um X") recebe a menor versão que faz o trabalho principal.
+2. Já existe neste código (um helper, componente, serviço, padrão)? Use do jeito que o código ao redor usa.
+3. Biblioteca padrão ou recurso da plataforma? Use, a menos que o projeto tenha o seu. Um componente da casa vence o elemento nativo.
+4. Uma dependência já instalada? Use. Nunca adicione dependência para poucas linhas.
+5. Cabe em uma linha que o leitor entende de relance? Uma linha.
+6. Senão: o mínimo de código que funciona.
+
+- Seja preguiçoso na solução, nunca na mudança em si: termine toda parte que a tarefa exige, inclusive os chamadores, testes e fixtures que a sua mudança quebra.
+- Nada de abstração, wrapper, conversão de tipo, opção, configuração, boilerplate ou código "para depois" que ninguém pediu. Mantenha os valores na forma que a plataforma já entrega. Apagar vence acrescentar. Mantenha a estrutura que o código já tem: camadas, interfaces e convenções.
+- O menor diff que funciona vence, depois que você sabe tudo o que ele precisa tocar. Uma linha que precisa ser decifrada não é curta.
+- Comente só o porquê que o código não mostra, em uma linha. Na densidade do código ao redor (seção 2).
+- Correção de bug: antes de editar, procure todo chamador da função que você vai tocar e corrija a causa uma vez só, no código compartilhado.
+- Código que você move ou junta mantém o tratamento de erro e a validação que tinha.
+- Entre opções do mesmo tamanho, fique com a que está certa nos casos de borda.
+- Código preguiçoso sem a sua checagem está inacabado: lógica nova não trivial (um desvio, um laço, um parser, dinheiro ou segurança, ou um script ou app novo inteiro) deixa um teste pequeno ou uma checagem com `assert`. Aqui, comportamento novo sempre leva teste (seção 2).
+- Um atalho com limite conhecido ganha um comentário neste formato, em inglês como o resto do código: `shortcut: <the limit>, <when to upgrade>`.
+
+Nunca corte: validação nas fronteiras de confiança (os schemas Zod de `packages/shared`), tratamento de erro que evita perda de dado, segurança, acessibilidade, a calibração que o hardware real exige, e tudo o que o Eric pediu.

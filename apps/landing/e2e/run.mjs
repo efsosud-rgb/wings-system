@@ -86,17 +86,23 @@ const CONSENT_TEXT =
   'Li a Política de Privacidade e autorizo a Wings a falar comigo por WhatsApp e e-mail sobre este pedido.';
 
 /** The GET's link has the tracking code alone; the POST's adds the lead's form ref (`<code> <ref>`). */
-const GET_WHATSAPP = 'https://wa.me/550000000000?text=E2EGET';
-const POST_WHATSAPP = 'https://wa.me/550000000000?text=E2EGET%20REF234';
+// The API's shape for Wings' own page (siteLinkText): a sentence, the code (and the ref) in brackets at the end.
+const SITE_SENTENCE = 'Olá! Vim pelo site da Wings e quero saber como formatar a minha franquia.';
+const waOf = (codes) =>
+  `https://wa.me/550000000000?text=${encodeURIComponent(`${SITE_SENTENCE} (${codes})`)}`;
+const GET_WHATSAPP = waOf('E2EGET');
+const POST_WHATSAPP = waOf('E2EGET REF234');
 /** A tracking code and a form ref share the alphabet (no I, O, 0, 1) and the length. */
 const CODE_RE = /^[A-HJ-NP-Z2-9]{6}$/;
 
-/** The wa.me link's number path and its text's words, or null when it is not one. */
+/** The wa.me link's number path and its codes (in the closing brackets, else the whole text), or null when it is not one. */
 function waParts(href) {
   try {
     const url = new URL(href);
     if (url.protocol !== 'https:' || url.hostname !== 'wa.me') return null;
-    return { path: url.pathname, words: (url.searchParams.get('text') ?? '').split(' ') };
+    const text = url.searchParams.get('text') ?? '';
+    const bracketed = /\(([^()]*)\)$/.exec(text)?.[1];
+    return { path: url.pathname, words: (bracketed ?? text).split(' ') };
   } catch {
     return null;
   }
@@ -210,6 +216,26 @@ const FAKE_TURNSTILE = `(() => {
   };
 })();`;
 
+/**
+ * Logs every push to the dataLayer with whether the fake GTM script (FAKE_GTM) was already running,
+ * so a test can say "GTM was there when the conversion arrived". The real GTM replaces `push`; the fake does not.
+ */
+const DATALAYER_LOG = () => {
+  const layer = [];
+  const push = layer.push.bind(layer);
+  window.__dlLog = [];
+  layer.push = (...entries) => {
+    for (const entry of entries) {
+      window.__dlLog.push({
+        event: entry && entry.event,
+        gtmRunning: Boolean(window.__fakeGtm),
+      });
+    }
+    return push(...entries);
+  };
+  window.dataLayer = layer;
+};
+
 /** What the page records before its own code runs: layout shifts, the first painted frame. */
 const TIMELINE = () => {
   const t = {
@@ -304,10 +330,22 @@ const CORS = (origin) => ({
   vary: 'Origin',
 });
 
-function mockApi({ apiBase, pageOrigin, posts, replies }) {
+function mockApi({ apiBase, pageOrigin, posts, replies, events }) {
   const formUrl = `${apiBase}/public/site-forms/${SLUG}`;
+  const eventsUrl = `${formUrl}/events`;
   return async (route, request) => {
     const method = request.method();
+    // the page's server events (sendBeacon, text/plain): kept, answered 204 like the API
+    if (request.url() === eventsUrl) {
+      let event;
+      try {
+        event = JSON.parse(request.postData() ?? 'null');
+      } catch {
+        event = 'not JSON';
+      }
+      events.push({ method, contentType: request.headers()['content-type'] ?? '', event });
+      return route.fulfill({ status: 204, headers: CORS(pageOrigin) });
+    }
     if (method === 'OPTIONS') {
       return route.fulfill({
         status: 204,
@@ -420,17 +458,33 @@ const LIVE_PEOPLE = {
 const submissions = [];
 let consentShown = '';
 
-async function fillForm(page, person) {
+async function fillForm(page, person, label) {
   await page.fill('#f-nome', person.name);
   await page.click('#f-tel');
   await page.keyboard.type(person.phone);
+  await page.selectOption('#f-int', person.answer);
+  await page.check('#f-consent');
+  // the short form (22/10): the three answers and the consent are enough, the optional block still closed
+  await page
+    .waitForFunction(() => !document.getElementById('f-send').disabled, null, { timeout: 5000 })
+    .catch(() => {});
+  const short = await page.evaluate(() => ({
+    disabled: document.getElementById('f-send').disabled,
+    missing: document.getElementById('f-missing').textContent,
+    open: document.getElementById('f-more').open,
+  }));
+  check(
+    `${label}: name, WhatsApp, the answer and the consent alone turn the button on (optional block closed)`,
+    !short.disabled && short.missing === 'Tudo certo. Pode enviar.' && !short.open,
+    short.missing,
+  );
+  // then the optional block, opened and filled, so the POST and the database are checked with everything
+  await page.click('#f-more summary');
   await page.fill('#f-email', person.email);
   await page.fill('#f-empresa', person.company);
   await page.fill('#f-ig', person.instagram);
   await page.focus('#f-site');
   await page.fill('#f-site', person.site);
-  await page.selectOption('#f-int', person.answer);
-  await page.check('#f-consent');
 }
 
 /**
@@ -464,7 +518,7 @@ async function fakeOutsideScripts(context, page, gtmRequests) {
 
 async function runViewport(
   browser,
-  { label, viewport, mobile, port, apiBase, replies = [], person = PERSON },
+  { label, viewport, mobile, port, apiBase, replies = [], person = PERSON, reducedMotion = false },
 ) {
   const context = await browser.newContext({
     viewport,
@@ -472,17 +526,25 @@ async function runViewport(
     isMobile: mobile,
     hasTouch: mobile,
     locale: 'pt-BR',
+    reducedMotion: reducedMotion ? 'reduce' : 'no-preference',
   });
   const pageOrigin = `http://127.0.0.1:${port}`;
   const outside = [];
   const posts = [];
+  /** The server events the page sent (mock only): method, content type and body. */
+  const events = [];
   const gtmRequests = [];
   const errorReplies = replies.map((reply) => reply.expect);
+  // why each refused send is counted on the server (the mock consumes `replies` as it answers)
+  const errorSteps = replies.map(
+    (reply) =>
+      ({ 400: 'validation', 403: 'captcha', 429: 'rate_limited' })[reply.status] ?? 'network',
+  );
   const liveOrigin = LIVE_API ? new URL(LIVE_API).origin : null;
   /** The real API's answers to the page: method, status and the CORS headers the browser accepted. */
   const apiAnswers = [];
   if (!LIVE_API) {
-    const api = mockApi({ apiBase, pageOrigin, posts, replies });
+    const api = mockApi({ apiBase, pageOrigin, posts, replies, events });
     await context.route('**/*', async (route, request) => {
       const url = new URL(request.url());
       if (url.origin === pageOrigin) return route.continue();
@@ -507,6 +569,7 @@ async function runViewport(
     });
   }
   await context.addInitScript(TIMELINE);
+  await context.addInitScript(DATALAYER_LOG);
   const page = await context.newPage();
   if (LIVE_API) {
     await fakeOutsideScripts(context, page, gtmRequests);
@@ -522,6 +585,7 @@ async function runViewport(
       const headers = response.headers();
       apiAnswers.push({
         method: response.request().method(),
+        path: new URL(response.url()).pathname,
         status: response.status(),
         allowOrigin: headers['access-control-allow-origin'] ?? null,
         credentials: headers['access-control-allow-credentials'] ?? null,
@@ -605,6 +669,7 @@ async function runViewport(
     noGl: document.documentElement.classList.contains('no-gl'),
     noFa: document.documentElement.classList.contains('no-fa'),
     scene: typeof window.__wings3d === 'function' ? window.__wings3d() : null,
+    phonePoses: [...document.querySelectorAll('[data-form]')].map((el) => el.dataset.n ?? ''),
     disabled: document.getElementById('f-send').disabled,
     missing: document.getElementById('f-missing').textContent,
   }));
@@ -642,27 +707,39 @@ async function runViewport(
       layout.scene && { particulas: layout.scene.particulas, pontos: layout.scene.pontos },
     ),
   );
-  check(`${label}: social icon font loaded`, !layout.noFa);
-  check(`${label}: send button off at start`, layout.disabled);
-  const items = [
-    'nome',
-    'WhatsApp',
-    'e-mail',
-    'empresa',
-    'Instagram',
-    'o que você procura',
-    'aceite da política',
-  ];
+  if (reducedMotion) {
+    // prefers-reduced-motion: the words show at once and the scene is the small, still one (3200 points)
+    const wordsAtOnce = await page.$$eval('[data-words]', (els) =>
+      els.every((el) => el.classList.contains('in')),
+    );
+    check(
+      `${label}: reduced motion: words shown at once, small still scene`,
+      wordsAtOnce && layout.scene?.particulas === 3200,
+      JSON.stringify({ wordsAtOnce, particulas: layout.scene?.particulas }),
+    );
+  }
   check(
-    `${label}: missing line lists the items`,
-    layout.missing.startsWith('Para enviar, falta: ') &&
-      items.every((item) => layout.missing.includes(item)),
-    layout.missing,
+    `${label}: resolution brake only on a phone, ladder from at most 2x`,
+    layout.scene &&
+      layout.scene.freio === (mobile && layout.scene.degraus.length > 1) &&
+      layout.scene.degraus[0] <= 2,
+    JSON.stringify(layout.scene && { degraus: layout.scene.degraus, freio: layout.scene.freio }),
   );
   check(
-    `${label}: GTM loaded with the runtime id`,
-    gtmRequests.some((u) => u.includes(`id=${GTM_ID}`)),
-    gtmRequests.join(' '),
+    `${label}: every scene section has a phone placement (x, y, scale, alpha)`,
+    layout.phonePoses.length === 6 &&
+      layout.phonePoses.every((n) => /^(-?\d+(\.\d+)?,){3}-?\d+(\.\d+)?$/.test(n)),
+    layout.phonePoses.join(' | '),
+  );
+  check(`${label}: social icon font loaded`, !layout.noFa);
+  check(`${label}: send button off at start`, layout.disabled);
+  const items = ['nome', 'WhatsApp', 'o que você procura', 'aceite da política'];
+  check(
+    `${label}: missing line lists the required items only (no e-mail, company or Instagram)`,
+    layout.missing.startsWith('Para enviar, falta: ') &&
+      items.every((item) => layout.missing.includes(item)) &&
+      !/e-mail|empresa|Instagram/.test(layout.missing),
+    layout.missing,
   );
 
   const turnstile = await page.evaluate(() => window.__turnstile);
@@ -673,6 +750,23 @@ async function runViewport(
       turnstile.options.language === 'pt-BR' &&
       turnstile.options.sitekey === TURNSTILE_SITE_KEY,
     JSON.stringify(turnstile),
+  );
+  // what the first frame does not need must not compete with it: both start once the content is painted
+  const starts = await page.evaluate(() => {
+    const startOf = (name) =>
+      performance.getEntriesByType('resource').find((entry) => name.test(entry.name))?.startTime;
+    return {
+      firstPaint: performance.getEntriesByName('first-contentful-paint')[0]?.startTime,
+      scene: startOf(/\/assets\/scene-[^/]+\.js/),
+      robotCheck: startOf(/challenges\.cloudflare\.com/),
+    };
+  });
+  check(
+    `${label}: the 3D scene and the robot check start after the first paint`,
+    [starts.firstPaint, starts.scene, starts.robotCheck].every((t) => typeof t === 'number') &&
+      starts.scene >= starts.firstPaint &&
+      starts.robotCheck >= starts.firstPaint,
+    JSON.stringify(starts),
   );
 
   // the GET's tracked link: the mock's, or the one the real API was seeded with
@@ -696,7 +790,7 @@ async function runViewport(
   // before the form there is no lead yet: the text is the code alone, no ref
   const getParts = waParts(wa[0]?.[0] ?? '');
   check(
-    `${label}: the GET's link text is the tracking code only`,
+    `${label}: the GET's link carries the tracking code only`,
     getParts !== null && getParts.words.length === 1 && CODE_RE.test(getParts.words[0]),
     JSON.stringify(getParts?.words),
   );
@@ -710,7 +804,12 @@ async function runViewport(
     consentShown,
   );
 
-  await fillForm(page, person);
+  await fillForm(page, person, label);
+  check(
+    `${label}: GTM loaded with the runtime id once the visitor started on the form`,
+    gtmRequests.some((u) => u.includes(`id=${GTM_ID}`)),
+    gtmRequests.join(' '),
+  );
   await page
     .waitForFunction(() => !document.getElementById('f-send').disabled, null, { timeout: 5000 })
     .catch(() => {});
@@ -808,13 +907,29 @@ async function runViewport(
       ref: postRef ?? null,
     });
     check(
-      `${label}: thank-you button opens the POST's link (the GET's plus the ref)`,
+      `${label}: thank-you button opens the POST's link (the GET's with the ref in the brackets)`,
       EXPECT_WHATSAPP
-        ? done.href === `${EXPECT_WHATSAPP}%20${postRef}` && !done.buttonHidden
+        ? // the ref goes inside the closing bracket: "(<code>)" becomes "(<code> <ref>)"
+          done.href === `${EXPECT_WHATSAPP.replace(/\)$/, '')}%20${postRef})` && !done.buttonHidden
         : done.buttonHidden || /^https:\/\/wa\.me\//.test(done.href ?? ''),
       done.href ?? 'hidden',
     );
-    const fromApi = (method) => apiAnswers.filter((answer) => answer.method === method);
+    // the form's own calls; the event beacons (`/events`) are checked apart
+    const fromApi = (method) =>
+      apiAnswers.filter((answer) => answer.method === method && !answer.path.endsWith('/events'));
+    const beacons = apiAnswers.filter((answer) => answer.path.endsWith('/events'));
+    check(
+      `${label}: event beacons answered 204 by the API across origins (five or more)`,
+      beacons.length >= 5 &&
+        beacons.every(
+          (answer) =>
+            answer.method === 'POST' &&
+            answer.status === 204 &&
+            answer.allowOrigin === pageOrigin &&
+            answer.credentials === null,
+        ),
+      `${beacons.length} beacons: ${[...new Set(beacons.map((answer) => answer.status))].join(' ')}`,
+    );
     const crossed = (answers) =>
       answers.length > 0 &&
       answers.every(
@@ -866,9 +981,269 @@ async function runViewport(
     JSON.stringify(done.events),
   );
 
+  if (!LIVE_API) await checkServerEvents(page, { label, events, errorSteps, person });
+
+  // GTM loads on the first touch, long before the conversions: it must already be running when they arrive
+  const dataLayerLog = await page.evaluate(() => window.__dlLog);
+  const conversions = dataLayerLog.filter((e) =>
+    ['lead_submit', 'whatsapp_click'].includes(e.event),
+  );
+  check(
+    `${label}: GTM was already running when lead_submit and whatsapp_click reached the dataLayer`,
+    dataLayerLog[0]?.event === 'gtm.js' &&
+      conversions.some((e) => e.event === 'lead_submit') &&
+      conversions.every((e) => e.gtmRunning),
+    JSON.stringify(dataLayerLog.map((e) => `${e.event}${e.gtmRunning ? '+gtm' : ''}`)),
+  );
+
   check(`${label}: no console error or page error`, errors.length === 0, errors.join(' | '));
   check(`${label}: no request left the machine`, outside.length === 0, outside.join(' '));
   await context.close();
+}
+
+/** A page with the fakes of `runViewport` (mock API, fake GTM and Turnstile) for the GTM timing runs. */
+async function openFakePage(
+  browser,
+  { port, apiBase, mobile = false, gtmDelayMs = 0, reducedMotion },
+) {
+  const context = await browser.newContext({
+    viewport: mobile ? PHONE.viewport : DESKTOP.viewport,
+    isMobile: mobile,
+    hasTouch: mobile,
+    locale: 'pt-BR',
+    reducedMotion: reducedMotion ? 'reduce' : 'no-preference',
+  });
+  const pageOrigin = `http://127.0.0.1:${port}`;
+  const posts = [];
+  const gtmRequests = [];
+  const api = mockApi({ apiBase, pageOrigin, posts, replies: [], events: [] });
+  await context.route('**/*', async (route, request) => {
+    const url = new URL(request.url());
+    if (url.origin === pageOrigin) return route.continue();
+    if (url.hostname === 'www.googletagmanager.com') {
+      gtmRequests.push(url.href);
+      if (gtmDelayMs) await new Promise((resolve) => setTimeout(resolve, gtmDelayMs));
+      return route
+        .fulfill({ status: 200, contentType: 'application/javascript', body: FAKE_GTM })
+        .catch(() => {});
+    }
+    if (url.hostname === 'challenges.cloudflare.com') {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/javascript',
+        body: FAKE_TURNSTILE,
+      });
+    }
+    if (url.href.startsWith(apiBase + '/')) return api(route, request);
+    return route.abort();
+  });
+  await context.addInitScript(DATALAYER_LOG);
+  const page = await context.newPage();
+  return { context, page, posts, gtmRequests };
+}
+
+/** The dataLayer's events by name (the log, so the order and the GTM state at each push are there). */
+const loggedEvents = (page) => page.evaluate(() => window.__dlLog.map((e) => e.event));
+
+/**
+ * When GTM loads (mock only): never before the first touch nor before 4 s after the load, on the first
+ * touch (mouse, key, scroll, touch, a form field) and once; and a conversion that arrives before GTM does
+ * loads it at once, waits for it 1.5 s at most, and never makes the lead wait.
+ */
+async function gtmChecks(browser, { port, apiBase }) {
+  const url = `http://127.0.0.1:${port}/?utm_source=e2e&utm_campaign=lancamento&gclid=TESTE123`;
+
+  // (a) untouched: nothing for 3.4 s after the load, then GTM by itself at 4 s (also with reduced motion)
+  for (const reducedMotion of [false, true]) {
+    const label = `gtm-idle${reducedMotion ? '-reduced-motion' : ''}`;
+    const { context, page, gtmRequests } = await openFakePage(browser, {
+      port,
+      apiBase,
+      reducedMotion,
+    });
+    await page.goto(url, { waitUntil: 'load' });
+    await page.waitForTimeout(3400);
+    const early = { requests: gtmRequests.length, queue: await loggedEvents(page) };
+    await page
+      .waitForFunction(
+        () => performance.getEntriesByType('resource').some((e) => /googletagmanager/.test(e.name)),
+        null,
+        { timeout: 5000 },
+      )
+      .catch(() => {});
+    const gap = await page.evaluate(() => {
+      const entry = performance
+        .getEntriesByType('resource')
+        .find((e) => /googletagmanager/.test(e.name));
+      return entry
+        ? entry.startTime - performance.getEntriesByType('navigation')[0].loadEventStart
+        : null;
+    });
+    check(
+      `${label}: GTM does not load before a first touch or 4 s after the load, and the dataLayer is still empty`,
+      early.requests === 0 && early.queue.length === 0 && gap !== null && gap >= 3950 && gap < 5500,
+      `${early.requests} requests and [${early.queue}] at 3.4 s, GTM requested ${gap && Math.round(gap)} ms after the load`,
+    );
+    check(
+      `${label}: then gtm.js is queued and GTM was requested once`,
+      JSON.stringify(await loggedEvents(page)) === '["gtm.js"]' && gtmRequests.length === 1,
+      `${gtmRequests.length} requests`,
+    );
+    await context.close();
+  }
+
+  // (b) the first touch loads it, once
+  const touches = [
+    ['mouse click', false, (page) => page.mouse.click(720, 300)],
+    ['key press', false, (page) => page.keyboard.press('Tab')],
+    ['scroll', false, (page) => page.mouse.wheel(0, 400)],
+    ['touch', true, (page) => page.touchscreen.tap(20, 250)],
+    ['focus on a form field', false, (page) => page.focus('#f-nome')],
+  ];
+  for (const [name, mobile, touch] of touches) {
+    const label = `gtm-touch (${name})`;
+    const { context, page, gtmRequests } = await openFakePage(browser, { port, apiBase, mobile });
+    await page.goto(url, { waitUntil: 'load' });
+    await page.waitForTimeout(400);
+    const before = gtmRequests.length;
+    await touch(page);
+    await page
+      .waitForFunction(
+        () => /gtm\.js/.test(JSON.stringify((window.__dlLog || []).map((e) => e.event))),
+        null,
+        { timeout: 2000 },
+      )
+      .catch(() => {});
+    await page.waitForTimeout(300);
+    await page.keyboard.press('Tab');
+    await page.waitForTimeout(300);
+    check(
+      `${label}: GTM loads on the first touch, once`,
+      before === 0 && gtmRequests.length === 1,
+      `${before} requests before, ${gtmRequests.length} after`,
+    );
+    await context.close();
+  }
+
+  // (c) a conversion with GTM still loading: the lead is sent and thanked at once, the event waits <= 1.5 s
+  {
+    const label = 'gtm-slow';
+    // reduced motion: the scene draws one frame, so a slow software-GL frame cannot delay the 1.5 s timer
+    const { context, page, posts } = await openFakePage(browser, {
+      port,
+      apiBase,
+      gtmDelayMs: 8000,
+      reducedMotion: true,
+    });
+    await page.goto(url, { waitUntil: 'load' });
+    await page.fill('#f-nome', PERSON.name);
+    await page.click('#f-tel');
+    await page.keyboard.type(PERSON.phone);
+    await page.selectOption('#f-int', PERSON.answer);
+    await page.check('#f-consent');
+    await page.waitForFunction(() => !document.getElementById('f-send').disabled, null, {
+      timeout: 5000,
+    });
+    const clickedAt = Date.now();
+    await page.click('#f-send');
+    await page.waitForFunction(() => !document.getElementById('thanks').hidden, null, {
+      timeout: 5000,
+    });
+    const thanksAfter = Date.now() - clickedAt;
+    const atThanks = { posts: posts.length, events: await loggedEvents(page) };
+    await page.waitForFunction(() => window.__dlLog.some((e) => e.event === 'lead_submit'), null, {
+      polling: 25,
+      timeout: 4000,
+    });
+    const leadAfter = Date.now() - clickedAt;
+    const log = await page.evaluate(() => window.__dlLog);
+    check(
+      `${label}: the lead is sent and thanked without waiting for GTM`,
+      atThanks.posts === 1 && thanksAfter < 1000,
+      `${atThanks.posts} POST, thank-you after ${thanksAfter} ms`,
+    );
+    check(
+      `${label}: lead_submit waits for GTM, 1.5 s at most, then goes to the dataLayer (queued for GTM)`,
+      !atThanks.events.includes('lead_submit') &&
+        leadAfter >= 1400 &&
+        leadAfter < 2400 &&
+        log.find((e) => e.event === 'lead_submit')?.gtmRunning === false,
+      `thank-you after ${thanksAfter} ms, lead_submit after ${leadAfter} ms, queue at the thank-you [${atThanks.events}]`,
+    );
+    await context.close();
+  }
+}
+
+/**
+ * The server events (sendBeacon to `/events`, mock only): the funnel of the run
+ * in order, each refused send with why, the thank-you's WhatsApp click (its
+ * navigation held back: wa.me is outside), one visit id, the UTMs and nothing
+ * of the person.
+ */
+async function checkServerEvents(page, { label, events, errorSteps: expectedSteps, person }) {
+  await page.evaluate(() => {
+    document.addEventListener('click', (e) => e.preventDefault(), { capture: true, once: true });
+    document.querySelector('#thanks [data-wa]')?.click();
+  });
+  // beacons are queued by the browser and reach the mock a moment later
+  for (let i = 0; i < 30 && !events.some((e) => e.event?.event === 'whatsapp_click'); i++) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const names = events.map((e) => e.event?.event);
+  const count = (name) => names.filter((n) => n === name).length;
+  const inOrder = (...expected) => {
+    let at = 0;
+    for (const name of names) if (name === expected[at]) at++;
+    return at === expected.length;
+  };
+  check(
+    `${label}: server events in order: page_view, form_start, submit_attempt, submit_ok, whatsapp_click; form_view once before the send`,
+    inOrder('page_view', 'form_start', 'submit_attempt', 'submit_ok', 'whatsapp_click') &&
+      count('page_view') === 1 &&
+      count('form_start') === 1 &&
+      count('form_view') === 1 &&
+      names.indexOf('form_view') < names.indexOf('submit_attempt'),
+    names.join(' '),
+  );
+  const errorSteps = events
+    .filter((e) => e.event?.event === 'submit_error')
+    .map((e) => e.event.step);
+  check(
+    `${label}: each refused send counted with why (${expectedSteps.join(', ') || 'none'}), one attempt per click`,
+    JSON.stringify(errorSteps) === JSON.stringify(expectedSteps) &&
+      count('submit_attempt') === expectedSteps.length + 1 &&
+      count('submit_ok') === 1,
+    `${errorSteps.join(' ')} | ${count('submit_attempt')} attempts`,
+  );
+  const thanksClick = events.find((e) => e.event?.event === 'whatsapp_click');
+  const dataLayerClicks = await page.evaluate(
+    () => (window.dataLayer || []).filter((e) => e && e.event === 'whatsapp_click').length,
+  );
+  check(
+    `${label}: the thank-you's WhatsApp click counted on the server (step thanks) and in the dataLayer`,
+    thanksClick?.event.step === 'thanks' && dataLayerClicks === 1,
+    `${JSON.stringify(thanksClick?.event)} | dataLayer ${dataLayerClicks}`,
+  );
+  const visits = [...new Set(events.map((e) => e.event?.visit))];
+  const text = JSON.stringify(events);
+  check(
+    `${label}: server events are text/plain POST beacons with one visit id, the UTMs and nothing of the person`,
+    events.length > 0 &&
+      events.every((e) => e.method === 'POST' && e.contentType.startsWith('text/plain')) &&
+      visits.length === 1 &&
+      /^[a-z0-9]{8,32}$/.test(visits[0] ?? '') &&
+      events.every(
+        (e) =>
+          e.event.utm_source === 'e2e' &&
+          e.event.utm_campaign === 'lancamento' &&
+          e.event.utm_id === '9' &&
+          !('gclid' in e.event),
+      ) &&
+      !text.includes(person.name) &&
+      !text.includes(person.phone) &&
+      !text.includes(person.email),
+    `${events.length} events, visit ${visits.join(',')}`,
+  );
 }
 
 // ---------------------------------------------------------------- static checks of dist
@@ -913,15 +1288,14 @@ function staticChecks() {
     files.some((file) => file.endsWith(`og/${SLUG}.png`)),
   );
   const html = readFileSync(join(DIST, SLUG, 'index.html'), 'utf8');
-  const preload = (html.match(/<link\b[^>]*>/g) ?? []).find((tag) => /rel="preload"/.test(tag));
+  // the icon font is five glyphs (about 1 kB), embedded in the CSS like the text fonts: no file, no preload
+  const preloads = (html.match(/<link\b[^>]*>/g) ?? []).filter((tag) => /rel="preload"/.test(tag));
   check(
-    'dist: page has the preload for the icon font',
-    Boolean(preload) &&
-      /href="\/assets\/fa-brands-400-[^"]+\.woff2"/.test(preload) &&
-      /as="font"/.test(preload) &&
-      /type="font\/woff2"/.test(preload) &&
-      /\bcrossorigin\b/.test(preload),
-    preload?.replace(/\s+/g, ' '),
+    'dist: the icon font is embedded in the CSS, with no file of its own and no preload',
+    /@font-face\{font-family:"?FA Brands"?;src:url\(data:font\/woff2;base64,/.test(css) &&
+      !files.some((file) => /fa-brands/.test(file)) &&
+      preloads.length === 0,
+    preloads.map((tag) => tag.replace(/\s+/g, ' ')).join(' '),
   );
   check(
     'dist: no preview leftovers',
@@ -1035,7 +1409,15 @@ try {
     }
   } else {
     await runViewport(browser, { label: 'desktop-1440', ...DESKTOP, port, apiBase });
+    await gtmChecks(browser, { port, apiBase });
     await runViewport(browser, { label: 'phone-390', ...PHONE, port, apiBase });
+    await runViewport(browser, {
+      label: 'reduced-motion-390',
+      ...PHONE,
+      port,
+      apiBase,
+      reducedMotion: true,
+    });
     await runViewport(browser, {
       label: 'errors-1440',
       ...DESKTOP,

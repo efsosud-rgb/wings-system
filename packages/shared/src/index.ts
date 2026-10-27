@@ -56,4 +56,6 @@ export * from './studio-agent.js';
 export * from './meetings.js';
 export * from './whatsapp.js';
 export * from './whatsapp-art.js';
+export * from './whatsapp-numbers.js';
+export * from './whatsapp-templates.js';
 export * from './sofia.js';
