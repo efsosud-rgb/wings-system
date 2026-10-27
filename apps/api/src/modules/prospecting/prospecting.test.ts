@@ -713,6 +713,27 @@ describe('ficha, enrichment and the lead', () => {
     );
     expect(google).toEqual([]);
   });
+
+  it('nothing from Google in any table of the database, whatever its name', async () => {
+    const tables = await db.execute<{ table_name: string }>(sql`
+      select table_name from information_schema.tables
+      where table_schema = 'public' and table_type = 'BASE TABLE'`);
+    expect(tables.rows.length).toBeGreaterThan(50);
+    let dump = '';
+    for (const { table_name } of tables.rows) {
+      const rows = await db.execute<{ all: string | null }>(
+        sql`select string_agg(row_to_json(t)::text, ' ') as all from ${sql.identifier(table_name)} t`,
+      );
+      dump += rows.rows[0]?.all ?? '';
+    }
+    // Phones are left out: the fixtures above hold our own lead and client with a Google phone.
+    for (const place of P) {
+      expect(dump).not.toContain(place.displayName!.text);
+      expect(dump).not.toContain(place.formattedAddress!);
+      expect(dump).not.toContain(place.websiteUri!);
+      expect(dump).not.toContain(place.googleMapsUri!);
+    }
+  });
 });
 
 describe('WhatsApp needs the opt-in for a prospecting lead', () => {
