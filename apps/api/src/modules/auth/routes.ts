@@ -6,6 +6,7 @@ import {
 } from '@wings/shared';
 import { z } from 'zod';
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import { getEmployee } from '../employees/service.js';
 import { requestPasswordReset, sendInvite, setPasswordWithToken } from './credentials-service.js';
 import { login, logout } from './service.js';
 
@@ -186,6 +187,26 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       const parsed = z.object({ employeeId: z.string().uuid() }).safeParse(request.body);
       if (!parsed.success) {
         return reply.status(400).send({ error: 'invalid_request', message: 'Dados inválidos' });
+      }
+
+      // Same check as POST /employees/:id/invite: the target must be in the
+      // caller's scope and in a sector where they may create employees. The
+      // route permission alone passes vacuously for a sector manager.
+      const target = await getEmployee(
+        app.wings.db,
+        request.session.actor,
+        app.wings.cpfCrypto,
+        parsed.data.employeeId,
+      );
+      if (!target.ok) {
+        return reply
+          .status(404)
+          .send({ error: 'not_found', message: 'Funcionário não encontrado ou inativo' });
+      }
+      if (!app.can(request, 'employees.create', { sector: target.value.sector })) {
+        return reply
+          .status(403)
+          .send({ error: 'forbidden', message: 'Você não tem permissão para esta ação.' });
       }
 
       const result = await sendInvite(app.wings.db, app.wings.mailer, {
