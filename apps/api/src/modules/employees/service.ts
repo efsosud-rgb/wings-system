@@ -391,7 +391,7 @@ export async function updateEmployee(
   // Switching someone off or back on is its own permission, not part of editing.
   if (
     input.status !== undefined &&
-    statusChangeDenial(actor, { sector: currentSector }, current.status, input.status)
+    statusChangeDenial(actor, { sector: currentSector, currentRole }, current.status, input.status)
   ) {
     return { ok: false, reason: 'deactivate_forbidden' };
   }
