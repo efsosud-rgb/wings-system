@@ -2,6 +2,8 @@ import {
   instagramUsernameOf,
   LEAD_PIPELINES,
   normalizeBrazilianPhone,
+  SITE_FORM_REVENUE_OPTIONS,
+  SITE_FORM_REVENUE_QUESTION,
   siteFormCopyOf,
   siteFormSpecSchema,
   siteFormSubmitSchema,
@@ -195,7 +197,7 @@ export type SiteFormAnswers =
       ok: true;
       /** The Instagram to keep: only the username when the page requires it, else as typed. */
       instagram: string | undefined;
-      /** The multiple-choice answer under the question's text, as the option's text. */
+      /** The multiple-choice answer and the revenue band, each under its question's text, as the option's text. */
       formAnswers: Record<string, string> | null;
       /** The chosen option's code, with the funnel it leads to when it names one. */
       choice: SiteFormQualifierValue | null;
@@ -228,10 +230,15 @@ export function siteFormAnswersOf(
   if (required.has('qualifierAnswer') && form?.qualifier && !choice) {
     return refuse(`Escolha uma opção em "${form.qualifier.question}".`);
   }
+  const formAnswers: Record<string, string> = {};
+  if (choice && form?.qualifier) formAnswers[form.qualifier.question] = choice.option;
+  if (body.monthlyRevenue) {
+    formAnswers[SITE_FORM_REVENUE_QUESTION] = SITE_FORM_REVENUE_OPTIONS[body.monthlyRevenue];
+  }
   return {
     ok: true,
     instagram,
-    formAnswers: choice && form?.qualifier ? { [form.qualifier.question]: choice.option } : null,
+    formAnswers: Object.keys(formAnswers).length ? formAnswers : null,
     choice: choice?.code ?? null,
   };
 }

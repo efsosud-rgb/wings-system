@@ -651,6 +651,33 @@ describe('"Fale com a Wings" (the page the seed makes)', () => {
     expect(event?.detail).toMatchObject({ qualifier: 'formatacao', pipeline: 'formatacao' });
   });
 
+  it('the diagnosis page (27/10): keeps the revenue band as its text, beside the answer', async () => {
+    const turnstile = captcha();
+    const app = await makeApp(keys, { captchaFetch: turnstile.fetchImpl });
+    const response = await post(
+      app,
+      fale({ email: undefined, phone: '(21) 98888-0011', monthlyRevenue: '100k-300k' }),
+    );
+    expect(response.statusCode).toBe(200);
+    const [lead] = await db.select().from(leads).where(eq(leads.phone, '5521988880011'));
+    expect(lead?.formAnswers).toEqual({
+      [QUESTION]: 'Transformar meu negócio em franquia',
+      'Faturamento mensal da empresa': 'De R$ 100 mil a R$ 300 mil',
+    });
+  });
+
+  it('refuses a revenue band that is not one of the options, before the captcha', async () => {
+    const turnstile = captcha();
+    const app = await makeApp(keys, { captchaFetch: turnstile.fetchImpl });
+    const response = await post(app, fale({ monthlyRevenue: 'Até R$ 50 mil' }));
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      error: 'invalid_request',
+      message: 'Escolha uma opção em "Faturamento mensal da empresa".',
+    });
+    expect(turnstile.calls).toHaveLength(0);
+  });
+
   it('keeps the username, the option text and the code; Formatação for the page', async () => {
     const turnstile = captcha();
     const app = await makeApp(keys, { captchaFetch: turnstile.fetchImpl });
