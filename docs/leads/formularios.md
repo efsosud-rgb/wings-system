@@ -70,6 +70,12 @@ a página do site tem (o formulário da Meta não):
   aprovada, palavra por palavra, e um teste confere que a página e o seed dizem o mesmo. O seed só
   insere a regra quando ela falta: o staging e a produção recebem a regra, com a frase, no primeiro
   deploy depois desta mudança.
+- **Faturamento mensal** (27/10/2026): fora do `site_form_spec`, o `POST` aceita `monthlyRevenue`,
+  um dos seis códigos de `SITE_FORM_REVENUE_VALUES` (`packages/shared`), e o lead guarda o texto
+  da opção em "Respostas do formulário" sob "Faturamento mensal da empresa". Um código fora da
+  lista recebe 400 antes do Turnstile. A API não o exige (página antiga ou em cache continua
+  enviando); quem exige é a página "Fale com a Wings"
+  ([../landing/fale-com-a-wings.md](../landing/fale-com-a-wings.md)).
 - **Fora do construtor de campanhas**: uma página com `qualifierValues` ou `requiredFields` no
   formulário em vigor é de `apps/landing`. Ela não aparece na lista de páginas do construtor
   (`GET /ads/lead-forms/site-pages`), e propor ou aprovar uma alteração nela responde 409
