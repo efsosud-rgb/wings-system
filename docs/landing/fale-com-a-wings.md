@@ -34,9 +34,10 @@ Turnstile de verdade; o envio vai para a API; o `robots` passou a vir do ambient
    `companyName`, `instagram` (usuário) e `siteUrl` (com `https://`) vão só quando preenchidos.
 4. A regra `fale-com-a-wings` vem do seed da API: cliente Wings Company, funil Formatação, formulário do site ligado,
    com as perguntas e os códigos acima e `requiredFields: ['qualifierAnswer']` (a versão curta; a API recusa com 400 um
-   envio sem a resposta). "Ainda não sei" deixa o lead **sem funil**, e quem decide é a triagem do Jev
-   ([../leads/triagem-jev.md](../leads/triagem-jev.md)), só com a triagem ligada; com ela desligada, o lead fica em
-   Formatação. As outras opções seguem o funil da regra. A frase do aceite ao lado da caixa é a `consentText` da regra,
+   envio sem a resposta). Toda resposta segue o funil da regra, Formatação: "Ainda não sei" também (Eric, 26/10; até
+   então deixava o lead sem funil para a triagem do Jev, [../leads/triagem-jev.md](../leads/triagem-jev.md), e o lead
+   775262e5 ficou três dias parado nela). A regra que o staging e a produção já têm, com `pipeline: null` nessa opção,
+   não precisa mudar: a API lê `null` como "o funil da página". A frase do aceite ao lado da caixa é a `consentText` da regra,
    palavra por palavra, e é a que o lead guarda (um teste da API confere a página contra o seed). O construtor de
    campanhas não lista nem altera esta página (409 `landing_page_spec`). O resto (dono pelo rodízio, avisos, Turnstile
    conferido no servidor, limite por IP) é o formulário do site de sempre
@@ -77,7 +78,7 @@ A página `/lp/fale-com-a-wings` do Wings System lê a mesma lista e deixa de pe
   Quem está no CRM só com e-mail (veio do RD sem telefone) e envia a página curta vira um segundo lead.
 - **Rodízio e funil:** iguais. O funil vem só da resposta (`answerPipelineOf`) e o rodízio só do funil
   (`nextInRotation`); nenhum dos dois lê e-mail, empresa ou Instagram. Vale a regra de hoje: nesta página, sem marca,
-  "Expandir minha rede" fica em Formatação, e "Ainda não sei" vai à triagem do Jev só com ela ligada.
+  "Expandir minha rede" e "Ainda não sei" ficam em Formatação (desde 26/10; antes "Ainda não sei" ia à triagem do Jev).
 - **RD Station:** o lead chega ao CRM pelo POST da API, com ou sem e-mail. O script do RD que o GTM carrega manda o
   formulário a `form_integrations`, que identifica o contato pelo e-mail: sem e-mail, o RD não cria a conversão (nem
   ecoa o lead pelo webhook); com o e-mail preenchido no bloco opcional, tudo como hoje. A cópia da API ao RD já
@@ -207,8 +208,8 @@ API (`api-staging` e `api-prod`, com `wings-env`):
    Wings com o código do link.
 5. No CRM Vendas → Negociações: a negociação nova da Wings Company no funil Formatação, origem formulário do site, com
    Instagram, empresa, site, a resposta "O que você procura?" e as UTMs do passo 1; o dono recebe o aviso de lead novo.
-6. Repetir com "Ainda não sei": a negociação nasce sem funil e a triagem do Jev decide (com a triagem ligada no
-   staging; desligada, a negociação nasce em Formatação).
+6. Repetir com "Ainda não sei": a negociação nasce em Formatação também, pelo rodízio, com ou sem a triagem do Jev
+   ligada (Eric, 26/10).
 7. Abrir `https://lpfranquias-staging.wingssystem.online/`: vai para `wingscompany.com.br`; `/fale-com-a-wings` mostra a
    página; `/qualquer-coisa` dá 404.
 

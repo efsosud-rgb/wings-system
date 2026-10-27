@@ -224,9 +224,10 @@ export const SITE_FORM_CONSENT_TEXT_MAX = 300;
 
 /**
  * One option of the question with the code the page sends for it. The lead
- * keeps the option's text; `pipeline` sends it to another funnel: absent is
- * the page's own funnel, a funnel is that one, null is none (the Jev triage
- * decides, docs/leads/triagem-jev.md).
+ * keeps the option's text; `pipeline` sends it to another funnel: a funnel is
+ * that one, absent or null is the page's own (Eric, 26/10: an "Ainda não sei"
+ * on a Formatação page is a Formatação lead; the Jev triage only reads a page
+ * with no funnel, docs/leads/triagem-jev.md).
  */
 export const siteFormQualifierValueSchema = z.object({
   value: z
