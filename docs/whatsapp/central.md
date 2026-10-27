@@ -242,5 +242,5 @@ ALTER TABLE "wa_conversations" DROP COLUMN "assignee_employee_id", DROP COLUMN "
   DROP COLUMN "version", DROP COLUMN "replying_employee_id", DROP COLUMN "replying_until",
   DROP COLUMN "sofia_paused";
 ALTER TABLE "whatsapp_settings" DROP COLUMN "assignment_mode";
-DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1793040315362;
+DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1793110449955;
 ```
