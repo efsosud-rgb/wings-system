@@ -113,10 +113,13 @@ confere que é igual à do `@wings/shared`.
 
 **WhatsApp.** Os botões "Falar no WhatsApp" e "Chamar no WhatsApp" viram links de verdade (`target=_blank`,
 `rel=noopener`) assim que o GET responde com o link rastreado "Site" da Wings Company. A página não tem número nenhum:
-sem link, o clique leva ao formulário e põe o cursor no nome, e o botão do obrigado não aparece. O link do GET leva só o
-código do link (ainda não há lead); o do POST leva também a referência do lead, no formato `<código> <ref>` (6
-caracteres cada, gerada e guardada pela API em `leads.form_ref`), para a Sofia saber de qual formulário a conversa
-veio. A página nunca gera uma referência: usa o link que a API devolve. O e2e confere os dois formatos e, contra a API
+sem link, o clique leva ao formulário e põe o cursor no nome, e o botão do obrigado não aparece. O texto pronto é uma
+frase com o código entre parênteses no fim (`siteLinkText`, `packages/shared`): "Olá! Vim pelo site da Wings e quero
+saber como formatar a minha franquia. (J9K8WF)". Até 22/10 era só o código, e ninguém mandava. O link do GET leva só o
+código do link (ainda não há lead); o do POST leva também a referência do lead dentro dos parênteses, `(<código> <ref>)`
+(6 caracteres cada, gerada e guardada pela API em `leads.form_ref`), para a Sofia saber de qual formulário a conversa
+veio. O CRM acha o código na primeira palavra (formato antigo e das marcas) ou, senão, nos últimos parênteses da
+mensagem. A página nunca gera uma referência: usa o link que a API devolve. O e2e confere os dois formatos e, contra a API
 de teste, que a referência do link é a que o lead guardou.
 
 ## Endereços (hosts e slugs)

@@ -595,8 +595,12 @@ describe('"Fale com a Wings" (the page the seed makes)', () => {
       { clientId: WINGS_CLIENT_ID, channel: 'instagram', code: 'FALE33', phone: '5521999470288' },
     ]);
     const info = await app.inject({ method: 'GET', url: `/public/site-forms/${SLUG}` });
-    // Wings itself: the code alone in the text, no brand sentence.
-    expect(info.json<SiteFormInfo>().whatsappUrl).toBe('https://wa.me/5521999470288?text=FALE22');
+    // Wings itself: a sentence a person would send, the code in brackets at the end.
+    const url = new URL(info.json<SiteFormInfo>().whatsappUrl!);
+    expect(url.origin + url.pathname).toBe('https://wa.me/5521999470288');
+    expect(url.searchParams.get('text')).toBe(
+      'Olá! Vim pelo site da Wings e quero saber como formatar a minha franquia. (FALE22)',
+    );
   });
 
   it('refuses what the page requires and the form left out, before the captcha', async () => {
