@@ -17,6 +17,7 @@ import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
 import {
   crmMeetings,
+  crmStages,
   crmNotifications,
   leadEvents,
   leadNotes,
@@ -584,6 +585,22 @@ describe("a new or imported lead never reaches into somebody else's", () => {
     expect(refused.statusCode).toBe(201);
     const row = await db.query.leads.findFirst({ where: eq(leads.phone, '5521977770009') });
     expect(row?.ownerEmployeeId).toBe(sellerA.id);
+  });
+
+  it("a seller's import adds no stage to the funnel (crm.manage), and says why (audit A5)", async () => {
+    const stage = 'Etapa que o vendedor inventou';
+    const run = await call(sellerA, 'POST', '/leads/import', {
+      csv: `Nome;Telefone;Etapa\nLinha;21977770011;${stage}`,
+      mapping: { Nome: 'name', Telefone: 'phone', Etapa: 'stage' },
+      pipeline: 'expansao',
+    });
+    expect(run.statusCode).toBe(201);
+    const report = run.json<{ created: number; errors: { message: string }[] }>();
+    expect(report.created).toBe(1);
+    expect(report.errors.map((e) => e.message).join()).toContain('não existe neste funil');
+    expect(
+      await db.query.crmStages.findFirst({ where: eq(crmStages.name, stage) }),
+    ).toBeUndefined();
   });
 });
 

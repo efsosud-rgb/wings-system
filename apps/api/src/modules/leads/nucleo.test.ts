@@ -23,6 +23,7 @@ import { createEmployee, makeCnpj, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../te
 import { parseMoneyCents, suggestMapping } from './csv.js';
 import type { LoadedLead } from './service.js';
 import { upsertLead } from './service.js';
+import { ensureStage } from './crm.js';
 
 let harness: TestDatabase;
 let db: Database;
@@ -564,6 +565,8 @@ describe('CSV import and export', () => {
   });
 
   it('imports: creates, joins the existing, skips the bad rows and reports by line; the seller owns theirs', async () => {
+    // The funnel's stages are crm.manage's (audit A5): a manager made "Reunião" before the import.
+    await ensureStage(db, { pipeline: 'expansao', name: 'Reunião' });
     const before = await db.$count(leads);
     const run = await app.inject({
       method: 'POST',
