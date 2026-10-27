@@ -4,6 +4,8 @@ Plano escrito em 26/10/2026, só de leitura: nenhum código, migração, banco, 
 
 Nenhum dado de lead ou de pessoa aparece neste documento; leads, quando citados, só por id.
 
+> **Atualização de 27/10.** A pilha do WhatsApp está pronta para merge, um por vez, sobre a `develop` com o #26 (0096): **#9 (0097) → #10 → #12 → #41 (0098) → #38 (0099) → #39 (0100)**. O #41 refaz o #34 (cherry-pick dos 4 commits próprios, sem a cópia antiga do #26); o #34 fica aberto, marcado como substituído. Cada um foi atualizado por merge, sem force push, e a migração foi gerada de novo com o mesmo SQL. Tabela nova em 2.5; as seções 2.4 e 2.6 descrevem o estado de 26/10.
+>
 > **Atualização de 26/10 (noite).**
 >
 > - O #23 entrou na `develop` (`3bcd39e`). O `format:check` barra o CI (220 arquivos fora do Prettier); o PR #32 resolve movendo-o para o fim, sem bloquear. A passada do Prettier fica para depois dos PRs aprovados (2.8).
@@ -142,22 +144,26 @@ Para comparar: a 0095 na `develop` tem `when` de 20/10 18:43.
 
 Regra: **o número segue a ordem de entrada** e a data (`when`) é a do momento em que a migração é gerada, logo cresce sozinha desde que cada PR gere **depois** de o anterior entrar. Nenhum número se repete.
 
-| Ordem | PR                          | Hoje                                      | Número final                  | `when` do journal                                                   |
-| ----- | --------------------------- | ----------------------------------------- | ----------------------------- | ------------------------------------------------------------------- |
-| 1     | #26                         | `0096_wa_template_fields`                 | **0096** (não muda)           | **mantém** 26/10 15:31 (maior que a 0095; é o único que mantém)     |
-| 2     | #9 (#10 e #12 sem migração) | `0096_wa_message_files`                   | **0097**_wa_message_files     | gerar de novo (hoje 20/10 é menor que 15:31 do #26)                 |
-| 3     | #34                         | `0098_wa_central` (+ 0096 e 0097 antigas) | **0098**_wa_central           | gerar de novo (o "pai" passa a ser a 0097 nova); a 0097 antiga some |
-| 4     | fase 2 da Central           | provisória `0101`                         | **0099**                      | gerar ao entrar                                                     |
-| 5     | #31                         | `0096_sofia_ai_runs_tokens`               | **0100**_sofia_ai_runs_tokens | gerar de novo                                                       |
-| 6     | #22                         | `0096_prospecting`                        | **0101**_prospecting          | gerar de novo                                                       |
-| 7     | #25                         | `0097_produtividade_dw`                   | **0102**_produtividade_dw     | gerar de novo; antes do #27                                         |
-| 8     | #27                         | `0098_cameras_dw`                         | **0103**_cameras_dw           | gerar de novo; depois do #25                                        |
+Atualizada em 27/10, depois de a pilha do WhatsApp ser renumerada sobre a `develop` com o #26 (aprovado pelo Eric em 27/10). As linhas 1 a 5 já estão nas branches; as de baixo são projeção.
 
-Sem migração (não entram na conta): #32, #24, #28, #19, #20, #33, #10, #12, #11, #13, #16, #29 e o hotfix para a `main`.
+| Ordem | PR                              | Migração                                       | `when` do journal               |
+| ----- | ------------------------------- | ---------------------------------------------- | ------------------------------- |
+| 1     | #26 (já na `develop`)           | **0096**_wa_template_fields                    | 1793028688633 (26/10 15:31 UTC) |
+| 2     | #9 (#10 e #12 sem migração)     | **0097**_wa_message_files (gerada de novo)     | 1793106886238 (27/10 13:14 UTC) |
+| 3     | #41 (refaz e substitui o #34)   | **0098**_wa_central (gerada de novo)           | 1793109586555 (27/10 13:59 UTC) |
+| 4     | #38 (fase 2a, empilhado no #41) | **0099**_wa_attendance (era a 0101 provisória) | 1793110449955 (27/10 14:14 UTC) |
+| 5     | #39 (fase 2b, empilhado no #38) | **0100**_wa_reliability (era a 0102)           | 1793111247128 (27/10 14:27 UTC) |
+| 6     | #31                             | `0096_sofia_ai_runs_tokens` → **0101**         | gerar de novo depois do #39     |
+| 7     | #22 (o #36 vem empilhado nele)  | `0096_prospecting` → **0102**                  | gerar de novo                   |
+| 8     | #25                             | `0097_produtividade_dw` → **0103**             | gerar de novo; antes do #27     |
+| 9     | #27                             | `0098_cameras_dw` → **0104**                   | gerar de novo; depois do #25    |
+| 10    | #37                             | `0103_ads_intelligence` → **0105**             | gerar de novo                   |
 
-- **Se a fase 2 não estiver pronta** quando chegar a vez dela, o #31 pega o 0099 e todos os de baixo descem um; a fase 2 pega o próximo livre ao entrar. Os números da tabela são uma projeção, a regra é a de cima.
-- **Se o Eric preferir os quatro independentes antes do bloco WhatsApp** (ver 2.7): #31 vira 0097, #22 0098, #25 0099, #27 0100, #9 0101, #34 0102, fase 2 0103. É válido, mas faz o #34 e a fase 2 refazerem a cadeia mais tarde e com mais arquivos.
-- O **#26 não precisa gerar de novo** porque o Fable já o renumerou com a data original (15:31), maior que a da 0095. Todos os demais precisam gerar **depois** de o anterior entrar, senão a data nasce menor.
+Sem migração (não entram na conta): #32, #24, #28, #19, #20, #33, #10, #12, #11, #13, #16, #29, #40 e o hotfix para a `main`.
+
+- O SQL de cada migração renumerada saiu **idêntico** ao original; mudam o número, o "pai" do instantâneo e a data. Os `when` acima crescem na ordem de entrada (`journal.test.ts`).
+- Os números de 6 a 10 são projeção: cada um gera a migração **depois** de o anterior entrar, senão a data nasce menor. Se um deles sair da fila, os de baixo sobem um.
+- Se a pilha do WhatsApp não entrar inteira antes do #31, quem ficar para trás gera de novo com o próximo número livre e a cadeia dos empilhados (#41, #38, #39) é refeita.
 
 ### 2.6 Quem renumera o quê, e quando
 
@@ -191,8 +197,8 @@ Um PR por vez, esperando o CI e o deploy de staging do anterior ("um deploy por 
 | ------ | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 0      | #32 → #24 → #28 → #19 → #20 → #26 | **em andamento, aprovado pelo Eric** (Fable). #26 já renumerado para 0096. O #23 já entrou. O teste `landing-cors` deve ser o primeiro vermelho; o #24 traz a correção. |
 | 1      | #33                               | sem migração, só `apps/landing`; qualquer hora depois do lote 0. Rascunhos #11, #13, #16 só se o Eric aprovar.                                                          |
-| 2      | #9 → #10 → #12 → #34 → fase 2     | **bloco WhatsApp, na ordem do autor**, logo depois do #26. Renumeração e refazer do #34 em 2.6. A fase 2 entra assim que existir e estiver pronta.                      |
-| 3      | #31 → #22 → #25 → #27             | migrações independentes, um por vez, cada uma gerada de novo depois do anterior. #25 antes do #27 é obrigatório; #31 só com o OK do Eric.                               |
+| 2      | #9 → #10 → #12 → #41 → #38 → #39  | **bloco WhatsApp, na ordem do autor**, logo depois do #26. Renumeração e refazer do #34 em 2.6. A fase 2 entra assim que existir e estiver pronta.                      |
+| 3      | #31 → #22 → #25 → #27 → #37       | migrações independentes, um por vez, cada uma gerada de novo depois do anterior. #25 antes do #27 é obrigatório; #31 só com o OK do Eric.                               |
 | 4      | passada do Prettier               | **depois do último PR aprovado entrar** (2.8). PR único, só formatação, e no mesmo PR o `format:check` volta a bloquear.                                                |
 | fora   | #29                               | muda as regras que as IAs seguem (`AGENTS.md`, `CLAUDE.md`). Só entra se o Eric ler e aprovar. Não está no caminho da produção.                                         |
 | `main` | hotfix do #28                     | vai direto para a `main` (2.9), fora desta fila.                                                                                                                        |
