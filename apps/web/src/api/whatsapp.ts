@@ -313,6 +313,13 @@ export function useRefreshWhatsAppTemplates(numberId: string | null = null) {
   });
 }
 
+function afterSend(queryClient: ReturnType<typeof useQueryClient>, thread: WhatsAppThread) {
+  void queryClient.invalidateQueries({ queryKey: threadKey(thread) });
+  void queryClient.invalidateQueries({ queryKey: ['whatsapp', 'conversations'] });
+  // A person writing takes the conversation from Sofia: her screen shows it at once.
+  void queryClient.invalidateQueries({ queryKey: ['sofia'] });
+}
+
 /** CRM Vendas → WhatsApp → Modelos (docs/whatsapp/modelos.md): every template, read again from Meta. */
 export function useManagedTemplates() {
   return useQuery({
@@ -344,13 +351,6 @@ export const useSaveTemplateFields = () =>
   useTemplateWrite(({ id, fields }: { id: string; fields: WaFieldSpec[] }) =>
     api.put(`/whatsapp/templates/manage/${id}/fields`, { fields }),
   );
-
-function afterSend(queryClient: ReturnType<typeof useQueryClient>, thread: WhatsAppThread) {
-  void queryClient.invalidateQueries({ queryKey: threadKey(thread) });
-  void queryClient.invalidateQueries({ queryKey: ['whatsapp', 'conversations'] });
-  // A person writing takes the conversation from Sofia: her screen shows it at once.
-  void queryClient.invalidateQueries({ queryKey: ['sofia'] });
-}
 
 function useSend<T>(thread: WhatsAppThread, kind: 'text' | 'template') {
   const queryClient = useQueryClient();

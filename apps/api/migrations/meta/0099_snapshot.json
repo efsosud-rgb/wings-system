@@ -1,6 +1,6 @@
 {
-  "id": "cce4f49a-ccc1-4f95-b545-f6379d637771",
-  "prevId": "b9ad4687-b601-45d4-80ee-f4a6602d3212",
+  "id": "f91c917a-379a-4ff4-90e4-415d627f4dbd",
+  "prevId": "00efb951-d938-4e7e-bb5f-8bfe93aa75a9",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -19593,144 +19593,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.wa_number_templates": {
-      "name": "wa_number_templates",
-      "schema": "",
-      "columns": {
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'00000000-0000-0000-0000-000000000001'"
-        },
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "number_id": {
-          "name": "number_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "meta_id": {
-          "name": "meta_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "name": {
-          "name": "name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "language": {
-          "name": "language",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "category": {
-          "name": "category",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "rejected_reason": {
-          "name": "rejected_reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "components": {
-          "name": "components",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "synced_at": {
-          "name": "synced_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "wa_number_templates_name_lang_uq": {
-          "name": "wa_number_templates_name_lang_uq",
-          "columns": [
-            {
-              "expression": "number_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "name",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "language",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "wa_number_templates_tenant_id_tenants_id_fk": {
-          "name": "wa_number_templates_tenant_id_tenants_id_fk",
-          "tableFrom": "wa_number_templates",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "wa_number_templates_number_id_wa_numbers_id_fk": {
-          "name": "wa_number_templates_number_id_wa_numbers_id_fk",
-          "tableFrom": "wa_number_templates",
-          "tableTo": "wa_numbers",
-          "columnsFrom": [
-            "number_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.wa_numbers": {
       "name": "wa_numbers",
       "schema": "",
@@ -19900,24 +19762,6 @@
         "history_progress": {
           "name": "history_progress",
           "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "connecting_until": {
-          "name": "connecting_until",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "token_renew_tried_at": {
-          "name": "token_renew_tried_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "token_renew_error": {
-          "name": "token_renew_error",
-          "type": "text",
           "primaryKey": false,
           "notNull": false
         },

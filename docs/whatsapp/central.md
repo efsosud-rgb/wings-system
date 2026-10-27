@@ -101,7 +101,7 @@ liberar o app (Tech Provider e App Review, ainda não pedidos).
   `numberId`), `whatsapp.conversation_linked`, `whatsapp.webhook_event_retried`.
 - `wa_numbers`, `wa_conversations`, `wa_messages` e `wa_webhook_events` continuam sem GRANT ao `wings_ro`.
 
-### Atendimento: quem responde cada conversa (fase 2, migração 0101)
+### Atendimento: quem responde cada conversa (fase 2, migração 0099)
 
 - **Quem está com a conversa:** a pessoa atribuída; sem atribuição, o dono da negociação (número oficial) ou o dono
   do número (número de trabalho); sem nenhum, ela espera na **fila** do departamento (`wa_conversations.queue`) ou
@@ -206,9 +206,8 @@ Por número:
 
 ## Ordem de merge e rollback
 
-- Ordem exigida: **#9 → #10 → #12 → #26 → esta**. A 0098 vem depois da 0097 do #26 (`when` crescente); o
-  `0097_snapshot.json` foi encadeado depois do `0096` (#9) para o drizzle-kit gerar de novo. O #25 também tem uma
-  0097: quem entrar por último renumera.
+- Ordem exigida: **#26 (0096, já na `develop`) → #9 (0097) → #10 → #12 → esta (0098)**, com `when` crescente
+  (`journal.test.ts`). Quem entrar depois renumera para o próximo número livre.
 - **Rollback do código:** reverter o merge. **Rollback do banco** (só se nenhum número tiver sido conectado; com
   conversas de número, apague antes as mensagens e conversas com `number_id`):
 
@@ -230,7 +229,7 @@ CREATE UNIQUE INDEX "wa_conversations_contact_lead_uq" ON "wa_conversations" ("c
   WHERE "lead_id" IS NOT NULL;
 CREATE UNIQUE INDEX "wa_conversations_contact_unmatched_uq" ON "wa_conversations" ("contact_id")
   WHERE "lead_id" IS NULL;
-DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1793036092766;
+DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1793109586555;
 ```
 
 ## Fases 2 e 3
@@ -240,9 +239,9 @@ DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1793036092766;
   renovação do acesso de 60 dias, modelos incompletos recusados, lista da Sofia paginada, modelos por número.
 - Fase 3: indicadores (o DW do #25), tela de configuração completa.
 
-## Migração 0101 (fase 2a) e rollback
+## Migração 0099 (fase 2a) e rollback
 
-`0101_wa_attendance` (número provisório: renumerar no rebase, um arquivo e uma linha do journal). Acrescenta em
+`0099_wa_attendance` (depois da 0098 da fase 1, `when` crescente). Acrescenta em
 `wa_conversations` `assignee_employee_id`, `queue`, `version`, `replying_employee_id`, `replying_until` e
 `sofia_paused`; a tabela `wa_conversation_events`; e `whatsapp_settings.assignment_mode` (padrão `manual`). Nada
 existente muda de valor. Sem GRANT ao `wings_ro`. Rollback do banco:
@@ -254,18 +253,18 @@ ALTER TABLE "wa_conversations" DROP COLUMN "assignee_employee_id", DROP COLUMN "
   DROP COLUMN "version", DROP COLUMN "replying_employee_id", DROP COLUMN "replying_until",
   DROP COLUMN "sofia_paused";
 ALTER TABLE "whatsapp_settings" DROP COLUMN "assignment_mode";
-DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1793040315362;
+DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1793110449955;
 ```
 
-## Migração 0102 (fase 2b) e rollback
+## Migração 0100 (fase 2b) e rollback
 
-`0102_wa_reliability` (número provisório, depois da 0101): `wa_numbers.connecting_until`,
+`0100_wa_reliability` (depois da 0099): `wa_numbers.connecting_until`,
 `token_renew_tried_at` e `token_renew_error`; a tabela `wa_number_templates` (modelos de cada número, apagados com
-o número). Nada existente muda de valor. Sem GRANT ao `wings_ro`. Rollback do banco (antes do da 0101):
+o número). Nada existente muda de valor. Sem GRANT ao `wings_ro`. Rollback do banco (antes do da 0099):
 
 ```sql
 DROP TABLE "wa_number_templates";
 ALTER TABLE "wa_numbers" DROP COLUMN "connecting_until", DROP COLUMN "token_renew_tried_at",
   DROP COLUMN "token_renew_error";
-DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1793042886871;
+DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1793111247128;
 ```
