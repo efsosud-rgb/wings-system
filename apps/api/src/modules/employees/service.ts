@@ -1,8 +1,10 @@
 import {
   SECTOR_SLUGS,
   can,
+  loginEmailChangeDenial,
   maskCpf,
   roleChangeDenial,
+  statusChangeDenial,
   type Actor,
   type EmployeeCreate,
   type EmployeeListQuery,
@@ -18,6 +20,7 @@ import type { Database } from '../../db/client.js';
 import { employees, roles, sectors } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import type { CpfCrypto } from '../../lib/cpf-crypto.js';
+import { cancelPendingLinks } from '../auth/credentials-service.js';
 import { revokeAllSessions, type RequestContext } from '../auth/service.js';
 
 export type EmployeeFailure =
@@ -28,7 +31,9 @@ export type EmployeeFailure =
   | 'role_not_allowed'
   | 'manager_flag_forbidden'
   | 'admin_master_record'
-  | 'last_admin_master';
+  | 'last_admin_master'
+  | 'email_change_forbidden'
+  | 'deactivate_forbidden';
 
 export type Result<T> = { ok: true; value: T } | { ok: false; reason: EmployeeFailure };
 
@@ -294,6 +299,13 @@ export async function createEmployee(
   return row ? { ok: true, value: toView(row, cpfCrypto) } : { ok: false, reason: 'not_found' };
 }
 
+/** A saved update; `emailChange` is set only when the login e-mail changed. */
+export interface EmployeeUpdated {
+  employee: EmployeeView;
+  /** The address and name as they were before this request. */
+  emailChange: { previousEmail: string; previousName: string; linksCancelled: number } | null;
+}
+
 export async function updateEmployee(
   db: Database,
   actor: Actor,
@@ -301,7 +313,7 @@ export async function updateEmployee(
   id: string,
   input: EmployeeUpdate,
   ctx: RequestContext = {},
-): Promise<Result<EmployeeView>> {
+): Promise<Result<EmployeeUpdated>> {
   const current = await fetchRow(db, id);
   if (!current) return { ok: false, reason: 'not_found' };
 
@@ -359,6 +371,31 @@ export async function updateEmployee(
     return { ok: false, reason: 'manager_flag_forbidden' };
   }
 
+  // The login e-mail is where a password reset goes: re-pointing it takes the
+  // account over. Only someone who could also change this person's level, and
+  // who already holds what a manager flag gives, may do it. The form sends the address back unchanged on every save, and that
+  // is not a change.
+  const emailChanges =
+    input.email !== undefined && input.email.toLowerCase() !== current.email.toLowerCase();
+  if (emailChanges) {
+    const denial = loginEmailChangeDenial(actor, {
+      employeeId: id,
+      sector: currentSector,
+      currentRole,
+      isLastActiveAdminMaster: current.is_last_active_admin_master,
+      isSectorManager: current.is_sector_manager,
+    });
+    if (denial) return { ok: false, reason: 'email_change_forbidden' };
+  }
+
+  // Switching someone off or back on is its own permission, not part of editing.
+  if (
+    input.status !== undefined &&
+    statusChangeDenial(actor, { sector: currentSector, currentRole }, current.status, input.status)
+  ) {
+    return { ok: false, reason: 'deactivate_forbidden' };
+  }
+
   const nextCpfIndex = input.cpf ? cpfCrypto.index(input.cpf) : undefined;
   if (input.email || nextCpfIndex) {
     const taken = await idsInUse(db, {
@@ -382,7 +419,7 @@ export async function updateEmployee(
   if (input.fullName !== undefined) setField('fullName', input.fullName);
   if (input.birthDate !== undefined) setField('birthDate', input.birthDate);
   if (input.phone !== undefined) setField('phone', input.phone);
-  if (input.email !== undefined) setField('email', input.email);
+  if (emailChanges) setField('email', input.email);
   if (input.cargo !== undefined) setField('cargo', input.cargo);
   if (input.admissionDate !== undefined) setField('admissionDate', input.admissionDate);
   if (input.isSectorManager !== undefined) setField('isSectorManager', input.isSectorManager);
@@ -432,10 +469,21 @@ export async function updateEmployee(
     await db.update(employees).set(patch).where(eq(employees.id, id));
   }
 
-  // Deactivation or a role change must end access immediately, not at expiry.
-  const revokes = changed.includes('role') || patch.status === 'inactive';
+  // A new login address: links mailed to the old one stop working, before the
+  // sessions end, so nothing issued under the old address survives the change.
+  const linksCancelled = emailChanges ? await cancelPendingLinks(db, id) : 0;
+
+  // Deactivation, a role change or a new login e-mail must end access
+  // immediately, not at expiry.
+  const revokes = changed.includes('role') || patch.status === 'inactive' || emailChanges;
   if (revokes) {
-    await revokeAllSessions(db, id, patch.status === 'inactive' ? 'deactivated' : 'role_changed');
+    const reason =
+      patch.status === 'inactive'
+        ? 'deactivated'
+        : changed.includes('role')
+          ? 'role_changed'
+          : 'email_changed';
+    await revokeAllSessions(db, id, reason);
   }
 
   await writeAudit(db, {
@@ -452,6 +500,7 @@ export async function updateEmployee(
       ...(changed.includes('role') ? { role: input.role } : {}),
       ...(changed.includes('sector') ? { sector: input.sector } : {}),
       ...(changed.includes('status') ? { status: input.status } : {}),
+      ...(emailChanges ? { linksCancelled } : {}),
       sessionsRevoked: revokes,
     },
   });
@@ -471,7 +520,16 @@ export async function updateEmployee(
   }
 
   const row = await fetchRow(db, id);
-  return row ? { ok: true, value: toView(row, cpfCrypto) } : { ok: false, reason: 'not_found' };
+  if (!row) return { ok: false, reason: 'not_found' };
+  return {
+    ok: true,
+    value: {
+      employee: toView(row, cpfCrypto),
+      emailChange: emailChanges
+        ? { previousEmail: current.email, previousName: current.full_name, linksCancelled }
+        : null,
+    },
+  };
 }
 
 /**

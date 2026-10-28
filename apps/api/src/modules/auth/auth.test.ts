@@ -373,3 +373,25 @@ describe('CSRF protection', () => {
     expect(res.statusCode).toBe(200);
   });
 });
+
+describe('frame protection', () => {
+  it('lets only this system frame an answer, errors and unknown routes included', async () => {
+    const employee = await createEmployee(db);
+    const answers = [
+      await app.inject({ method: 'GET', url: '/health' }),
+      await app.inject({ method: 'GET', url: '/rota-que-nao-existe' }),
+      await app.inject({ method: 'GET', url: '/auth/me' }),
+      await app.inject({
+        method: 'POST',
+        url: '/auth/login',
+        headers: { origin: 'https://evil.example.com', host: 'staging.wingssystem.online' },
+        payload: { email: employee.email, password: employee.password },
+      }),
+    ];
+    expect(answers.map((res) => res.statusCode)).toEqual([200, 404, 401, 403]);
+    for (const res of answers) {
+      expect(res.headers['content-security-policy']).toBe("frame-ancestors 'self'");
+      expect(res.headers['x-frame-options']).toBe('SAMEORIGIN');
+    }
+  });
+});

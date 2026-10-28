@@ -5,6 +5,7 @@ import type { Database } from './db/client.js';
 import type { Env } from './env.js';
 import { createCpfCrypto, type CpfCrypto } from './lib/cpf-crypto.js';
 import { createMailer, type Mailer } from './lib/mailer.js';
+import { withFrameAncestors, X_FRAME_OPTIONS } from './lib/frame-guard.js';
 import { loggedUrl } from './lib/log-url.js';
 import type { ObjectStorage } from './lib/storage/index.js';
 import { authRoutes } from './modules/auth/routes.js';
@@ -242,6 +243,17 @@ export async function buildApp(deps: {
     if (host && originHost !== host) {
       return reply.status(403).send({ error: 'bad_origin', message: 'Origem inválida' });
     }
+  });
+
+  // Every answer, errors and 404s included, may be framed only by this system.
+  app.addHook('onSend', async (_request, reply, payload) => {
+    const csp = reply.getHeader('content-security-policy');
+    reply.header(
+      'Content-Security-Policy',
+      withFrameAncestors(typeof csp === 'string' ? csp : undefined),
+    );
+    if (!reply.hasHeader('x-frame-options')) reply.header('X-Frame-Options', X_FRAME_OPTIONS);
+    return payload;
   });
 
   // Routes are registered WITHOUT the /api prefix: Traefik strips it before

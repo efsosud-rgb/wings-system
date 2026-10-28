@@ -3,9 +3,11 @@ import { assertMatrixComplete, type PermissionKey } from './permissions.js';
 import {
   assignableRoles,
   can,
+  loginEmailChangeDenial,
   roleAssignmentDenial,
   roleChangeDenial,
   roleFieldState,
+  statusChangeDenial,
   tracksTime,
   type Actor,
 } from './policy.js';
@@ -163,6 +165,7 @@ const seller = {
   employeeId: 'emp-vend-9',
   sector: 'comercial',
   currentRole: 'vendedor_expansao',
+  isSectorManager: false,
 } as const;
 
 describe('RH / DP', () => {
@@ -262,7 +265,7 @@ describe('roleChangeDenial — Admin Master', () => {
   });
 });
 
-describe('roleChangeDenial — sector managers, unchanged', () => {
+describe('roleChangeDenial — sector managers', () => {
   it('stays inside the sector and below the manager rank', () => {
     expect(roleChangeDenial(gerente, seller, 'vendedor_formatacao')).toBeNull();
     expect(roleChangeDenial(gerente, seller, 'gerente_comercial')).toBe('role_rank_too_high');
@@ -273,8 +276,228 @@ describe('roleChangeDenial — sector managers, unchanged', () => {
     ).toBe('out_of_scope');
   });
 
+  it('never touches the level of a colleague at or above their own (2026-10-13)', () => {
+    const otherGerente = {
+      employeeId: 'emp-ger-2',
+      sector: 'comercial',
+      currentRole: 'gerente_comercial',
+    } as const;
+    expect(roleChangeDenial(gerente, otherGerente, 'vendedor_expansao')).toBe('role_rank_too_high');
+    const formatacaoManager = actor('formatacao_financeiro', 'formatacao', { manager: true });
+    const tiPeer = {
+      employeeId: 'emp-ti-9',
+      sector: 'formatacao-ti',
+      currentRole: 'formatacao_ti',
+    } as const;
+    expect(roleChangeDenial(formatacaoManager, tiPeer, 'vendedor_formatacao')).toBe(
+      'role_rank_too_high',
+    );
+    expect(roleFieldState(gerente, otherGerente)).toEqual({
+      options: ['gerente_comercial'],
+      locked: 'role_rank_too_high',
+    });
+  });
+
   it('gives nothing to someone with no grant at all', () => {
     expect(roleChangeDenial(juridico, seller, 'vendedor_formatacao')).toBe('no_permission');
+  });
+});
+
+describe('loginEmailChangeDenial — who may re-point a login', () => {
+  const director = {
+    employeeId: 'emp-dir-2',
+    sector: 'diretoria',
+    currentRole: 'diretoria',
+    isSectorManager: false,
+  } as const;
+  const tiPeer = {
+    employeeId: 'emp-ti-9',
+    sector: 'formatacao-ti',
+    currentRole: 'formatacao_ti',
+    isSectorManager: false,
+  } as const;
+  const otherGerente = {
+    employeeId: 'emp-ger-2',
+    sector: 'comercial',
+    currentRole: 'gerente_comercial',
+    isSectorManager: false,
+  } as const;
+  const anAdmin = {
+    employeeId: 'emp-adm-2',
+    sector: 'diretoria',
+    currentRole: 'admin_master',
+    isSectorManager: false,
+  } as const;
+  const formatacaoManager = actor('formatacao_financeiro', 'formatacao', {
+    id: 'emp-fmt-mgr',
+    manager: true,
+  });
+
+  it('stops RH/DP on a director, the account takeover found by the audit', () => {
+    expect(loginEmailChangeDenial(rhDp, director)).toBe('diretoria_level');
+  });
+
+  it('stops a manager on a colleague of equal or higher level in their sector', () => {
+    // Nor demote that colleague first, which would then open the login.
+    expect(roleChangeDenial(formatacaoManager, tiPeer, 'vendedor_formatacao')).toBe(
+      'role_rank_too_high',
+    );
+    expect(loginEmailChangeDenial(formatacaoManager, tiPeer)).toBe('role_rank_too_high');
+    expect(loginEmailChangeDenial(gerente, otherGerente)).toBe('role_rank_too_high');
+    const mktPeer = {
+      employeeId: 'emp-mkt-2',
+      sector: 'marketing',
+      currentRole: 'marketing',
+      isSectorManager: false,
+    } as const;
+    expect(loginEmailChangeDenial(marketingManager, mktPeer)).toBe('role_rank_too_high');
+  });
+
+  it('stops anyone but an Admin Master on their own login, and on an Admin Master', () => {
+    const own = {
+      employeeId: rhDp.employeeId,
+      sector: 'diretoria',
+      currentRole: 'rh_dp',
+      isSectorManager: false,
+    } as const;
+    expect(loginEmailChangeDenial(rhDp, own)).toBe('self_role_change');
+    const gerenteSelf = {
+      employeeId: gerente.employeeId,
+      sector: 'comercial',
+      currentRole: 'gerente_comercial',
+      isSectorManager: false,
+    } as const;
+    expect(loginEmailChangeDenial(gerente, gerenteSelf)).toBe('self_role_change');
+    expect(loginEmailChangeDenial(rhDp, anAdmin)).toBe('admin_master_record');
+  });
+
+  it('stops whoever lacks the powers of a sector manager on that manager', () => {
+    // The Gerente Comercial cannot switch anyone off; taking a subordinate
+    // manager's login would let them do it from that account.
+    const managerSeller = { ...seller, isSectorManager: true };
+    expect(loginEmailChangeDenial(gerente, seller)).toBeNull();
+    expect(loginEmailChangeDenial(gerente, managerSeller)).toBe('sector_manager_powers');
+    // A manager of a parent sector holds every flag power over the sub-sector.
+    const subManager = {
+      employeeId: 'emp-fmt-9',
+      sector: 'formatacao-juridico',
+      currentRole: 'vendedor_formatacao',
+      isSectorManager: true,
+    } as const;
+    // ...but not on a seller: their level holds leads powers the Formatação manager lacks, and
+    // taking the login would hand them over (security audit 2026-10-27, A2).
+    expect(loginEmailChangeDenial(formatacaoManager, subManager)).toBe('role_permissions_exceed');
+    // RH/DP: every flag power company-wide, roles.assign through assign_roles.
+    expect(loginEmailChangeDenial(rhDp, managerSeller)).toBeNull();
+    expect(loginEmailChangeDenial(adminMaster, managerSeller)).toBeNull();
+  });
+
+  it('needs the right to edit the record at all', () => {
+    // Diretoria may change a level but not the rest of a record.
+    expect(loginEmailChangeDenial(diretor, seller)).toBe('no_permission');
+    expect(loginEmailChangeDenial(diretor, tiPeer)).toBe('diretoria_ti_block');
+    expect(loginEmailChangeDenial(juridico, seller)).toBe('no_permission');
+    expect(loginEmailChangeDenial(gerente, { ...seller, sector: 'marketing' })).toBe(
+      'out_of_scope',
+    );
+  });
+
+  it('keeps the allowed paths: RH/DP below Diretoria, a manager below their rank, Admin Master on anyone', () => {
+    expect(loginEmailChangeDenial(rhDp, seller)).toBeNull();
+    expect(loginEmailChangeDenial(rhDp, tiPeer)).toBeNull();
+    expect(loginEmailChangeDenial(gerente, seller)).toBeNull();
+    expect(
+      loginEmailChangeDenial(formatacaoManager, { ...tiPeer, currentRole: 'vendedor_formatacao' }),
+    ).toBe('role_permissions_exceed'); // a seller's leads powers are not the manager's (A2)
+    expect(loginEmailChangeDenial(adminMaster, director)).toBeNull();
+    expect(loginEmailChangeDenial(adminMaster, anAdmin)).toBeNull();
+    const lastAdminSelf = {
+      employeeId: adminMaster.employeeId,
+      sector: 'diretoria',
+      currentRole: 'admin_master',
+      isSectorManager: false,
+      isLastActiveAdminMaster: true,
+    } as const;
+    expect(loginEmailChangeDenial(adminMaster, lastAdminSelf)).toBeNull();
+  });
+});
+
+describe('statusChangeDenial — switching someone off or back on', () => {
+  const comercial = { sector: 'comercial' } as const;
+
+  it('needs employees.deactivate, which the Gerente Comercial does not hold', () => {
+    expect(statusChangeDenial(gerente, comercial, 'active', 'inactive')).toBe('no_permission');
+    expect(statusChangeDenial(gerente, comercial, 'inactive', 'active')).toBe('no_permission');
+    expect(statusChangeDenial(gerente, comercial, 'on_leave', 'inactive')).toBe('no_permission');
+  });
+
+  it('leaves active and on leave as an ordinary edit', () => {
+    expect(statusChangeDenial(gerente, comercial, 'active', 'on_leave')).toBeNull();
+    expect(statusChangeDenial(gerente, comercial, 'on_leave', 'active')).toBeNull();
+    expect(statusChangeDenial(gerente, comercial, 'inactive', 'inactive')).toBeNull();
+  });
+
+  it('lets RH/DP, Admin Master and a flagged manager in their sector do it', () => {
+    expect(statusChangeDenial(rhDp, comercial, 'active', 'inactive')).toBeNull();
+    expect(statusChangeDenial(adminMaster, comercial, 'inactive', 'active')).toBeNull();
+    const flagged = actor('gerente_comercial', 'comercial', { id: 'emp-ger-mgr', manager: true });
+    expect(statusChangeDenial(flagged, comercial, 'active', 'inactive')).toBeNull();
+    expect(statusChangeDenial(marketingManager, comercial, 'active', 'inactive')).toBe(
+      'out_of_scope',
+    );
+  });
+});
+
+describe('security audit 2026-10-27 — powers the manager lacks (A2) and people above (A3)', () => {
+  const comercial = { sector: 'comercial' } as const;
+
+  it('refuses a lower level that holds a power the manager lacks, or holds it wider', () => {
+    expect(roleChangeDenial(gerente, comercial, 'marketing')).toBe('role_permissions_exceed');
+    expect(roleChangeDenial(gerente, comercial, 'formatacao_juridico')).toBe(
+      'role_permissions_exceed',
+    );
+    expect(roleChangeDenial(marketingManager, { sector: 'marketing' }, 'vendedor_expansao')).toBe(
+      'role_permissions_exceed',
+    );
+    expect(
+      roleChangeDenial(
+        gerente,
+        { employeeId: 'emp-x', sector: 'comercial', currentRole: 'vendedor_expansao' },
+        'formatacao_juridico',
+      ),
+    ).toBe('role_permissions_exceed');
+  });
+
+  it('keeps the levels within the manager’s powers, and the wide holders as they were', () => {
+    expect(roleChangeDenial(gerente, comercial, 'vendedor_expansao')).toBeNull();
+    expect(roleChangeDenial(gerente, comercial, 'vendedor_formatacao')).toBeNull();
+    expect(roleChangeDenial(rhDp, comercial, 'marketing')).toBeNull();
+    expect(roleChangeDenial(adminMaster, comercial, 'formatacao_juridico')).toBeNull();
+  });
+
+  it('a flagged manager switches off or on nobody above them, and still a colleague of their level', () => {
+    const flaggedSeller = actor('vendedor_expansao', 'comercial', {
+      id: 'emp-v-mgr',
+      manager: true,
+    });
+    const aboveThem = { sector: 'comercial', currentRole: 'gerente_comercial' } as const;
+    const peer = { sector: 'comercial', currentRole: 'vendedor_expansao' } as const;
+    expect(statusChangeDenial(flaggedSeller, aboveThem, 'active', 'inactive')).toBe(
+      'role_rank_too_high',
+    );
+    expect(statusChangeDenial(flaggedSeller, aboveThem, 'inactive', 'active')).toBe(
+      'role_rank_too_high',
+    );
+    expect(
+      statusChangeDenial(
+        flaggedSeller,
+        { sector: 'comercial', currentRole: 'diretoria' },
+        'active',
+        'inactive',
+      ),
+    ).toBe('protected_role');
+    expect(statusChangeDenial(flaggedSeller, peer, 'active', 'inactive')).toBeNull();
+    expect(statusChangeDenial(rhDp, aboveThem, 'active', 'inactive')).toBeNull();
   });
 });
 

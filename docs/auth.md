@@ -24,6 +24,44 @@ sistema envia o convite; a senha é escolhida pelo próprio funcionário.
 - `POST /auth/forgot-password` responde igual para e-mail existente ou não —
   um visitante anônimo não pode descobrir quem tem conta.
 
+## Troca do e-mail de login e inativação
+
+Decidido em 13/10/2026, depois da auditoria de segurança. Quem controla o
+e-mail de login controla a conta (o "esqueci minha senha" vai para ele), então:
+
+- **Só troca o e-mail de login de alguém quem também poderia mudar o nível de
+  acesso dessa pessoa** (`loginEmailChangeDenial` em `packages/shared`, ao lado
+  de `roleChangeDenial`; a tela e a API usam a mesma regra). Na prática: o
+  RH/DP não troca o de quem é da Diretoria; ninguém troca o próprio, salvo o
+  Admin Master; e um gestor de setor ou o Gerente Comercial não troca o de um
+  colega de nível igual ou maior (nem muda o nível desse colega, para não abrir
+  o e-mail em dois passos). Recusa: `403 email_change_forbidden`.
+- **Se a pessoa é gestora de setor, quem troca o e-mail dela precisa ter todos
+  os poderes que essa marca dá** (ver, cadastrar, editar, inativar, definir
+  nível e ver o ponto no setor dela, com alcance igual ou maior). Assim o
+  Gerente Comercial, que não inativa ninguém, não ganha esse poder tomando a
+  conta de um subordinado gestor. O RH/DP e o Admin Master têm todos esses
+  poderes; só o Admin Master liga ou desliga a marca.
+- Ao trocar: **todas as sessões da pessoa são encerradas**, os **links de
+  convite e de redefinição ainda válidos deixam de funcionar**, e o **endereço
+  antigo recebe um aviso** (sem o endereço novo). A tela diz se o aviso saiu; se
+  não saiu (sem SMTP ou falha do servidor), diz "NÃO foi enviado". Na
+  auditoria: `employee.updated` (campo `email`, quantos links foram cancelados)
+  e `credentials.email_change_notified` (entregue ou o motivo), nunca o endereço.
+- **Inativar ou reativar exige `employees.deactivate`** sobre o setor da pessoa
+  (`statusChangeDenial`); editar o cadastro não basta. Ativo ↔ afastado continua
+  uma edição comum. Recusa: `403 deactivate_forbidden`.
+- **Auditoria de 27/10/2026 (A2 e A3).** Quem não tem `employees.assign_roles`
+  (gestor de setor, Gerente Comercial) só atribui um nível abaixo do seu **se já
+  tiver todas as permissões desse nível, com escopo igual ou maior**: um nível
+  "menor" pode carregar poderes que o gestor não tem (o Marketing tem anúncios e
+  clientes; o Jurídico vê o CPF dos sócios), e cadastrar essa conta ou mudar um
+  subordinado para ela e ficar com o login entregaria esses poderes. Recusa:
+  `role_permissions_exceed` (a tela simplesmente não oferece o nível). Pela mesma
+  regra, quem não pode mudar o nível de alguém não troca o e-mail de login dele.
+  E esse gestor também **não inativa nem reativa quem está acima dele**, nem Admin
+  Master ou Diretoria; colegas do mesmo nível continuam com ele.
+
 ## Política de senha
 
 Mínimo de 12 caracteres, sem espaços nas pontas. São recusadas senhas que
@@ -49,3 +87,25 @@ Sem SMTP configurado, as rotas que dependem de e-mail respondem **503
 `email_not_configured`** — nunca fingem sucesso. Em desenvolvimento local, sem
 SMTP, a mensagem é apenas registrada no log (o link só aparece fora de
 produção).
+
+## Troca do e-mail de login e inativação
+
+Decidido em 13/10/2026, depois da auditoria de segurança. Quem controla o
+e-mail de login controla a conta (o "esqueci minha senha" vai para ele), então:
+
+- **Só troca o e-mail de login de alguém quem também poderia mudar o nível de
+  acesso dessa pessoa** (`loginEmailChangeDenial` em `packages/shared`, ao lado
+  de `roleChangeDenial`; a tela e a API usam a mesma regra). Na prática: o
+  RH/DP não troca o de quem é da Diretoria; ninguém troca o próprio, salvo o
+  Admin Master; e um gestor de setor ou o Gerente Comercial não troca o de um
+  colega de nível igual ou maior (nem muda o nível desse colega, para não abrir
+  o e-mail em dois passos). Recusa: `403 email_change_forbidden`.
+- Ao trocar: **todas as sessões da pessoa são encerradas**, os **links de
+  convite e de redefinição ainda válidos deixam de funcionar**, e o **endereço
+  antigo recebe um aviso** (sem o endereço novo). A tela diz se o aviso saiu; se
+  não saiu (sem SMTP ou falha do servidor), diz "NÃO foi enviado". Na
+  auditoria: `employee.updated` (campo `email`, quantos links foram cancelados)
+  e `credentials.email_change_notified` (entregue ou o motivo), nunca o endereço.
+- **Inativar ou reativar exige `employees.deactivate`** sobre o setor da pessoa
+  (`statusChangeDenial`); editar o cadastro não basta. Ativo ↔ afastado continua
+  uma edição comum. Recusa: `403 deactivate_forbidden`.
