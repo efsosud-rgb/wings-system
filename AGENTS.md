@@ -103,7 +103,7 @@ A push does not deploy: the repository has no webhook. Deploys are started throu
 ### Migrations
 
 - The API container runs `db:migrate` then `db:seed` before serving, so both must stay safe to re-run. A hand-written migration goes in via `drizzle-kit generate --custom` so the journal stays consistent; never edit an applied migration. Drizzle tracks applied migrations in the separate `drizzle` schema — dropping only `public` leaves it thinking everything is applied.
-- A schema change is a generated migration (`db:generate`) committed with the code that needs it. Two branches can pick the same number: the one that merges second renumbers before it merges.
+- A schema change is a generated migration (`db:generate`) committed with the code that needs it. Two branches can pick the same number: the one that merges second **regenerates** its migration (`db:generate`, new number and new `when`) before it merges, never just renames it — drizzle skips a migration whose `when` is older than the last applied one (decision of 27/10, `docs/decisoes.md`).
 - A table that the read-only role `wings_ro` must see gets its `GRANT` in a migration (see `0075_grant_wings_ro_ad_lead_forms.sql`); until then it cannot be read through `wings-staging-sql`.
 
 ### Authentication and sessions
