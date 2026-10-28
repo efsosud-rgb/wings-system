@@ -17,10 +17,13 @@ let harness: TestDatabase;
 let db: Database;
 let app: FastifyInstance;
 let outbox: Mail[] = [];
+/** When set, the SMTP server refuses the message, quoting the address as real servers do. */
+let smtpRefuses = false;
 
 const testMailer: Mailer = {
   enabled: true,
   send: async (mail) => {
+    if (smtpRefuses) throw new Error(`550 5.1.1 <${mail.to}>: Recipient address rejected`);
     outbox.push(mail);
   },
 };
@@ -49,6 +52,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   outbox = [];
+  smtpRefuses = false;
 });
 
 function tokenFromLastMail(): string {
@@ -239,6 +243,24 @@ describe('POST /auth/forgot-password', () => {
     expect(known.json()).toEqual(unknown.json());
     expect(outbox).toHaveLength(1);
     expect(outbox[0]?.to).toBe(employee.email);
+  });
+
+  it('with the SMTP refusing, a real address still gets the same 202 and none of its words (audit A10)', async () => {
+    const employee = await createEmployee(db);
+    smtpRefuses = true;
+    const ask = (email: string) =>
+      app.inject({ method: 'POST', url: '/auth/forgot-password', payload: { email } });
+    const unknown = await ask('ninguem@wingscompany.com.br');
+    const known = await ask(employee.email);
+    expect(known.statusCode).toBe(202);
+    expect(known.json()).toEqual(unknown.json());
+    expect(known.body).not.toContain('550');
+    const [audit] = await db
+      .select({ metadata: auditLog.metadata })
+      .from(auditLog)
+      .where(eq(auditLog.targetEmployeeId, employee.id));
+    expect(audit?.metadata).toEqual({ delivered: false, reason: 'smtp_failed', error: 'Error' });
+    expect(JSON.stringify(audit)).not.toContain(employee.email);
   });
 
   it('sends nothing for a deactivated employee', async () => {
