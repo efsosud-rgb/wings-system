@@ -643,6 +643,25 @@ describe('who may import', () => {
     expect(await messagesOf(lead.id)).toEqual([]);
   });
 
+  it('Diretoria reads the history but never imports or undoes one (no leads.write)', async () => {
+    const board = await sessionFor('diretoria');
+    const lead = await deal(seller.id);
+    const fileId = await fileOf(lead.id);
+    const batch = (await apply(seller, lead.id, { text: CHAT, fileId })).json<{
+      import: WaImportBatch;
+    }>().import;
+
+    expect((await list(board, lead.id)).statusCode).toBe(200);
+    const refused = [
+      await preview(board, lead.id, CHAT),
+      await apply(board, lead.id, { text: `${CHAT}\n${LATER}`, fileId }),
+      await undo(board, lead.id, batch.id),
+    ];
+    expect(refused.map((r) => r.statusCode)).toEqual([403, 403, 403]);
+    expect(await messagesOf(lead.id)).toHaveLength(6);
+    expect((await batchesOf(lead.id)).map((b) => b.undoneAt)).toEqual([null]);
+  });
+
   it('a level without leads.whatsapp is refused with 403', async () => {
     const marketing = await sessionFor('marketing');
     const lead = await deal(admin.id);

@@ -818,6 +818,7 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
       ownerEmployeeId: owner,
       actorEmployeeId: actor,
       canAssign: canChangeLeadOwner(request.session.actor),
+      canManageStages: app.can(request, 'crm.manage'),
     });
     await writeAudit(db, {
       actorEmployeeId: actor,

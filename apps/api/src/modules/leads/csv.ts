@@ -24,10 +24,16 @@ import {
 import { and, asc, eq, or } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import type { Database } from '../../db/client.js';
-import { employees, leads } from '../../db/schema/index.js';
+import { crmStages, employees, leads } from '../../db/schema/index.js';
 import { addNote, changeLead, ensureStage, type Executor } from './crm.js';
 import { brandsOnSale } from './deal.js';
-import { ForeignLeadError, upsertLead, type LeadListFilter, listLeads } from './service.js';
+import {
+  ForeignLeadError,
+  NumberInAttendanceError,
+  upsertLead,
+  type LeadListFilter,
+  listLeads,
+} from './service.js';
 
 /**
  * The Funil's spreadsheet door (CRM núcleo). Import: the file is parsed, each
@@ -226,6 +232,8 @@ export interface ImportInput {
    * to nobody's) is skipped: nothing of that lead is read, changed or shown.
    */
   canAssign: boolean;
+  /** Whether the caller may add stages to a funnel (`crm.manage`); when not, a file's stage must exist. */
+  canManageStages: boolean;
 }
 
 export async function runImport(db: Database, input: ImportInput): Promise<CsvImportReport> {
@@ -341,7 +349,10 @@ export async function runImport(db: Database, input: ImportInput): Promise<CsvIm
       report.skipped++;
       report.errors.push({
         line: row.line,
-        message: 'Já existe uma negociação com este telefone ou e-mail.',
+        message:
+          error instanceof NumberInAttendanceError
+            ? 'Esta pessoa já está em atendimento (Sofia ou equipe) e ainda não tem negociação.'
+            : 'Já existe uma negociação com este telefone ou e-mail.',
       });
       continue;
     }
@@ -352,15 +363,30 @@ export async function runImport(db: Database, input: ImportInput): Promise<CsvIm
       const key = `${pipeline}|${values.stage.toLowerCase()}`;
       let stage = stageCache.get(key);
       if (!stage) {
-        stage = await ensureStage(db, { pipeline, name: values.stage });
-        stageCache.set(key, stage);
+        // Adding a stage to everyone's funnel is crm.manage's, not the import's (audit A5).
+        stage = input.canManageStages
+          ? await ensureStage(db, { pipeline, name: values.stage })
+          : await db.query.crmStages.findFirst({
+              where: and(
+                eq(crmStages.pipeline, pipeline),
+                eq(crmStages.name, values.stage.trim().slice(0, 60)),
+                eq(crmStages.active, true),
+              ),
+            });
+        if (stage) stageCache.set(key, stage);
       }
-      await changeLead(db, {
-        leadId: result.lead.id,
-        stageId: stage.id,
-        source: 'import',
-        actorEmployeeId: input.actorEmployeeId,
-      });
+      if (!stage) {
+        report.errors.push({
+          line: row.line,
+          message: `Etapa "${values.stage}" não existe neste funil: a negociação ficou na etapa de entrada.`,
+        });
+      } else
+        await changeLead(db, {
+          leadId: result.lead.id,
+          stageId: stage.id,
+          source: 'import',
+          actorEmployeeId: input.actorEmployeeId,
+        });
     }
     if (values.note) {
       await addNote(db, {

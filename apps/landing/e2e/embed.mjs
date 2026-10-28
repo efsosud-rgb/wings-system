@@ -186,6 +186,7 @@ async function fill(page, frame, person, answer) {
   await frame.focus('#f-site');
   await frame.fill('#f-site', person.site);
   await frame.selectOption('#f-int', answer);
+  await frame.selectOption('#f-fat', '300k-1mi');
   await frame.check('#f-consent');
 }
 
@@ -299,6 +300,7 @@ async function runSite(browser, { label, viewport, mobile, query, utm }) {
     posts.length === 1 &&
       last.page === `${SITE}/${query}` &&
       last.qualifierAnswer === 'formatacao' &&
+      last.monthlyRevenue === '300k-1mi' &&
       (utm
         ? last.tracking?.utm_source === 'google' &&
           last.tracking?.utm_campaign === 'c1' &&
@@ -458,7 +460,7 @@ async function runDirect(browser) {
     'direct: black background when not framed, title and subtitle with titulo=1',
     (await colour(page, 'html', 'backgroundColor')) === 'rgb(0, 0, 0)' &&
       (await page.$eval('.ft', (el) => el.checkVisibility() && el.textContent.trim())) ===
-        'Quero conversar com a Wings' &&
+        'Peça seu diagnóstico gratuito' &&
       (await page.$eval('.sub', (el) => el.checkVisibility())),
   );
   await context.close();

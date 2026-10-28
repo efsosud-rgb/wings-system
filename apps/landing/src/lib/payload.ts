@@ -15,6 +15,8 @@ export interface FormValues {
   qualifierValue: string;
   /** The chosen option's visible text. */
   qualifierText: string;
+  /** The revenue band's code (`ate-50k`, …), or empty. */
+  monthlyRevenue: string;
   /** The honeypot, sent as it is: the server decides. */
   website: string;
 }
@@ -28,6 +30,7 @@ export interface SubmitBody {
   instagram?: string;
   siteUrl?: string;
   qualifierAnswer?: string;
+  monthlyRevenue?: string;
   consent: true;
   page?: string;
   tracking?: Tracking;
@@ -84,6 +87,7 @@ export function submitBodyOf(input: {
     input.form,
   );
   if (qualifierAnswer) body.qualifierAnswer = qualifierAnswer;
+  if (values.monthlyRevenue) body.monthlyRevenue = values.monthlyRevenue;
   if (Object.keys(input.tracking).length) body.tracking = input.tracking;
   return body;
 }

@@ -188,7 +188,12 @@ export function EmployeeFormPage() {
     isEdit && employee && actor
       ? EMPLOYEE_STATUS.filter(
           (value) =>
-            statusChangeDenial(actor, { sector: employee.sector }, employee.status, value) === null,
+            statusChangeDenial(
+              actor,
+              { sector: employee.sector, currentRole: employee.role },
+              employee.status,
+              value,
+            ) === null,
         )
       : [...EMPLOYEE_STATUS];
   const statusHint =

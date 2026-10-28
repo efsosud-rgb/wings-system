@@ -20,8 +20,9 @@ Turnstile de verdade; o envio vai para a API; o `robots` passou a vir do ambient
 
 1. Ao abrir, a página pede `GET <LANDING_API_BASE>/public/site-forms/fale-com-a-wings` e recebe a chave pública do
    Turnstile, o link de WhatsApp e o formulário aprovado da regra.
-2. O botão "Enviar" só liga com os três campos obrigatórios preenchidos (nome, WhatsApp com DDD e "O que você
-   procura?"), o aceite da política **e** a verificação antirrobô feita; a linha "Para enviar, falta: …" diz o que ainda
+2. O botão "Quero meu diagnóstico" só liga com os quatro campos obrigatórios preenchidos (nome, WhatsApp com DDD,
+   "O que você procura?" e "Faturamento mensal da empresa", desde 27/10), o aceite da política **e** a verificação
+   antirrobô feita; a linha "Para enviar, falta: …" diz o que ainda
    falta, `verificação antirrobô` incluída enquanto o Turnstile não deu o token. E-mail, nome da empresa, Instagram e
    site são **opcionais** desde a versão curta (22/10, abaixo): ficam dentro do bloco recolhido "Quer adiantar?
    (opcional)", um `<details>` nativo, e só são conferidos quando preenchidos (e-mail com `@` e domínio; site com
@@ -29,7 +30,8 @@ Turnstile de verdade; o envio vai para a API; o `robots` passou a vir do ambient
    `@wings/shared/instagram`). Um opcional preenchido errado segura o envio com a frase embaixo do campo, mas nunca
    aparece na linha "falta".
 3. O envio é `POST` na mesma rota, em JSON: `name`, `phone` (só dígitos), `qualifierAnswer` (o código da opção:
-   `formatacao`, `expansao`, `consultoria`, `nao-sei`), `consent: true`, `page` (o endereço sem `#`), `tracking`,
+   `formatacao`, `expansao`, `consultoria`, `nao-sei`), `monthlyRevenue` (o código da faixa: `ate-50k`, `50k-100k`,
+   `100k-300k`, `300k-1mi`, `acima-1mi`, `nao-informar`), `consent: true`, `page` (o endereço sem `#`), `tracking`,
    `turnstileToken` e `website` (a armadilha antirrobô, mandada como está: quem decide é o servidor); `email`,
    `companyName`, `instagram` (usuário) e `siteUrl` (com `https://`) vão só quando preenchidos.
 4. A regra `fale-com-a-wings` vem do seed da API: cliente Wings Company, funil Formatação, formulário do site ligado,
@@ -42,6 +44,38 @@ Turnstile de verdade; o envio vai para a API; o `robots` passou a vir do ambient
    campanhas não lista nem altera esta página (409 `landing_page_spec`). O resto (dono pelo rodízio, avisos, Turnstile
    conferido no servidor, limite por IP) é o formulário do site de sempre
    ([../leads/formularios.md](../leads/formularios.md)).
+
+## Diagnóstico gratuito (27/10/2026)
+
+Em 8 dias de anúncio de formatação na Meta, 161 visitas viraram 4 leads; a página não tinha oferta, prova nem
+qualificação. Aprovado pelo Eric em 27/10:
+
+- **Topo:** H1 "Diagnóstico gratuito de franqueabilidade", a linha "Para empresas validadas que querem crescer com
+  franquias." (no celular, logo abaixo do H1 e antes do formulário) e o botão do formulário "Quero meu diagnóstico"
+  (também na chamada final). O H1 é limitado a `10cqi` da coluna (`container-type` em `.hero-copy`): a palavra
+  "franqueabilidade" tem ~9,6 em e nunca passa para cima do formulário; no celular o mínimo caiu de 32 para 28 px para
+  caber em 320 px.
+- **Prova:** uma faixa logo abaixo do topo com só o que o site da Wings publica, conferido em 27/10:
+  "Já formatamos mais de 1.400 marcas" (`/solucoes/formatacao-de-franquia/`) e "30+ Anos de Experiência" (home) /
+  "30+ de varejo e franchising" (formatação). Sem nota do Google, depoimento ou logo. O site também publica "6.000
+  projetos de consultoria e expansão", que ficou de fora (não estava no pedido).
+- **Faturamento:** "Faturamento mensal da empresa" obrigatório na página, seis faixas, enviado como `monthlyRevenue`;
+  chega ao lead em `form_answers` e aparece na ficha (aba Respostas e painel Origem). A lista é de
+  `SITE_FORM_REVENUE_OPTIONS` (`packages/shared`); `seo.test.ts` confere que o `form.html` é igual. Sem migração: a
+  regra gravada no banco não muda. **A API precisa ir antes da página**: uma API antiga descarta o campo sem erro
+  (a resposta não é guardada), nunca recusa o envio.
+- **Obrigado:** "Recebemos. Um consultor da Wings chama você no WhatsApp em até 1 hora útil."
+- **Perguntas frequentes:** cinco, em `<details>` nativo, sem preço nem prazo, com o mesmo texto no `FAQPage` em
+  JSON-LD no `<head>` (`seo.test.ts` confere que são iguais e que nenhuma resposta tem número). A seção e a faixa de
+  prova não têm `data-form`: a cena 3D só passa por elas na transição entre as seções vizinhas.
+- **SEO:** `title` "Diagnóstico gratuito de franqueabilidade | Wings Company", `description` com formatação de
+  franquias, diagnóstico gratuito e Rio de Janeiro, `canonical` `https://fale.wingscompany.com.br/` (fixo, também no
+  host de staging), `og:title` e `og:description`. `/robots.txt` e `/sitemap.xml` no nginx (seção "Variáveis").
+- **O formulário é o mesmo do embed** (`/embed/formulario`, home do site): a pergunta de faturamento, o título "Peça
+  seu diagnóstico gratuito", o botão e o obrigado mudaram lá também.
+- **Desempenho** (Lighthouse 13 celular, mesmo método do PR #33, servido local sem GTM nem API, mediana de 3 rodadas
+  depois de descartar a primeira): develop LCP 2,21 s, nota 88; esta versão LCP 2,25 s, nota 87; CLS 0 nas duas;
+  715 → 721 kB.
 
 ## Versão curta (22/10/2026, rascunho; depende do PR #14)
 
@@ -165,6 +199,11 @@ Contêiner da landing (Coolify, aplicação nova):
 Sem `LANDING_HOSTS` a imagem responde 404 em tudo menos `/healthz`; sem `LANDING_API_BASE` o formulário não carrega
 ("Não foi possível carregar o formulário").
 
+`LANDING_INDEXABLE` também decide `/robots.txt` (`true`: `Allow: /` e a linha `Sitemap:`; senão `Disallow: /`) e
+`/sitemap.xml` (só com `true` e um par em `LANDING_ROOT_SLUGS` para o host; senão 404); um host fora de
+`LANDING_HOSTS` recebe 404 nos dois. Hoje `fale.wingscompany.com.br` e `fale-staging.wingssystem.online` são o **mesmo
+contêiner** no Coolify: `true` indexa os dois hosts (o `canonical` aponta para `fale.wingscompany.com.br`).
+
 API (`api-staging` e `api-prod`, com `wings-env`):
 
 | Variável                | O que é                                                                                                                                                      |
@@ -208,10 +247,10 @@ API (`api-staging` e `api-prod`, com `wings-env`):
 3. Preencher com dados de teste (um WhatsApp de teste da equipe), Instagram como endereço do perfil (vira só o usuário
    ao sair do campo), escolher "Transformar meu negócio em franquia", aceitar a política: a linha vira "Tudo certo. Pode
    enviar."
-4. Enviar: aparece "Obrigado! A Wings vai falar com você." com o botão "Chamar no WhatsApp", que abre o WhatsApp da
-   Wings com o código do link.
+4. Escolher também o faturamento. Enviar: aparece "Recebemos." e "Um consultor da Wings chama você no WhatsApp em até
+   1 hora útil." com o botão "Chamar no WhatsApp", que abre o WhatsApp da Wings com o código do link.
 5. No CRM Vendas → Negociações: a negociação nova da Wings Company no funil Formatação, origem formulário do site, com
-   Instagram, empresa, site, a resposta "O que você procura?" e as UTMs do passo 1; o dono recebe o aviso de lead novo.
+   Instagram, empresa, site, as respostas "O que você procura?" e "Faturamento mensal da empresa" e as UTMs do passo 1; o dono recebe o aviso de lead novo.
 6. Repetir com "Ainda não sei": a negociação nasce em Formatação também, pelo rodízio, com ou sem a triagem do Jev
    ligada (Eric, 26/10).
 7. Abrir `https://lpfranquias-staging.wingssystem.online/`: vai para `wingscompany.com.br`; `/fale-com-a-wings` mostra a
@@ -382,7 +421,7 @@ caminho), sem rede.
   carrega (nunca antes do primeiro toque nem de 4 s depois do `load`; em cada tipo de primeiro toque; presente quando
   `lead_submit` chega ao dataLayer; um GTM lento não segura o lead e o evento espera 1,5 s). Confere console limpo,
   sem rolagem lateral, primeiro quadro sem pulo (CLS < 0,02) e sem nada que some depois, a cena 3D e o Turnstile só
-  depois da primeira pintura, um h1 e seis seções, botão desligado no começo, envio e obrigado com o link
+  depois da primeira pintura, um h1 e oito seções (seis da cena, a faixa de prova e as perguntas), botão desligado no começo, envio e obrigado com o link
   da API, e as respostas de erro. `API_BASE=http://127.0.0.1:3000` usa uma API local de verdade (com `E2E_PORT` fixo
   em `LANDING_ORIGINS`). Não faz parte do `pnpm test`.
 - `DATABASE_URL=<banco local de desenvolvimento> pnpm --filter @wings/landing test:e2e:api` (depois do `build`): a
@@ -394,7 +433,7 @@ caminho), sem rede.
   responderia ao preflight sozinho se interceptasse). Depois confere no banco: um lead por envio, `source`
   `site_form`, `landing_page` `fale-com-a-wings`, funil `formatacao` para as três respostas ("nao-sei" também: a API
   de teste roda sem a triagem do Jev), Instagram só com o usuário (digitado como `@Marca.Teste` ou endereço do
-  perfil), `form_answers` com o texto da opção, o evento com o código, a frase do aceite guardada igual à da página e
+  perfil), `form_answers` com o texto da opção e o da faixa de faturamento, o evento com o código, a frase do aceite guardada igual à da página e
   à `consentText` do seed, e que cada GET, preflight e POST do navegador recebeu o CORS da origem da página. Apaga o banco ao terminar, também com Ctrl+C; nenhum outro banco é lido ou escrito.
 
 ## Licenças

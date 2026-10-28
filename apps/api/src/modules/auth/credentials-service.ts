@@ -230,14 +230,21 @@ export async function requestPasswordReset(
     expiresAt,
   });
 
-  await mailer.send(
-    resetMail({
-      to: employee.email,
-      name: employee.full_name,
-      link: buildLink(args.baseUrl, token, 'reset'),
-      minutes: RESET_EXPIRY_MINUTES,
-    }),
-  );
+  // A failing SMTP must not answer differently for an existing address, nor carry the server's
+  // words (which often quote the address) to the caller or the log (security audit A10).
+  let failure: string | null = null;
+  try {
+    await mailer.send(
+      resetMail({
+        to: employee.email,
+        name: employee.full_name,
+        link: buildLink(args.baseUrl, token, 'reset'),
+        minutes: RESET_EXPIRY_MINUTES,
+      }),
+    );
+  } catch (error) {
+    failure = error instanceof Error ? error.name : 'unknown';
+  }
 
   await writeAudit(db, {
     actorEmployeeId: employee.id,
@@ -247,7 +254,9 @@ export async function requestPasswordReset(
     targetEmployeeId: employee.id,
     ip: args.ctx?.ip,
     userAgent: args.ctx?.userAgent,
-    metadata: { delivered: true, expiresAt: expiresAt.toISOString() },
+    metadata: failure
+      ? { delivered: false, reason: 'smtp_failed', error: failure }
+      : { delivered: true, expiresAt: expiresAt.toISOString() },
   });
 }
 
