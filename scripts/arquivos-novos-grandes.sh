@@ -5,6 +5,11 @@
 # third-party agent tooling, the Studio fork).
 set -e
 base=${1:?usage: arquivos-novos-grandes.sh <base>}
+# Checked before the pipe: a git error inside it would be lost and the check would pass green.
+if ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
+  echo "Base '$base' não existe neste clone (faltou git fetch ou fetch-depth?): não dá para conferir os arquivos novos." >&2
+  exit 2
+fi
 tab=$(printf '\t')
 git diff --diff-filter=A --numstat "$base" HEAD | {
   found=0
