@@ -52,6 +52,7 @@ const CONTRACT_KEYS = new Set([
   'instagram',
   'siteUrl',
   'qualifierAnswer',
+  'monthlyRevenue',
   'consent',
   'page',
   'tracking',
@@ -434,6 +435,7 @@ const PERSON = {
   instagram: '@Marca.Teste',
   site: 'www.exemplo.com.br',
   answer: 'formatacao',
+  revenue: '100k-300k',
 };
 
 /** Against a real API every run is another person (another lead) with another answer. */
@@ -445,6 +447,7 @@ const LIVE_PEOPLE = {
     email: 'pessoa.dois@exemplo.com.br',
     instagram: 'https://instagram.com/marca.teste/',
     answer: 'expansao',
+    revenue: 'nao-informar',
   },
   'nao-sei-1440': {
     ...PERSON,
@@ -463,8 +466,9 @@ async function fillForm(page, person, label) {
   await page.click('#f-tel');
   await page.keyboard.type(person.phone);
   await page.selectOption('#f-int', person.answer);
+  await page.selectOption('#f-fat', person.revenue);
   await page.check('#f-consent');
-  // the short form (22/10): the three answers and the consent are enough, the optional block still closed
+  // the short form (22/10, revenue 27/10): the four answers and the consent are enough, the optional block still closed
   await page
     .waitForFunction(() => !document.getElementById('f-send').disabled, null, { timeout: 5000 })
     .catch(() => {});
@@ -474,7 +478,7 @@ async function fillForm(page, person, label) {
     open: document.getElementById('f-more').open,
   }));
   check(
-    `${label}: name, WhatsApp, the answer and the consent alone turn the button on (optional block closed)`,
+    `${label}: name, WhatsApp, the two answers and the consent alone turn the button on (optional block closed)`,
     !short.disabled && short.missing === 'Tudo certo. Pode enviar.' && !short.open,
     short.missing,
   );
@@ -679,8 +683,8 @@ async function runViewport(
     `${layout.scrollWidth} vs ${layout.innerWidth}`,
   );
   check(
-    `${label}: one h1 and six sections`,
-    layout.h1 === 1 && layout.sections === 6,
+    `${label}: one h1 and eight sections (six in the scene, the proof strip and the FAQ)`,
+    layout.h1 === 1 && layout.sections === 8,
     `${layout.h1} h1, ${layout.sections} sections`,
   );
   check(
@@ -719,9 +723,9 @@ async function runViewport(
     );
   }
   check(
-    `${label}: resolution brake only on a phone, ladder from at most 2x`,
+    `${label}: resolution brake only on a phone with motion, ladder from at most 2x`,
     layout.scene &&
-      layout.scene.freio === (mobile && layout.scene.degraus.length > 1) &&
+      layout.scene.freio === (mobile && !reducedMotion && layout.scene.degraus.length > 1) &&
       layout.scene.degraus[0] <= 2,
     JSON.stringify(layout.scene && { degraus: layout.scene.degraus, freio: layout.scene.freio }),
   );
@@ -733,7 +737,13 @@ async function runViewport(
   );
   check(`${label}: social icon font loaded`, !layout.noFa);
   check(`${label}: send button off at start`, layout.disabled);
-  const items = ['nome', 'WhatsApp', 'o que você procura', 'aceite da política'];
+  const items = [
+    'nome',
+    'WhatsApp',
+    'o que você procura',
+    'faturamento mensal',
+    'aceite da política',
+  ];
   check(
     `${label}: missing line lists the required items only (no e-mail, company or Instagram)`,
     layout.missing.startsWith('Para enviar, falta: ') &&
@@ -864,6 +874,9 @@ async function runViewport(
   const answerText = await page.$eval('#f-int', (select) =>
     (select.selectedOptions[0]?.textContent ?? '').trim(),
   );
+  const revenueText = await page.$eval('#f-fat', (select) =>
+    (select.selectedOptions[0]?.textContent ?? '').trim(),
+  );
   const done = await page.evaluate(() => {
     const thanks = document.getElementById('thanks');
     const button = thanks.querySelector('[data-wa]');
@@ -900,6 +913,8 @@ async function runViewport(
       label,
       answer: person.answer,
       answerText,
+      revenue: person.revenue,
+      revenueText,
       instagramTyped: person.instagram,
       email: person.email,
       phone: person.phone,
@@ -965,6 +980,7 @@ async function runViewport(
         last.instagram === 'marca.teste' &&
         last.siteUrl === 'https://www.exemplo.com.br' &&
         last.qualifierAnswer === person.answer &&
+        last.monthlyRevenue === person.revenue &&
         last.phone === person.phone &&
         last.tracking?.utm_source === 'e2e' &&
         last.tracking?.gclid === 'TESTE123' &&
@@ -1140,6 +1156,7 @@ async function gtmChecks(browser, { port, apiBase }) {
     await page.click('#f-tel');
     await page.keyboard.type(PERSON.phone);
     await page.selectOption('#f-int', PERSON.answer);
+    await page.selectOption('#f-fat', PERSON.revenue);
     await page.check('#f-consent');
     await page.waitForFunction(() => !document.getElementById('f-send').disabled, null, {
       timeout: 5000,

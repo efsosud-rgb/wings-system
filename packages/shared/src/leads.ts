@@ -1692,6 +1692,29 @@ export type SiteFormTrackingKey = (typeof SITE_FORM_TRACKING_KEYS)[number];
 export const SITE_FORM_CONSENT_TEXT =
   'Autorizo a Wings Company a entrar em contato comigo sobre a franquia, por telefone, WhatsApp e e-mail.';
 
+/**
+ * "Faturamento mensal da empresa" on "Fale com a Wings" (Eric, 27/10/2026): the
+ * page sends the code; the lead keeps the option's text under the question.
+ */
+export const SITE_FORM_REVENUE_QUESTION = 'Faturamento mensal da empresa';
+export const SITE_FORM_REVENUE_VALUES = [
+  'ate-50k',
+  '50k-100k',
+  '100k-300k',
+  '300k-1mi',
+  'acima-1mi',
+  'nao-informar',
+] as const;
+export type SiteFormRevenue = (typeof SITE_FORM_REVENUE_VALUES)[number];
+export const SITE_FORM_REVENUE_OPTIONS: Record<SiteFormRevenue, string> = {
+  'ate-50k': 'Até R$ 50 mil',
+  '50k-100k': 'De R$ 50 mil a R$ 100 mil',
+  '100k-300k': 'De R$ 100 mil a R$ 300 mil',
+  '300k-1mi': 'De R$ 300 mil a R$ 1 milhão',
+  'acima-1mi': 'Acima de R$ 1 milhão',
+  'nao-informar': 'Prefiro não informar',
+};
+
 export const siteFormSubmitSchema = z.object({
   name: z.string().trim().min(2, 'Informe o nome').max(LEAD_NAME_MAX),
   /** The standard form (2026-10-07) asks no e-mail: the WhatsApp is the contact. An older page may still send one. */
@@ -1731,6 +1754,15 @@ export const siteFormSubmitSchema = z.object({
    * the form's answers as the option's text, never read as a contact field.
    */
   qualifierAnswer: z.string().trim().max(80).optional(),
+  /**
+   * The monthly revenue band (`SITE_FORM_REVENUE_VALUES`). Optional here so an
+   * older page or a cached one still sends; the page itself requires it.
+   */
+  monthlyRevenue: z
+    .enum(SITE_FORM_REVENUE_VALUES, {
+      error: `Escolha uma opção em "${SITE_FORM_REVENUE_QUESTION}".`,
+    })
+    .optional(),
 });
 export type SiteFormSubmitInput = z.infer<typeof siteFormSubmitSchema>;
 

@@ -1,8 +1,9 @@
 import { instagramUsernameOf } from '@wings/shared/instagram';
 
 /**
- * The short form's rules (Eric, 22/10/2026): the name, the WhatsApp and "O que
- * você procura?" are required; the e-mail, company, Instagram and site are
+ * The short form's rules (Eric, 22/10/2026): the name, the WhatsApp, "O que
+ * você procura?" and, since 27/10, "Faturamento mensal da empresa" are
+ * required; the e-mail, company, Instagram and site are
  * optional and checked only when filled. The button stays off until the
  * required ones are filled, and the line under it says what is still missing.
  * Pure, so the page and the tests share it.
@@ -79,6 +80,13 @@ export const FIELD_RULES: readonly FieldRule[] = [
     id: 'f-int',
     errorId: 'e-int',
     label: 'o que você procura',
+    ok: (v) => v !== '',
+    message: 'Escolha uma opção.',
+  },
+  {
+    id: 'f-fat',
+    errorId: 'e-fat',
+    label: 'faturamento mensal',
     ok: (v) => v !== '',
     message: 'Escolha uma opção.',
   },
