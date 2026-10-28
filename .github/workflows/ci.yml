@@ -17,12 +17,13 @@ jobs:
           POSTGRES_PASSWORD: wings_ci
           POSTGRES_DB: wings_system
         ports:
-          - 5432:5432
+          - "127.0.0.1:5432:5432"
         options: >-
           --health-cmd "pg_isready -U wings -d wings_system"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+          --tmpfs /var/lib/postgresql/data
 
     env:
       DATABASE_URL: postgresql://wings:wings_ci@127.0.0.1:5432/wings_system
