@@ -783,44 +783,54 @@ describe('WhatsApp needs the opt-in for a prospecting lead', () => {
     );
   });
 
-  it('a "não" merged into an existing deal of the seller is enforced there too', async () => {
+  const mergeNo = async (phone: string, placeId: string, legalBasis: 'consent' | null) => {
     const existing = await upsertLead(db, {
       source: 'manual',
       name: 'Pessoa Teste Doze',
-      phone: '21988880112',
+      phone,
       clientId: WINGS_CLIENT_ID,
       clientMapped: true,
       ownerEmployeeId: sellerA.id,
-      legalBasis: 'consent',
-      consentSource: 'site_form:teste',
+      legalBasis,
+      consentSource: legalBasis ? 'site_form:teste' : null,
       skipResearch: true,
       event: { kind: 'lead.created_manually' },
     });
     const prospect = (
-      await call(sellerA, 'POST', '/prospecting/prospects', {
-        placeId: 'ChIJmergeTestPlace0012',
-        action: 'reserve',
-      })
+      await call(sellerA, 'POST', '/prospecting/prospects', { placeId, action: 'reserve' })
     ).json<Prospect>();
     const merged = await call(sellerA, 'POST', `/prospecting/prospects/${prospect.id}/lead`, {
       companyName: 'Empresa Teste Doze',
       contactName: 'Contato Teste',
-      phone: '21 98888-0112',
+      phone,
       whatsappOptIn: false,
     });
     expect(merged.statusCode).toBe(200);
     expect(merged.json().leadId).toBe(existing.lead.id);
     const lead = await db.query.leads.findFirst({ where: eq(leads.id, existing.lead.id) });
+    const text = await call(gerente, 'POST', `/leads/${existing.lead.id}/whatsapp/text`, {
+      text: 'Olá!',
+    });
+    const notes = await db.select().from(leadNotes).where(eq(leadNotes.leadId, existing.lead.id));
+    return { lead, text, notes: notes.map((n) => n.body) };
+  };
+
+  it('a "não" merged into a deal of the seller with no consent is enforced there too', async () => {
+    const { lead, text } = await mergeNo('21988880112', 'ChIJmergeTestPlace0012', null);
     expect(lead).toMatchObject({
       source: 'manual',
       legalBasis: 'legitimate_interest',
       consentSource: 'prospeccao',
     });
-    const text = await call(gerente, 'POST', `/leads/${existing.lead.id}/whatsapp/text`, {
-      text: 'Olá!',
-    });
     expect(text.statusCode).toBe(403);
     expect(text.json().error).toBe('whatsapp_no_opt_in');
+  });
+
+  it('a "não" does not downgrade a consent from another source; it goes on the timeline', async () => {
+    const { lead, text, notes } = await mergeNo('21988880115', 'ChIJmergeTestPlace0015', 'consent');
+    expect(lead).toMatchObject({ legalBasis: 'consent', consentSource: 'site_form:teste' });
+    expect(notes).toEqual([expect.stringMatching(/Não aceitou receber WhatsApp/)]);
+    expect(text.json().error).toBe('whatsapp_off');
   });
 });
 

@@ -725,9 +725,17 @@ async function leadOfProspect(
     },
   });
   const leadId = result.lead.id;
-  // Merged into an existing deal: the company's answer of today replaces the consent on record,
-  // so a "não" reaches the WhatsApp gate (which reads consentSource 'prospeccao' too).
-  if (!result.created) await db.update(leads).set(consent).where(eq(leads.id, leadId));
+  // Merged into an existing deal: today's answer replaces a prospecting one (so a "não" reaches
+  // the WhatsApp gate), but never downgrades a consent from another source: that goes on the timeline.
+  if (!result.created) {
+    if (result.lead.legalBasis === 'consent' && result.lead.consentSource !== 'prospeccao')
+      await addNote(db, {
+        leadId,
+        body: `Prospecção: ${consent.consentText} Mantido o consentimento anterior, de outra origem.`,
+        authorEmployeeId: actor.employeeId,
+      });
+    else await db.update(leads).set(consent).where(eq(leads.id, leadId));
+  }
   if (result.created && stageId && result.lead.stageId !== stageId)
     await changeLead(db, {
       leadId,
