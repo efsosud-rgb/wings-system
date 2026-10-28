@@ -8,6 +8,7 @@ on:
 jobs:
   check:
     runs-on: [self-hosted, linux, x64, wings]
+    timeout-minutes: 40
 
     services:
       postgres:
@@ -51,7 +52,7 @@ jobs:
       # Re-running the seed must be a no-op, not a duplicate-key error.
       - run: pnpm --filter @wings/api db:seed
 
-      - run: pnpm test
+      - run: pnpm -r --workspace-concurrency=1 test
 
       # shortcut: runs last and does not block the job while the general Prettier pass is pending,
       # so migrations, seeds and tests still run; remove continue-on-error in that pass's PR.
