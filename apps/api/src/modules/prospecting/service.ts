@@ -42,7 +42,7 @@ import {
   roles,
 } from '../../db/schema/index.js';
 import type { AgentLlm } from '../agent/llm.js';
-import { leadOwnerFilter, leadVisibleTo } from '../leads/access.js';
+import { leadVisibleTo } from '../leads/access.js';
 import { addNote, changeLead, createTask, type Executor } from '../leads/crm.js';
 import { ForeignLeadError, upsertLead } from '../leads/service.js';
 import type { PlacesClient } from './places-client.js';
@@ -714,7 +714,8 @@ async function leadOfProspect(
     company: { name: input.companyName },
     fields: input.instagram ? { instagram: input.instagram } : null,
     ...consent,
-    mergeOnlyIfOwnedBy: leadOwnerFilter(actor, 'leads.write'),
+    // Only into a deal of the prospect's owner, whatever the clicker's role (a manager too).
+    mergeOnlyIfOwnedBy: row.ownerEmployeeId ?? actor.employeeId,
     distribute: false,
     skipResearch: true,
     event: {

@@ -824,6 +824,66 @@ describe('WhatsApp needs the opt-in for a prospecting lead', () => {
   });
 });
 
+describe("Criar lead joins only a lead of the prospect's owner", () => {
+  const reserve = async (session: Session, placeId: string) =>
+    (
+      await call(session, 'POST', '/prospecting/prospects', { placeId, action: 'reserve' })
+    ).json<Prospect>();
+
+  it("a phone on another seller's lead answers 409, whoever clicks", async () => {
+    const prospect = await reserve(sellerA, 'ChIJforeignPhoneTest0013');
+    const body = {
+      companyName: 'Empresa Teste Treze',
+      contactName: 'Contato Teste',
+      phone: '21 99000-0002', // Bruna's lead (leadByPhone)
+      whatsappOptIn: false,
+    };
+    for (const session of [sellerA, gerente, admin]) {
+      const res = await call(session, 'POST', `/prospecting/prospects/${prospect.id}/lead`, body);
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe('duplicate');
+    }
+    const foreign = await db.query.leads.findFirst({ where: eq(leads.id, leadByPhone) });
+    expect(foreign).toMatchObject({
+      ownerEmployeeId: sellerB.id,
+      source: 'manual',
+      legalBasis: null,
+    });
+    expect(
+      (await db.query.prospects.findFirst({ where: eq(prospects.id, prospect.id) }))?.status,
+    ).not.toBe('virou_lead');
+  });
+
+  it("a manager does not change the legal basis of another seller's lead", async () => {
+    const foreign = await upsertLead(db, {
+      source: 'manual',
+      name: 'Pessoa Teste Catorze',
+      phone: '21988880114',
+      clientId: WINGS_CLIENT_ID,
+      clientMapped: true,
+      ownerEmployeeId: sellerB.id,
+      legalBasis: 'consent',
+      consentSource: 'site_form:teste',
+      skipResearch: true,
+      event: { kind: 'lead.created_manually' },
+    });
+    const prospect = await reserve(gerente, 'ChIJforeignConsentTest0014');
+    const res = await call(gerente, 'POST', `/prospecting/prospects/${prospect.id}/lead`, {
+      companyName: 'Empresa Teste Catorze',
+      contactName: 'Contato Teste',
+      phone: '21 98888-0114',
+      whatsappOptIn: false,
+    });
+    expect(res.statusCode).toBe(409);
+    const lead = await db.query.leads.findFirst({ where: eq(leads.id, foreign.lead.id) });
+    expect(lead).toMatchObject({
+      ownerEmployeeId: sellerB.id,
+      legalBasis: 'consent',
+      consentSource: 'site_form:teste',
+    });
+  });
+});
+
 describe('quota', () => {
   it("says each refusal in the seller's words", () => {
     const base: ProspectingUsage = {
