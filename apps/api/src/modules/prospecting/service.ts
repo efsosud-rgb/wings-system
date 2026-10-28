@@ -700,7 +700,7 @@ async function leadOfProspect(
     legalBasis: optIn ? 'consent' : 'legitimate_interest',
     consentedAt: optIn ? now : null,
     consentSource: 'prospeccao',
-    consentText: `${optIn ? 'Aceitou' : 'Não aceitou'} receber WhatsApp no primeiro contato (${dayOf(now)}).`,
+    consentText: `${optIn ? 'Aceitou' : 'Não aceitou'} receber WhatsApp no primeiro contato (${dayOf(now)}). Empresa encontrada no Google Maps em ${dayOf(row.createdAt)}.`,
   } as const;
   const result = await upsertLead(db, {
     source: 'google_places',

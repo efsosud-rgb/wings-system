@@ -669,7 +669,7 @@ describe('ficha, enrichment and the lead', () => {
       enrichmentState: 'none',
     });
     expect(lead?.consentText).toMatch(
-      /^Não aceitou receber WhatsApp no primeiro contato \(\d{2}\/\d{2}\/\d{4}\)\.$/,
+      /^Não aceitou receber WhatsApp no primeiro contato \(\d{2}\/\d{2}\/\d{4}\)\. Empresa encontrada no Google Maps em \d{2}\/\d{2}\/\d{4}\.$/,
     );
     const [contact] = await db
       .select({ jobTitle: crmContacts.jobTitle })
