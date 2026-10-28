@@ -26,13 +26,17 @@ async function takeOver(mailDir, mailsBefore, address) {
 }
 
 export async function run({ acc, mailDir }) {
+  // A refusal is a 403 and nothing changed: a 400 or a 500 is a broken check, not a protection.
+  const admin = await login(acc.admin.email, acc.admin.password);
+  const employee = async (id) =>
+    (await call(admin.cookie, 'GET', `/employees/${id}`)).json?.employee ?? {};
   const rh = await login(acc.rh.email, acc.rh.password);
   const gerente = await login(acc.gerente.email, acc.gerente.password);
   const vendGestor = await login(acc.vendGestor.email, acc.vendGestor.password);
   check(
     'A-login',
-    'login rh, gerente e vendedor gestor',
-    [rh, gerente, vendGestor].every((r) => r.status === 200),
+    'login admin, rh, gerente e vendedor gestor',
+    [admin, rh, gerente, vendGestor].every((r) => r.status === 200),
   );
 
   // A1: RH/DP changes a Diretoria member's login e-mail and resets the password there.
@@ -49,7 +53,9 @@ export async function run({ acc, mailDir }) {
   check(
     'A1',
     'RH/DP não toma a conta da Diretoria trocando o e-mail de login',
-    a1 === 'PROTEGIDO',
+    change.status === 403 &&
+      a1 === 'PROTEGIDO' &&
+      (await employee(acc.diretor.id)).email === acc.diretor.email,
     `HTTP ${change.status} ${a1}`,
   );
 
@@ -60,7 +66,7 @@ export async function run({ acc, mailDir }) {
   check(
     'M1',
     'Gerente Comercial não inativa sem employees.deactivate',
-    off.status !== 200,
+    off.status === 403 && (await employee(acc.vendB.id)).status === 'active',
     `HTTP ${off.status}`,
   );
 
@@ -93,7 +99,7 @@ export async function run({ acc, mailDir }) {
   check(
     'A2',
     'Gerente Comercial não cria conta com poderes que ele não tem',
-    created.status !== 201 || gained.length === 0,
+    created.status === 403 && gained.length === 0,
     `HTTP ${created.status}, permissões ganhas=${gained.length}`,
   );
 
@@ -104,7 +110,7 @@ export async function run({ acc, mailDir }) {
   check(
     'A3',
     'vendedor com marca de gestor não inativa o Gerente',
-    off3.status !== 200,
+    off3.status === 403 && (await employee(acc.gerente.id)).status === 'active',
     `HTTP ${off3.status}`,
   );
 }
