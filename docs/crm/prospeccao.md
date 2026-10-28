@@ -1,6 +1,6 @@
 # CRM Vendas → Prospecção (26/10/2026)
 
-Branch `feat/crm-prospeccao`, migração **0096** `prospecting` (renumerar no merge se outra entrar antes). Pedido do Eric de 24/10: o vendedor de Formatação acha empresas no Google Maps, separa as boas, enriquece pelo site da própria empresa e, depois do primeiro contato, leva a empresa ao funil Formatação como lead.
+Branch `feat/crm-prospeccao`, migração **0097** `prospecting` (renumerar no merge se outra entrar antes). Pedido do Eric de 24/10: o vendedor de Formatação acha empresas no Google Maps, separa as boas, enriquece pelo site da própria empresa e, depois do primeiro contato, leva a empresa ao funil Formatação como lead.
 
 Ampliado em 26/10 na branch `feat/maps-prospecting` (PR empilhado sobre o desta tela), pedido do Eric "Wings Maps Prospecting": filtro "só com telefone", registros incompletos, possível duplicidade, reserva em lote com revisão, histórico, números, exportação, retorno agendado no "Criar lead" e sugestão de abordagem pela IA. Sem migração nova: as tabelas abaixo bastam.
 
