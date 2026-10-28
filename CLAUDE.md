@@ -18,3 +18,10 @@ The rules every AI agent follows — folder structure, code standard, what never
 - No máximo **3 subagentes por tarefa**. **Nunca repetir uma busca já delegada.** Workflows multiagente (`Workflow`, "ultracode") só a pedido do Eric.
 - Pesquisa, varredura e revisão de rotina usam os agents baratos de `.claude/agents/` (`repo-researcher`, `docs-checker` em haiku; `code-reviewer` em sonnet), todos só de leitura. **Código de risco** (autenticação, CPF, verba de anúncio, migrações, permissões) continua no modelo principal, e quem revisa não é mais fraco que quem escreveu.
 - `.claude/settings.json` é versionado e traz travas: `guard-production` bloqueia deploy/escrita em produção e push/merge em `main` sem `WINGS_ALLOW_PRODUCTION=1`, que **só o Eric define** no terminal antes de iniciar o `claude`; `guard-secrets` bloqueia comandos que imprimem valores de segredo. Uma trava bloqueando não é erro a contornar: pare e peça ao Eric.
+
+## Método (desde 28/10/2026)
+
+- **Decisões** do Eric: `docs/decisoes.md` (uma por linha; consulte antes de propor algo que esbarre nelas). **Regras que nunca quebram**, com onde são garantidas, o teste e o estado: `docs/invariantes.md`. **Congelado até 14/11**: `docs/ideias.md` (ideia nova vai para lá, não para o código).
+- **Briefing** que todo agente recebe e formato do relatório final: `docs/briefing-agente.md`. **Relatório de sexta**: `docs/relatorio-semanal.md`.
+- **Portão de qualidade** (`.github/workflows/ci.yml`, todo PR): build, typecheck, lint, migrations do zero e seed ×2, `pnpm test`, os testes de escalada, `pnpm e2e` (fluxos de ponta a ponta da auditoria em `apps/api/e2e/`, API real num banco `wings_e2e` descartável, com a trava de rede) e nenhum arquivo novo com mais de 600 linhas (`scripts/arquivos-novos-grandes.sh`). Rode tudo no seu clone antes do PR.
+- **Gancho do Git:** `sh scripts/instalar-hooks.sh` uma vez por clone (`git config core.hooksPath .githooks`). O `.githooks/pre-push` recusa push direto em `develop`, `main` e `homologacao`: só por PR. Não instale nos checkouts compartilhados (`/opt/wings-system`, `/opt/homologacao`): isso é com o Eric.
