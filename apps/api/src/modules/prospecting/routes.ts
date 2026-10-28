@@ -1,6 +1,7 @@
 import {
   PROSPECT_APPROACH_DAILY_MAX,
   PROSPECT_ENRICHMENT_SOURCE,
+  PROSPECT_PARSE_DAILY_MAX,
   PROSPECT_STATUSES,
   prospectApproachSchema,
   prospectBatchSchema,
@@ -26,7 +27,7 @@ import { prospects } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { createOpenRouterLlm, LlmError, type AgentLlm } from '../agent/llm.js';
 import { leadInScope } from '../leads/access.js';
-import { APPROACH_AUDIT_ACTION, approachesToday, suggestApproach } from './approach.js';
+import { aiCallsToday, APPROACH_AUDIT_ACTION, suggestApproach } from './approach.js';
 import { exportProspects, prospectingMetrics, searchHistory } from './insights.js';
 import { createPlacesClient, PlacesError, type PlacesClient } from './places-client.js';
 import { reserveCalls, usageOf } from './quota.js';
@@ -37,6 +38,7 @@ import {
   convertProspect,
   isProspectingManager,
   listProspects,
+  PARSE_AUDIT_ACTION,
   parseProspectQuery,
   prospectingOwners,
   prospectInReach,
@@ -237,6 +239,22 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
         .send({ error: 'ai_unavailable', message: 'A IA não está configurada neste ambiente.' });
     const body = prospectParseSchema.safeParse(request.body);
     if (!body.success) return invalid(reply, body.error);
+    const actor = request.session.actor;
+    if (
+      (await aiCallsToday(db, actor.employeeId, PARSE_AUDIT_ACTION, now())) >=
+      PROSPECT_PARSE_DAILY_MAX
+    )
+      return reply.status(429).send({
+        error: 'parse_quota',
+        message: `Você já usou a IA da busca ${PROSPECT_PARSE_DAILY_MAX} vezes hoje. Use o formulário.`,
+      });
+    // Counted before the call, and never the text: a call that failed may have cost too.
+    await writeAudit(db, {
+      actorEmployeeId: actor.employeeId,
+      action: PARSE_AUDIT_ACTION,
+      entity: 'prospect_query',
+      ip: request.ip,
+    });
     let query: Awaited<ReturnType<typeof parseProspectQuery>>;
     try {
       query = await parseProspectQuery(llm, body.data.text);
@@ -542,7 +560,10 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
         message: 'A empresa pediu para não ser contatada.',
       });
     const at = now();
-    if ((await approachesToday(db, actor.employeeId, at)) >= PROSPECT_APPROACH_DAILY_MAX)
+    if (
+      (await aiCallsToday(db, actor.employeeId, APPROACH_AUDIT_ACTION, at)) >=
+      PROSPECT_APPROACH_DAILY_MAX
+    )
       return reply.status(429).send({
         error: 'approach_quota',
         message: `Você já pediu ${PROSPECT_APPROACH_DAILY_MAX} sugestões hoje. Amanhã tem mais.`,

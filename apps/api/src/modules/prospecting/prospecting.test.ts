@@ -1,4 +1,5 @@
 import {
+  PROSPECT_PARSE_DAILY_MAX,
   prospectLeadSchema,
   SESSION_COOKIE,
   WHATSAPP_OPT_IN_MISSING_TEXT,
@@ -398,6 +399,41 @@ describe('search', () => {
     const bad = await call(sellerA, 'POST', '/prospecting/parse', { text: 'qualquer coisa' });
     expect(bad.statusCode).toBe(502);
     expect(bad.json().error).toBe('ai_failed');
+  });
+
+  it(`the sentence AI stops at ${PROSPECT_PARSE_DAILY_MAX} a day per person, and logs no text`, async () => {
+    llmArguments = JSON.stringify({
+      segmento: 'pizzarias',
+      locais: ['Icaraí'],
+      nota_min: null,
+      avaliacoes_min: null,
+      exige_site: false,
+    });
+    const seller = await loginAs(app, 'vendedor_formatacao');
+    const text = 'pizzarias em Icaraí';
+    expect((await call(seller, 'POST', '/prospecting/parse', { text })).statusCode).toBe(200);
+    const logged = await db
+      .select()
+      .from(auditLog)
+      .where(
+        and(eq(auditLog.actorEmployeeId, seller.id), eq(auditLog.action, 'prospect.query_parsed')),
+      );
+    expect(logged).toHaveLength(1);
+    expect(inspect(logged)).not.toContain('pizzarias');
+    await db.insert(auditLog).values(
+      Array.from({ length: PROSPECT_PARSE_DAILY_MAX - 1 }, () => ({
+        actorEmployeeId: seller.id,
+        action: 'prospect.query_parsed',
+        entity: 'prospect_query',
+      })),
+    );
+    const sent = llmSeen.length;
+    const res = await call(seller, 'POST', '/prospecting/parse', { text });
+    expect(res.statusCode).toBe(429);
+    expect(res.json()).toMatchObject({ error: 'parse_quota' });
+    expect(llmSeen.length).toBe(sent);
+    // Another person still has theirs.
+    expect((await call(sellerB, 'POST', '/prospecting/parse', { text })).statusCode).toBe(200);
   });
 });
 

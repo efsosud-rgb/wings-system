@@ -185,6 +185,9 @@ export const PROSPECT_APPROACH_CHANNEL_LABELS: Record<ProspectApproachChannel, s
 /** One approach suggestion per person per day at most (each is one paid model call). */
 export const PROSPECT_APPROACH_DAILY_MAX = 30;
 
+/** Sentences turned into search parameters per person per day at most (each is one paid model call). */
+export const PROSPECT_PARSE_DAILY_MAX = 60;
+
 /**
  * Sugerir abordagem: what the seller tells the AI. Nothing of Google's goes with it; the segment is
  * what the seller typed in the search, the context is their own words.

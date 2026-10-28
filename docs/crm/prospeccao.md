@@ -11,7 +11,7 @@ Tela: `/crm-vendas/prospeccao` (menu CRM Vendas → Prospecção). Código: `app
 - **Só o `place_id` é guardado.** Nome, endereço, telefone, site, nota, avaliações, horário, tipos e link do Maps vêm ao vivo em cada resposta e não entram em tabela, log, auditoria nem linha do tempo do lead. As tabelas novas não têm coluna com esses nomes, e um teste (`prospecting.test.ts`) falha se uma aparecer; outro teste busca, reserva, abre a ficha, cria o lead e confere que nada do Google ficou no banco.
 - **Ao vivo.** A busca e a ficha chamam o Google a cada clique; a tela guarda o resultado só na memória da página (nada no navegador). "Meus prospects" mostra só os nossos dados (status, dono, motivo, observações, o que o site mostrou); o nome e os contatos aparecem ao abrir a ficha.
 - **Atribuição.** A lista mostra "Resultados do Google Maps" e cada empresa tem "Abrir no Google Maps" (o `googleMapsUri` da resposta). Nenhum outro mapa.
-- **Nada do Google vai para IA.** A IA só transforma a frase do vendedor ("hamburguerias em Icaraí com nota 4,5+") em parâmetros (segmento, locais, nota mínima, avaliações mínimas, só com site). Ela nunca busca: o vendedor clica em "Usar no formulário" e depois em Buscar.
+- **Nada do Google vai para IA.** A IA só transforma a frase do vendedor ("hamburguerias em Icaraí com nota 4,5+") em parâmetros (segmento, locais, nota mínima, avaliações mínimas, só com site). Ela nunca busca: o vendedor clica em "Usar no formulário" e depois em Buscar. Teto: 60 frases por pessoa por dia (**429** `parse_quota`), contadas no log de auditoria `prospect.query_parsed`, gravado antes da chamada e sem o texto.
 - **Chave só no servidor.** `GOOGLE_PLACES_API_KEY` vai no cabeçalho `X-Goog-Api-Key`, nunca numa URL, num log ou numa resposta. Sem ela, toda rota que chama o Google responde **503** `places_not_configured` ("Chave do Google não configurada.") e a tela mostra "— Chave do Google não configurada." antes de qualquer busca (`GET /prospecting/status`).
 - Erro do Google: o log leva só o código e o status HTTP; a tela recebe 502 com "O Google não respondeu agora…" ou "O Google recusou a chave…". Nenhuma chamada é repetida (pode ter sido cobrada).
 
@@ -122,7 +122,7 @@ No card do lead, "Dados do Google (ao vivo)" carrega a ficha no clique (gasta 1 
 | `GET /prospecting/prospects/export.csv`     | planilha só com dados da Wings; `prospecting.export`                        |
 | `POST /prospecting/prospects/:id/approach`  | sugestão de abordagem da IA; nada é enviado                                 |
 
-Auditoria (só ids, status e contagens): `prospect.reserved`, `prospect.discarded`, `prospect.status_changed`, `prospect.transferred`, `prospect.not_found`, `prospect.enriched`, `prospect.converted`, `prospecting.icp_changed`, `prospecting.quota_changed`, `prospecting.exported`, `prospect.approach_suggested`; `prospect.reserved` leva `batch: true` quando veio do lote e `prospect.converted` leva `followUp`.
+Auditoria (só ids, status e contagens): `prospect.reserved`, `prospect.discarded`, `prospect.status_changed`, `prospect.transferred`, `prospect.not_found`, `prospect.enriched`, `prospect.converted`, `prospecting.icp_changed`, `prospecting.quota_changed`, `prospecting.exported`, `prospect.approach_suggested`, `prospect.query_parsed`; `prospect.reserved` leva `batch: true` quando veio do lote e `prospect.converted` leva `followUp`.
 
 ## Dados
 
