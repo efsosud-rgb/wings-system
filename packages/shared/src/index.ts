@@ -46,6 +46,7 @@ export * from './marketing/youtube-channel.js';
 export * from './navigation.js';
 export * from './office.js';
 export * from './projects.js';
+export * from './prospecting.js';
 export * from './rbac/permissions.js';
 export * from './rbac/policy.js';
 export * from './rbac/roles.js';

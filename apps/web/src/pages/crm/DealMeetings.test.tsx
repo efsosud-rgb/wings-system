@@ -1,4 +1,10 @@
-import type { GoogleWorkspaceStatus, Lead, Meeting, MeetingSummary } from '@wings/shared';
+import {
+  WHATSAPP_OPT_IN_MISSING_TEXT,
+  type GoogleWorkspaceStatus,
+  type Lead,
+  type Meeting,
+  type MeetingSummary,
+} from '@wings/shared';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../api/client.js';
@@ -188,6 +194,8 @@ const loaded = (pipeline: Lead['pipeline'] = 'expansao'): LoadedLead =>
       phone: '5521999990001',
       brand: pipeline === 'expansao' ? 'Marca Exemplo' : null,
       fields: { instagram: null, website: null, companyName: 'Padaria Exemplo', cnpj: null },
+      origin: { source: 'site_form' },
+      consent: { legalBasis: null },
     } as Lead,
     events: [],
     notes: [],
@@ -649,6 +657,21 @@ describe('Enviar link do Meet', () => {
     const off = screen.getByRole('button', { name: 'Enviar link do Meet' }) as HTMLButtonElement;
     expect(off.disabled).toBe(true);
     expect(off.title).toBe('A negociação não tem telefone');
+    cleanup();
+
+    // A prospecting lead without the WhatsApp opt-in on record.
+    const noOptIn = loaded('formatacao');
+    noOptIn.lead = {
+      ...noOptIn.lead,
+      origin: { ...noOptIn.lead.origin, source: 'google_places' },
+      consent: { ...noOptIn.lead.consent, legalBasis: 'legitimate_interest' },
+    };
+    render(<MeetingsTab data={noOptIn} canWrite onRegisterHeld={() => {}} />);
+    const blocked = screen.getByRole('button', {
+      name: 'Enviar link do Meet',
+    }) as HTMLButtonElement;
+    expect(blocked.disabled).toBe(true);
+    expect(blocked.title).toBe(WHATSAPP_OPT_IN_MISSING_TEXT);
     cleanup();
 
     render(<MeetingsTab data={loaded()} canWrite={false} onRegisterHeld={() => {}} />);

@@ -31,6 +31,7 @@ export const LEAD_SOURCES = [
   'site_form',
   'csv_import',
   'whatsapp',
+  'google_places',
 ] as const;
 export type LeadSource = (typeof LEAD_SOURCES)[number];
 
@@ -45,6 +46,7 @@ export const LEAD_SOURCE_LABELS: Record<LeadSource, string> = {
   site_form: 'Formulário do site',
   csv_import: 'Planilha importada',
   whatsapp: 'WhatsApp (Sofia)',
+  google_places: 'Prospecção Google Maps',
 };
 
 /**
@@ -1118,6 +1120,8 @@ export interface Lead {
   /** The RD CRM deal, when the lead has one. */
   crm: LeadCrm | null;
   consent: LeadConsent;
+  /** The Google Maps place the lead came from (Prospecção); only the id is kept, the rest is read live. */
+  googlePlaceId: string | null;
   research: LeadResearch;
   /** The AI summary of the deal (ficha do cliente, Etapa 4); null until asked for. */
   aiSummary: LeadAiSummary | null;

@@ -1,4 +1,10 @@
-import { canonicalWhatsAppPhone, waCallSdpSchema, type WaCall } from '@wings/shared';
+import {
+  canonicalWhatsAppPhone,
+  waCallSdpSchema,
+  WHATSAPP_OPT_IN_MISSING_TEXT,
+  whatsappOptInMissing,
+  type WaCall,
+} from '@wings/shared';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
@@ -60,6 +66,8 @@ export const whatsappCallRoutes: FastifyPluginAsync = async (app) => {
     if (!lead) return notFound(reply);
     if (await sellerWhatsAppLocked(db, actor))
       return refuse(reply, 403, 'whatsapp_soon', SELLER_SOON_MESSAGE);
+    if (whatsappOptInMissing(lead))
+      return refuse(reply, 403, 'whatsapp_no_opt_in', WHATSAPP_OPT_IN_MISSING_TEXT);
     const body = waCallSdpSchema.safeParse(request.body);
     if (!body.success)
       return refuse(reply, 400, 'invalid', body.error.issues[0]?.message ?? 'Pedido inválido.');

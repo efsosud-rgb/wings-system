@@ -1,6 +1,7 @@
 import {
   mentionsWings,
   canonicalWhatsAppPhone,
+  WHATSAPP_OPT_IN_MISSING_TEXT,
   withArticle,
   templateParamCount,
   waTemplateFamily,
@@ -20,6 +21,7 @@ import { z } from 'zod';
 import { waContacts, waConversations, waMessages, waTemplates } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import {
+  leadOptInMissing,
   officialNumberLive,
   sellerWhatsAppLocked,
   SELLER_SOON_MESSAGE,
@@ -349,6 +351,10 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
   ) {
     if (await sellerWhatsAppLocked(db, request.session.actor))
       return reply.status(403).send({ error: 'whatsapp_soon', message: SELLER_SOON_MESSAGE });
+    if (await leadOptInMissing(db, target.leadId))
+      return reply
+        .status(403)
+        .send({ error: 'whatsapp_no_opt_in', message: WHATSAPP_OPT_IN_MISSING_TEXT });
     const config = whatsappConfigOf(env);
     if (!config) return off(reply);
     const at = now();

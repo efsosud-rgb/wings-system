@@ -41,6 +41,7 @@ import { automationRoutes } from './modules/leads/automation-routes.js';
 import { leadEmailRoutes } from './modules/leads/lead-email-routes.js';
 import { leadFilesRoutes } from './modules/leads/lead-files-routes.js';
 import { nucleoRoutes } from './modules/leads/nucleo-routes.js';
+import { prospectingRoutes } from './modules/prospecting/routes.js';
 import { leadRoutes } from './modules/leads/routes.js';
 import { siteEventRoutes } from './modules/leads/site-events.js';
 import { siteFormRoutes } from './modules/leads/site-forms.js';
@@ -66,7 +67,7 @@ import {
   createInstagramDiscovery,
   type LeadCheckDeps,
 } from './modules/leads/field-checks.js';
-import { probePublicUrl } from './lib/public-probe.js';
+import { probePublicUrl, type PageTransport } from './lib/public-probe.js';
 import {
   createJevClient,
   installLeadTriage,
@@ -114,6 +115,10 @@ declare module 'fastify' {
       googleFetch?: typeof fetch;
       /** Set only by tests, so no test ever reaches YouTube's public video check. */
       youtubeFetch?: typeof fetch;
+      /** Set only by tests, so no test ever reaches Google Places. */
+      placesFetch?: typeof fetch;
+      /** Set only by tests, so no test ever reads a company's site (Prospecção). */
+      siteTransport?: PageTransport;
       storage?: ObjectStorage;
       /** Set only by tests, so a screen that reasons about "today" can be pinned to a day. */
       now?: () => Date;
@@ -155,6 +160,10 @@ export async function buildApp(deps: {
   googleFetch?: typeof fetch;
   /** Overridable so tests answer YouTube's public video check themselves. */
   youtubeFetch?: typeof fetch;
+  /** Overridable so tests talk to a simulated Google Places. */
+  placesFetch?: typeof fetch;
+  /** Overridable so tests serve the companies' sites themselves. */
+  siteTransport?: PageTransport;
   storage?: ObjectStorage;
   /** Overridable so tests pin the dashboard's "today". */
   now?: () => Date;
@@ -256,6 +265,8 @@ export async function buildApp(deps: {
     whatsappFetch: deps.whatsappFetch,
     googleFetch: deps.googleFetch,
     youtubeFetch: deps.youtubeFetch,
+    placesFetch: deps.placesFetch,
+    siteTransport: deps.siteTransport,
     storage: deps.storage,
     now: deps.now,
     mailer: deps.mailer ?? createMailer(deps.env, { info: (msg) => app.log.info(msg) }),
@@ -340,6 +351,7 @@ export async function buildApp(deps: {
   await app.register(automationRoutes);
   await app.register(leadEmailRoutes);
   await app.register(nucleoRoutes);
+  await app.register(prospectingRoutes);
   await app.register(leadFilesRoutes);
   await app.register(rdUserRoutes);
   await app.register(landingPageRoutes);

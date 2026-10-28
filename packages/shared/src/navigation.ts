@@ -46,6 +46,7 @@ export const NAV_ICONS = [
   'globe',
   'bell',
   'message',
+  'search',
 ] as const;
 export type NavIcon = (typeof NAV_ICONS)[number];
 
@@ -146,6 +147,15 @@ export const NAVIGATION: readonly NavModule[] = [
         permission: 'leads.read',
         status: 'ready',
         kind: 'crud',
+      },
+      {
+        path: '/crm-vendas/prospeccao',
+        label: 'Prospecção',
+        icon: 'search',
+        description: 'Empresas no Google Maps, ao vivo, para levar as boas ao funil Formatação',
+        permission: 'prospecting.use',
+        status: 'ready',
+        kind: 'studio',
       },
       {
         path: '/crm-vendas/whatsapp',

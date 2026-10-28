@@ -13,6 +13,8 @@ import {
   type MeetingSummary,
   type MeetingTranscript,
   type SummarySendChannel,
+  WHATSAPP_OPT_IN_MISSING_TEXT,
+  whatsappOptInMissing,
 } from '@wings/shared';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { hasPermission, useSession } from '../../api/auth.js';
@@ -1090,6 +1092,12 @@ export function MeetingsTab({
   onRegisterHeld: () => void;
 }) {
   const { lead } = data;
+  // "Enviar link do Meet" opens WhatsApp: off for a prospecting lead without the opt-in.
+  const noOptIn = whatsappOptInMissing({
+    source: lead.origin.source,
+    legalBasis: lead.consent.legalBasis,
+    consentSource: lead.consent.source,
+  });
   const session = useSession();
   const canApprove = hasPermission(session.data, 'meetings.approve_send');
   const meetings = useMeetings(lead.id);
@@ -1232,13 +1240,15 @@ export function MeetingsTab({
             <button
               type="button"
               className="crm-btn is-small"
-              disabled={!next || !lead.phone}
+              disabled={!next || !lead.phone || noOptIn}
               title={
                 !lead.phone
                   ? 'A negociação não tem telefone'
-                  : next
-                    ? 'Abre o seu WhatsApp com o link da reunião já escrito'
-                    : 'Nenhuma reunião com link para enviar'
+                  : noOptIn
+                    ? WHATSAPP_OPT_IN_MISSING_TEXT
+                    : next
+                      ? 'Abre o seu WhatsApp com o link da reunião já escrito'
+                      : 'Nenhuma reunião com link para enviar'
               }
               onClick={() => {
                 if (!next?.meetUrl || !lead.phone) return;

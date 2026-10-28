@@ -961,6 +961,7 @@ export function toLead(
       source: row.consentSource,
       text: row.consentText,
     },
+    googlePlaceId: row.googlePlaceId,
     research: {
       state: row.enrichmentState as Lead['research']['state'],
       summary: row.enrichmentSummary,

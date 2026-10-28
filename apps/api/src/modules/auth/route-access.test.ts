@@ -146,6 +146,8 @@ const PROBES = {
   roadmap: '/roadmap/modules',
   // Every level opens the Agenda (calendar.use, scope own; Eric, 14/10).
   agenda: '/agenda',
+  // Prospecção: the Formatação seller and the managers (prospecting.use).
+  prospecting: '/prospecting/usage',
 } as const;
 type Probe = keyof typeof PROBES;
 
@@ -160,7 +162,7 @@ const LEVELS: { role: RoleKey; sector: SectorSlug; opens: Probe[] }[] = [
   {
     role: 'vendedor_formatacao',
     sector: 'comercial',
-    opens: ['leads', 'campaignLeads', 'projects', 'agenda'],
+    opens: ['leads', 'campaignLeads', 'projects', 'agenda', 'prospecting'],
   },
   {
     role: 'gerente_comercial',
@@ -177,6 +179,7 @@ const LEVELS: { role: RoleKey; sector: SectorSlug; opens: Probe[] }[] = [
       'drive',
       'crmSettings',
       'agenda',
+      'prospecting',
     ],
   },
   {
@@ -194,6 +197,7 @@ const LEVELS: { role: RoleKey; sector: SectorSlug; opens: Probe[] }[] = [
       'projects',
       'drive',
       'agenda',
+      'prospecting',
     ],
   },
   { role: 'marketing', sector: 'marketing', opens: ['ads', 'projects', 'drive', 'agenda'] },
