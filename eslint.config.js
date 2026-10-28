@@ -53,6 +53,15 @@ export default tseslint.config(
     },
   },
   {
+    // The API's end-to-end runner and flows (pnpm e2e): plain Node scripts.
+    files: ['apps/api/e2e/**/*.mjs'],
+    languageOptions: {
+      globals: Object.fromEntries(
+        ['console', 'fetch', 'process', 'setTimeout', 'URL'].map((name) => [name, 'readonly']),
+      ),
+    },
+  },
+  {
     rules: {
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       // Personal data must never reach logs or the console (LGPD).

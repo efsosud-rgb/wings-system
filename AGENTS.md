@@ -98,7 +98,7 @@ A push does not deploy: the repository has no webhook. Deploys are started throu
 - API integration tests create a **throwaway database per run** from `DATABASE_URL` (`src/test/db.ts`), so append-only rows never pollute a shared database.
 - Fixtures use made-up data (`src/test/factories.ts`), never a real person's.
 - In a fresh worktree build the studio before the web tests: `pnpm --filter @wings/studio build`.
-- CI (`.github/workflows/ci.yml`) runs build, typecheck, lint, format check, migrate, seed twice, then the tests.
+- CI (`.github/workflows/ci.yml`) runs build, typecheck, lint, migrate, seed twice, the tests, the escalation tests by name, `pnpm e2e` (`apps/api/e2e/`), the new-file size check (600 lines) and the format check. See `docs/invariantes.md`.
 
 ### Migrations
 
