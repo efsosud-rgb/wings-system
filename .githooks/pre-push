@@ -9,7 +9,7 @@ while read -r _local _local_sha remote_ref _remote_sha; do
       branch=${remote_ref#refs/heads/}
       echo "Push recusado: a branch '$branch' só recebe mudanças por pull request." >&2
       echo "Suba a sua branch (git push -u origin <sua-branch>) e abra o PR com: gh pr create --base develop" >&2
-      echo "Regra do método de 28/10/2026 (docs/decisoes.md). Dúvida: fale com o Eric." >&2
+      echo "Regra do método de 27/10/2026 (docs/decisoes.md). Dúvida: fale com o Eric." >&2
       status=1
       ;;
   esac

@@ -56,8 +56,8 @@ jobs:
 
       - run: pnpm test
 
-      # Quality gate of 28/10/2026 (docs/decisoes.md). The escalation tests of the 27/10 audit
-      # already run inside pnpm test; this named step keeps them visible and impossible to drop.
+      # Quality gate of 27/10/2026 (docs/decisoes.md). The escalation tests of the 27/10 audit
+      # already run inside pnpm test; this named step only keeps them visible (a PR can still drop it).
       - name: Testes de escalada de privilégio (auditoria 27/10)
         run: pnpm --filter @wings/api exec vitest run --config ../../vitest.config.ts src/modules/employees/escalation.test.ts
 
