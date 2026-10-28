@@ -727,15 +727,20 @@ async function leadOfProspect(
   });
   const leadId = result.lead.id;
   // Merged into an existing deal: today's answer replaces a prospecting one (so a "não" reaches
-  // the WhatsApp gate), but never downgrades a consent from another source: that goes on the timeline.
+  // the WhatsApp gate). A consent from another source survives a "sim" but not a "não": the
+  // latest explicit refusal wins (Eric, 28/10). Either way it goes on the timeline.
   if (!result.created) {
-    if (result.lead.legalBasis === 'consent' && result.lead.consentSource !== 'prospeccao')
+    const { legalBasis, consentSource, consentedAt } = result.lead;
+    const otherConsent = legalBasis === 'consent' && consentSource !== 'prospeccao';
+    if (!(otherConsent && optIn)) await db.update(leads).set(consent).where(eq(leads.id, leadId));
+    if (otherConsent)
       await addNote(db, {
         leadId,
-        body: `Prospecção: ${consent.consentText} Mantido o consentimento anterior, de outra origem.`,
+        body: optIn
+          ? `Prospecção: ${consent.consentText} Mantido o consentimento anterior, de outra origem.`
+          : `Prospecção: ${consent.consentText} Substituído o consentimento anterior (origem ${consentSource ?? 'não registrada'}${consentedAt ? `, de ${dayOf(consentedAt)}` : ''}) pela recusa explícita de hoje.`,
         authorEmployeeId: actor.employeeId,
       });
-    else await db.update(leads).set(consent).where(eq(leads.id, leadId));
   }
   if (result.created && stageId && result.lead.stageId !== stageId)
     await changeLead(db, {

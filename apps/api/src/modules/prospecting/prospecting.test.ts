@@ -819,7 +819,12 @@ describe('WhatsApp needs the opt-in for a prospecting lead', () => {
     );
   });
 
-  const mergeNo = async (phone: string, placeId: string, legalBasis: 'consent' | null) => {
+  const mergeNo = async (
+    phone: string,
+    placeId: string,
+    legalBasis: 'consent' | null,
+    whatsappOptIn = false,
+  ) => {
     const existing = await upsertLead(db, {
       source: 'manual',
       name: 'Pessoa Teste Doze',
@@ -828,6 +833,7 @@ describe('WhatsApp needs the opt-in for a prospecting lead', () => {
       clientMapped: true,
       ownerEmployeeId: sellerA.id,
       legalBasis,
+      consentedAt: legalBasis ? new Date('2026-09-15T15:00:00Z') : null,
       consentSource: legalBasis ? 'site_form:teste' : null,
       skipResearch: true,
       event: { kind: 'lead.created_manually' },
@@ -839,7 +845,7 @@ describe('WhatsApp needs the opt-in for a prospecting lead', () => {
       companyName: 'Empresa Teste Doze',
       contactName: 'Contato Teste',
       phone,
-      whatsappOptIn: false,
+      whatsappOptIn,
     });
     expect(merged.statusCode).toBe(200);
     expect(merged.json().leadId).toBe(existing.lead.id);
@@ -862,10 +868,41 @@ describe('WhatsApp needs the opt-in for a prospecting lead', () => {
     expect(text.json().error).toBe('whatsapp_no_opt_in');
   });
 
-  it('a "não" does not downgrade a consent from another source; it goes on the timeline', async () => {
+  it('a "não" replaces a consent from another source and blocks WhatsApp (Eric, 28/10)', async () => {
     const { lead, text, notes } = await mergeNo('21988880115', 'ChIJmergeTestPlace0015', 'consent');
+    expect(lead).toMatchObject({
+      legalBasis: 'legitimate_interest',
+      consentedAt: null,
+      consentSource: 'prospeccao',
+      consentText: expect.stringMatching(/^Não aceitou receber WhatsApp/),
+    });
+    expect(notes).toEqual([
+      expect.stringMatching(
+        /Não aceitou receber WhatsApp.*Substituído o consentimento anterior \(origem site_form:teste, de 15\/09\/2026\) pela recusa explícita de hoje\./,
+      ),
+    ]);
+    expect(text.statusCode).toBe(403);
+    expect(text.json().error).toBe('whatsapp_no_opt_in');
+    const template = await call(gerente, 'POST', `/leads/${lead!.id}/whatsapp/template`, {
+      name: 'x',
+      language: 'pt_BR',
+      params: [],
+      companyArticle: 'a',
+    });
+    expect(template.json().error).toBe('whatsapp_no_opt_in');
+  });
+
+  it('a "sim" keeps a consent from another source; it goes on the timeline', async () => {
+    const { lead, text, notes } = await mergeNo(
+      '21988880116',
+      'ChIJmergeTestPlace0016',
+      'consent',
+      true,
+    );
     expect(lead).toMatchObject({ legalBasis: 'consent', consentSource: 'site_form:teste' });
-    expect(notes).toEqual([expect.stringMatching(/Não aceitou receber WhatsApp/)]);
+    expect(notes).toEqual([
+      expect.stringMatching(/Aceitou receber WhatsApp.*Mantido o consentimento anterior/),
+    ]);
     expect(text.json().error).toBe('whatsapp_off');
   });
 });
