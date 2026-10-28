@@ -99,6 +99,16 @@ e-mail de login controla a conta (o "esqueci minha senha" vai para ele), então:
 - **Inativar ou reativar exige `employees.deactivate`** sobre o setor da pessoa
   (`statusChangeDenial`); editar o cadastro não basta. Ativo ↔ afastado continua
   uma edição comum. Recusa: `403 deactivate_forbidden`.
+- **Auditoria de 27/10/2026 (A2 e A3).** Quem não tem `employees.assign_roles`
+  (gestor de setor, Gerente Comercial) só atribui um nível abaixo do seu **se já
+  tiver todas as permissões desse nível, com escopo igual ou maior**: um nível
+  "menor" pode carregar poderes que o gestor não tem (o Marketing tem anúncios e
+  clientes; o Jurídico vê o CPF dos sócios), e cadastrar essa conta ou mudar um
+  subordinado para ela e ficar com o login entregaria esses poderes. Recusa:
+  `role_permissions_exceed` (a tela simplesmente não oferece o nível). Pela mesma
+  regra, quem não pode mudar o nível de alguém não troca o e-mail de login dele.
+  E esse gestor também **não inativa nem reativa quem está acima dele**, nem Admin
+  Master ou Diretoria; colegas do mesmo nível continuam com ele.
 
 ## Política de senha
 

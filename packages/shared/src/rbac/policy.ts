@@ -38,7 +38,8 @@ export type DenyReason =
   | 'admin_master_record'
   | 'diretoria_level'
   | 'last_admin_master'
-  | 'sector_manager_powers';
+  | 'sector_manager_powers'
+  | 'role_permissions_exceed';
 
 /**
  * Hard denials, evaluated before any grant.
@@ -118,6 +119,15 @@ export function roleAssignmentDenial(
   return null;
 }
 
+/** True when `role` holds a permission `actor` lacks, or holds it wider than they do. */
+function grantsBeyond(actor: Actor, role: RoleKey): boolean {
+  return Object.entries(ROLE_PERMISSIONS[role]).some(([permission, scope]) => {
+    if (!scope) return false;
+    const held = grantedScope(actor, permission as PermissionKey);
+    return !held || SCOPE_RANK[held] < SCOPE_RANK[scope];
+  });
+}
+
 /** The employee whose access level is being set. Omit id and role on creation. */
 export interface RoleChangeTarget {
   employeeId?: string;
@@ -182,7 +192,11 @@ export function roleChangeDenial(
   if (assignment) return assignment;
   const outranksActor =
     target.currentRole !== undefined && ROLES[target.currentRole].rank >= ROLES[actor.role].rank;
-  return outranksActor ? 'role_rank_too_high' : null;
+  if (outranksActor) return 'role_rank_too_high';
+  // A lower rank can still hold powers the actor lacks: creating that account and taking its
+  // invite, or setting a subordinate to it and taking their login, would hand them over
+  // (security audit 2026-10-27, A2).
+  return grantsBeyond(actor, nextRole) ? 'role_permissions_exceed' : null;
 }
 
 /** An existing employee whose login e-mail would change. */
@@ -250,14 +264,22 @@ function managerPowersDenial(actor: Actor, sector: SectorSlug): DenyReason | nul
  */
 export function statusChangeDenial(
   actor: Actor,
-  target: { sector: SectorSlug },
+  target: { sector: SectorSlug; currentRole?: RoleKey },
   current: EmployeeStatus,
   next: EmployeeStatus,
 ): DenyReason | null {
   if (current === next) return null;
   if (current !== 'inactive' && next !== 'inactive') return null;
   const decision = can(actor, 'employees.deactivate', { sector: target.sector });
-  return decision.allowed ? null : decision.reason;
+  if (!decision.allowed) return decision.reason;
+  // Without employees.assign_roles, nobody switches off, or back on, someone above them
+  // (security audit 2026-10-27, A3). Colleagues of the same level stay theirs to manage.
+  const wide = can(actor, 'employees.assign_roles', { sector: target.sector }).allowed;
+  if (target.currentRole && actor.role !== 'admin_master' && !wide) {
+    if (PROTECTED_ROLES.includes(target.currentRole)) return 'protected_role';
+    if (ROLES[target.currentRole].rank > ROLES[actor.role].rank) return 'role_rank_too_high';
+  }
+  return null;
 }
 
 /** What the access-level select should offer, and why it is locked if it is. */
