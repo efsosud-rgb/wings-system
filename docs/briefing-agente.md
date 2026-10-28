@@ -10,8 +10,8 @@ Todo agente (Claude Code, Codex, Jules ou outro) recebe este briefing preenchido
 ## Branch
 
 - Base: `origin/develop` (atualizada antes de começar).
-- Nome: `<tipo>/<assunto-curto>` (ex.: `fix/crm-escopo-contato`). Trabalhe num clone ou worktree seu, nunca em `/opt/wings-system`.
-- Rode `sh scripts/instalar-hooks.sh` no clone: o gancho recusa push direto em develop, main e homologacao.
+- Nome: `<tipo>/<assunto-curto>` (ex.: `fix/crm-escopo-contato`). Trabalhe num clone seu (`gh repo clone`), nunca em `/opt/wings-system` nem num worktree dele.
+- Rode `sh scripts/instalar-hooks.sh` no clone: o gancho recusa push direto em develop, main e homologacao. Ele é uma ajuda, não uma trava (`--no-verify` e outro clone passam, e o GitHub não exige CI verde neste plano): nunca faça push direto nessas branches.
 
 ## O que é "pronto"
 
