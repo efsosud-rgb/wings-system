@@ -5,7 +5,8 @@
 //
 // The page "Fale com a Wings" can never be framed; the form embedded in the Wings site
 // (/embed/formulario) can be framed by the site's two origins and by nothing else, and every
-// other header stays the same on both. Needs docker and the nginx:alpine image (no pull).
+// other header stays the same on both. /robots.txt and /sitemap.xml follow LANDING_INDEXABLE (a
+// second container runs with it off). Needs docker and the nginx:alpine image (no pull).
 import { execFileSync } from 'node:child_process';
 import { request } from 'node:http';
 import { resolve } from 'node:path';
@@ -14,6 +15,9 @@ const root = resolve(import.meta.dirname, '..');
 const repo = resolve(root, '../..');
 const port = 30000 + Math.floor(Math.random() * 20000);
 const name = `wings-landing-nginx-check-${process.pid}`;
+// the same image with LANDING_INDEXABLE off, as in staging
+const quietPort = port + 1;
+const quietName = `${name}-noindex`;
 const HOST = 'fale.wingscompany.com.br';
 
 const STRICT_CSP = "frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'";
@@ -33,9 +37,9 @@ function check(label, ok, detail = '') {
   console.warn(`${ok ? 'PASS' : 'FAIL'}  ${label}${detail && !ok ? ` — ${detail}` : ''}`);
 }
 
-function get(path, host = HOST) {
+function get(path, host = HOST, onPort = port) {
   return new Promise((ok, fail) => {
-    const req = request({ host: '127.0.0.1', port, path, headers: { host } }, (res) => {
+    const req = request({ host: '127.0.0.1', port: onPort, path, headers: { host } }, (res) => {
       let body = '';
       res.setEncoding('utf8');
       res.on('data', (chunk) => (body += chunk));
@@ -48,15 +52,15 @@ function get(path, host = HOST) {
 
 const docker = (...args) => execFileSync('docker', args, { stdio: ['ignore', 'pipe', 'pipe'] });
 
-try {
+async function startNginx(containerName, onPort, indexable) {
   docker(
     'run',
     '--rm',
     '-d',
     '--name',
-    name,
+    containerName,
     '-p',
-    `127.0.0.1:${port}:80`,
+    `127.0.0.1:${onPort}:80`,
     '-v',
     `${resolve(repo, 'docker/landing-nginx.conf')}:/etc/nginx/templates/default.conf.template:ro`,
     '-v',
@@ -70,19 +74,24 @@ try {
     '-e',
     'LANDING_GTM_ID=GTM-TESTE',
     '-e',
-    'LANDING_INDEXABLE=true',
+    `LANDING_INDEXABLE=${indexable}`,
     '-e',
     'NGINX_ENVSUBST_FILTER=^LANDING_',
     'nginx:alpine',
   );
   for (let i = 0; i < 50; i += 1) {
     try {
-      if ((await get('/healthz')).status === 200) break;
+      if ((await get('/healthz', HOST, onPort)).status === 200) break;
     } catch {
       // not up yet
     }
     await new Promise((done) => setTimeout(done, 200));
   }
+}
+
+try {
+  await startNginx(name, port, 'true');
+  await startNginx(quietName, quietPort, 'false');
 
   const headersOf = (res) => ({
     csp: res.headers['content-security-policy'],
@@ -140,14 +149,52 @@ try {
     js.status === 200 && headersOf(js).csp === STRICT_CSP && headersOf(js).xfo === 'DENY',
     JSON.stringify([js.status, headersOf(js)]),
   );
+
+  const robots = await get('/robots.txt');
+  check(
+    '/robots.txt (indexable): allows and names the sitemap of the host',
+    robots.status === 200 &&
+      robots.headers['content-type']?.startsWith('text/plain') &&
+      robots.body === `User-agent: *\nAllow: /\n\nSitemap: https://${HOST}/sitemap.xml\n`,
+    JSON.stringify([robots.status, robots.body]),
+  );
+  const sitemap = await get('/sitemap.xml');
+  check(
+    "/sitemap.xml (indexable): the host's page, as XML",
+    sitemap.status === 200 &&
+      sitemap.headers['content-type']?.startsWith('text/xml') &&
+      sitemap.body.includes(`<loc>https://${HOST}/</loc>`),
+    JSON.stringify([sitemap.status, sitemap.headers['content-type'], sitemap.body]),
+  );
+  for (const path of ['/robots.txt', '/sitemap.xml']) {
+    const res = await get(path, 'outro-host.exemplo.test');
+    check(`outro-host${path}: 404`, res.status === 404, String(res.status));
+  }
+  const quietRobots = await get('/robots.txt', HOST, quietPort);
+  check(
+    '/robots.txt (LANDING_INDEXABLE off): disallows everything, no sitemap',
+    quietRobots.status === 200 && quietRobots.body === 'User-agent: *\nDisallow: /\n',
+    JSON.stringify([quietRobots.status, quietRobots.body]),
+  );
+  const quietSitemap = await get('/sitemap.xml', HOST, quietPort);
+  check('/sitemap.xml (LANDING_INDEXABLE off): 404', quietSitemap.status === 404);
+  const quietPage = await get('/', HOST, quietPort);
+  check(
+    '/ (LANDING_INDEXABLE off): noindex in the meta and the header',
+    quietPage.headers['x-robots-tag'] === 'noindex, nofollow' &&
+      quietPage.body.includes('<meta name="robots" content="noindex, nofollow"'),
+    JSON.stringify(quietPage.headers['x-robots-tag']),
+  );
 } catch (error) {
   failed += 1;
   console.warn(`FAIL  nginx check did not run — ${error instanceof Error ? error.message : error}`);
 } finally {
-  try {
-    docker('rm', '-f', name);
-  } catch {
-    // already gone
+  for (const containerName of [name, quietName]) {
+    try {
+      docker('rm', '-f', containerName);
+    } catch {
+      // already gone
+    }
   }
 }
 console.warn(failed ? `\n${failed} check(s) failed` : '\nall nginx header checks passed');
