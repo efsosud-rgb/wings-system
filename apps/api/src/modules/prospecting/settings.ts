@@ -1,8 +1,10 @@
 import {
   DEFAULT_ICP_WEIGHTS,
   DEFAULT_PROSPECTING_QUOTA,
+  DEFAULT_PROSPECTING_RETENTION,
   prospectingIcpSchema,
   prospectingQuotaSchema,
+  prospectingRetentionSchema,
   type ProspectingSettings,
 } from '@wings/shared';
 import { eq, sql } from 'drizzle-orm';
@@ -12,7 +14,8 @@ import { prospectingSettings } from '../../db/schema/index.js';
 
 /**
  * Prospecção's settings, one row per tenant: the ICP weights with the exclusion
- * list, and the quota of calls to Google. A missing row, or a part that no
+ * list, the quota of calls to Google, and how long a reservation and the
+ * enrichment are kept (retention). A missing row, or a part that no
  * longer passes the schema, reads as the defaults for that part.
  */
 
@@ -25,15 +28,17 @@ export async function loadProspectingSettings(db: Executor): Promise<Prospecting
   const stored = (row?.settings ?? {}) as Record<string, unknown>;
   const icp = prospectingIcpSchema.safeParse(stored.icp);
   const quota = prospectingQuotaSchema.safeParse(stored.quota);
+  const retention = prospectingRetentionSchema.safeParse(stored.retention);
   return {
     icp: icp.success ? icp.data : { weights: { ...DEFAULT_ICP_WEIGHTS }, excludedNames: [] },
     quota: quota.success ? quota.data : { ...DEFAULT_PROSPECTING_QUOTA },
+    retention: retention.success ? retention.data : { ...DEFAULT_PROSPECTING_RETENTION },
     updatedAt: row?.updatedAt.toISOString() ?? null,
   };
 }
 
-/** Saves one part (`icp` or `quota`), leaving the other as it is. */
-export async function saveProspectingPart<K extends 'icp' | 'quota'>(
+/** Saves one part (`icp`, `quota` or `retention`), leaving the others as they are. */
+export async function saveProspectingPart<K extends 'icp' | 'quota' | 'retention'>(
   db: Database,
   key: K,
   value: ProspectingSettings[K],

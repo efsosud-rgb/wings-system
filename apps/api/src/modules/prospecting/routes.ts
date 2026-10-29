@@ -9,6 +9,7 @@ import {
   prospectEnrichSchema,
   prospectingIcpSchema,
   prospectingQuotaSchema,
+  prospectingRetentionSchema,
   prospectLeadSchema,
   prospectParseSchema,
   prospectSearchSchema,
@@ -226,6 +227,23 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
       entity: 'prospecting_settings',
       ip: request.ip,
       metadata: { from: before.quota, to: body.data },
+    });
+    return reply.send(await loadProspectingSettings(db));
+  });
+
+  // Prazos de reserva e de retenção: the same gate as the ICP (the module's rules), audited as the quota.
+  app.put('/prospecting/settings/retention', configure, async (request, reply) => {
+    const body = prospectingRetentionSchema.safeParse(request.body);
+    if (!body.success) return invalid(reply, body.error);
+    const before = await loadProspectingSettings(db);
+    const actor = request.session.actor.employeeId;
+    await saveProspectingPart(db, 'retention', body.data, actor, now());
+    await writeAudit(db, {
+      actorEmployeeId: actor,
+      action: 'prospecting.retention_changed',
+      entity: 'prospecting_settings',
+      ip: request.ip,
+      metadata: { from: before.retention, to: body.data },
     });
     return reply.send(await loadProspectingSettings(db));
   });

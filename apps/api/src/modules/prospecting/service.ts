@@ -658,7 +658,7 @@ export async function prospectingOwners(db: Database): Promise<{ id: string; nam
 
 // --- Criar lead ---------------------------------------------------------------------------
 
-const dayOf = (at: Date) =>
+export const dayOf = (at: Date) =>
   new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo' }).format(at);
 
 /**
