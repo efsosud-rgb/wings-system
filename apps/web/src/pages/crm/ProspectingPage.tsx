@@ -1,6 +1,7 @@
 import {
   ICP_WEIGHT_KEYS,
   ICP_WEIGHT_LABELS,
+  PLACES_ERROR_LABELS,
   PROSPECT_ENRICHMENT_KEYS,
   PROSPECT_MANUAL_STATUSES,
   PROSPECT_MISSING_LABELS,
@@ -8,13 +9,16 @@ import {
   PROSPECT_STATUSES,
   prospectingIcpSchema,
   prospectingQuotaSchema,
+  prospectingRetentionSchema,
   prospectLeadSchema,
+  reservationExpiresAt,
   type IcpWeights,
   type Prospect,
   type ProspectEnrichment,
   type ProspectEnrichmentKey,
   type ProspectingIcp,
   type ProspectingQuota,
+  type ProspectingRetention,
   type ProspectingUsage,
   type ProspectQuery,
   type ProspectRef,
@@ -44,13 +48,21 @@ import {
   useProspectSearch,
   useSaveIcp,
   useSaveQuota,
+  useSaveRetention,
   useUpdateProspect,
 } from '../../api/prospecting.js';
 import { LoadFailure } from '../../components/LoadFailure.js';
 import { StudioLayout, StudioToolGroup } from '../../components/StudioLayout.js';
 import { Modal } from './CreateDealModal.js';
 import { formatDate } from './format.js';
-import { googleFailure, MapsLink, PlaceFacts, ratingText, webUrl } from './GooglePlacePanel.js';
+import {
+  GoogleMapsLogo,
+  googleFailure,
+  MapsLink,
+  PlaceFacts,
+  ratingText,
+  webUrl,
+} from './GooglePlacePanel.js';
 import { ApproachPanel } from './ProspectApproachPanel.js';
 import { HistoryTab, MetricsTab } from './ProspectingHistory.js';
 
@@ -136,6 +148,29 @@ export function hiddenLine(hidden: ProspectSearchResponse['hidden']): string | n
   const total = shown.reduce((sum, [count]) => sum + count, 0);
   if (total === 0) return null;
   return `${total} ocultos: ${shown.map(([count, why]) => `${count} ${why}`).join(', ')}`;
+}
+
+/** "2 de 5 locais não responderam: Icaraí (o Google demorou demais), …"; null when all answered. */
+export function failedPlacesLine(
+  failed: ProspectSearchResponse['failedPlaces'],
+  places: number,
+): string | null {
+  if (failed.length === 0) return null;
+  const which = failed.map(({ place, code }) => `${place} (${PLACES_ERROR_LABELS[code]})`);
+  return `${failed.length} de ${places} locais não responderam: ${which.join(', ')}. As chamadas contaram na cota.`;
+}
+
+/** "a reserva expira em 12 dias" for a held prospect; null for one that holds nothing. */
+export function expiryLine(
+  prospect: Pick<Prospect, 'status' | 'updatedAt'>,
+  retention: ProspectingRetention,
+  now = new Date(),
+): string | null {
+  const at = reservationExpiresAt(prospect, retention);
+  if (!at) return null;
+  const days = Math.max(0, Math.ceil((at.getTime() - now.getTime()) / 86_400_000));
+  if (days === 0) return 'a reserva expira hoje';
+  return `a reserva expira em ${days} dia${days === 1 ? '' : 's'}`;
 }
 
 const TABS = [
@@ -478,6 +513,7 @@ function SearchTab({
   const blocked = configured === false ? NO_KEY : null;
   const answer = results?.answer;
   const hidden = answer ? hiddenLine(answer.hidden) : null;
+  const failedLine = answer ? failedPlacesLine(answer.failedPlaces, answer.callsSpent) : null;
   const selectable = (answer?.items ?? []).filter(canReserveItem);
   // Only what can still be reserved: a result reserved by its own button since leaves the batch.
   const picked = selectable.filter((item) => selected.includes(item.placeId));
@@ -604,6 +640,14 @@ function SearchTab({
               {answer.items.length} empresas · {answer.callsSpent} chamadas nesta busca
             </span>
           </h2>
+          <p className="crm-sub">
+            Dados: <GoogleMapsLogo /> consultados agora e não guardados.
+          </p>
+          {failedLine && (
+            <p className="crm-error" role="alert">
+              — {failedLine}
+            </p>
+          )}
           {hidden && <p className="crm-sub">{hidden}</p>}
           {selectable.length > 0 && (
             <div className="crm-quick-row">
@@ -672,7 +716,6 @@ function SearchTab({
               </table>
             </div>
           )}
-          <p className="crm-sub">Dados: Google Maps, consultados agora e não guardados.</p>
           <p className="crm-sub">
             De onde vem cada dado: nome, endereço, telefone, site e nota — Google (ao vivo) ·
             Instagram, e-mail e WhatsApp do site — site da empresa · nota ICP, etiquetas e
@@ -1317,6 +1360,8 @@ function ProspectCard({
 }) {
   const update = useUpdateProspect();
   const ficha = usePlaceDetails('prospects');
+  const settings = useProspectingSettings();
+  const expiry = settings.data ? expiryLine(prospect, settings.data.retention) : null;
   const [draft, setDraft] = useState({
     status: prospect.status,
     reason: prospect.reason ?? '',
@@ -1356,6 +1401,7 @@ function ProspectCard({
         <span className="crm-sub">
           {prospect.ownerName ?? 'Sem dono'} · desde {formatDate(prospect.createdAt)} · atualizado{' '}
           {formatDate(prospect.updatedAt)}
+          {expiry && ` · ${expiry}`}
         </span>
       </h2>
       {prospect.leadId && (
@@ -1513,6 +1559,9 @@ function SettingsTab({ canConfigure, canQuota }: { canConfigure: boolean; canQuo
     <>
       {canConfigure && <IcpForm key={settings.data.updatedAt} initial={settings.data.icp} />}
       {canQuota && <QuotaForm key={settings.data.updatedAt} initial={settings.data.quota} />}
+      {canConfigure && (
+        <RetentionForm key={settings.data.updatedAt} initial={settings.data.retention} />
+      )}
     </>
   );
 }
@@ -1637,6 +1686,59 @@ function QuotaForm({ initial }: { initial: ProspectingQuota }) {
               type="number"
               min={0}
               max={1000}
+              step={1}
+              value={values[key]}
+              onChange={(event) => setValues((c) => ({ ...c, [key]: event.target.value }))}
+            />
+          </label>
+        ))}
+      </div>
+      <SaveRow problem={problem} saving={save.isPending} saved={save.isSuccess} />
+    </form>
+  );
+}
+
+const RETENTION_FIELDS: [keyof ProspectingRetention, string, number, number][] = [
+  ['reservedDays', 'Reserva sem atualização (dias)', 7, 365],
+  ['contactedDays', 'Contatado sem atualização (dias)', 7, 365],
+  ['enrichmentDays', 'Dados do site guardados sem atualização (dias)', 30, 730],
+];
+
+function RetentionForm({ initial }: { initial: ProspectingRetention }) {
+  const save = useSaveRetention();
+  const [values, setValues] = useState<Record<string, string>>(() =>
+    Object.fromEntries(RETENTION_FIELDS.map(([key]) => [key, String(initial[key])])),
+  );
+  const [problem, setProblem] = useState<string | null>(null);
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    const parsed = prospectingRetentionSchema.safeParse(
+      Object.fromEntries(RETENTION_FIELDS.map(([key]) => [key, Number(values[key])])),
+    );
+    if (!parsed.success)
+      return setProblem(parsed.error.issues[0]?.message ?? 'Confira os valores.');
+    setProblem(null);
+    save.mutate(parsed.data, { onError: (error) => setProblem(googleFailure(error)) });
+  };
+
+  return (
+    <form className="crm-panel" onSubmit={submit} aria-label="Prazos">
+      <h2>Prazos</h2>
+      <p className="crm-sub">
+        Sem atualização no prazo, a reserva volta a ficar livre (descartada, com o motivo e as
+        notas). Os e-mails e links achados no site de quem não virou lead são apagados no prazo
+        deles: o padrão de 180 dias ainda está a validar com o advogado.
+      </p>
+      <div className="crm-form-grid">
+        {RETENTION_FIELDS.map(([key, label, min, max]) => (
+          <label key={key} className="crm-field">
+            <span>{label}</span>
+            <input
+              className="crm-input"
+              type="number"
+              min={min}
+              max={max}
               step={1}
               value={values[key]}
               onChange={(event) => setValues((c) => ({ ...c, [key]: event.target.value }))}
