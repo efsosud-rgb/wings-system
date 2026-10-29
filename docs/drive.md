@@ -130,7 +130,7 @@ Clientes
 ```
 
 **Número.** `NN` é `clients.number`: o próximo ao cadastrar (sob lock), editável
-em Administração → Clientes, nunca repetido (409 `number_taken`). Dois
+em Formatação → Clientes, nunca repetido (409 `number_taken`). Dois
 dígitos até 99. A Wings Company não tem número nem pasta de cliente. Renomear
 ou renumerar o cliente renomeia a pasta e o `path` de tudo dentro.
 

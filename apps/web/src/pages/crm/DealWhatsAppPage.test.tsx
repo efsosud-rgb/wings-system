@@ -558,7 +558,7 @@ describe('the WhatsApp conversation screen', () => {
       buttons: [],
       withArt: false,
       notices: [
-        'Cadastre a arte do WhatsApp da Wings (Administração → Clientes, em Wings Company).',
+        'Cadastre a arte do WhatsApp da Wings (Formatação → Clientes, em Wings Company).',
       ],
       fields: [
         { index: 1, role: 'free', label: 'Campo {{1}}', value: 'Elena', locked: false },

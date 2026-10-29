@@ -169,7 +169,7 @@ const refuse = (status: number, error: string, message: string): TemplatePlan =>
 
 export const ART_MISSING_BRAND = 'Cadastre a arte do WhatsApp desta marca (no cadastro da marca).';
 export const ART_MISSING_WINGS =
-  'Cadastre a arte do WhatsApp da Wings (Administração → Clientes, em Wings Company).';
+  'Cadastre a arte do WhatsApp da Wings (Formatação → Clientes, em Wings Company).';
 export const ARTICLE_MISSING =
   'Cadastre o artigo (o/a) desta marca no cadastro dela; por ora vai "da".';
 export const ART_VERSION_PENDING =
