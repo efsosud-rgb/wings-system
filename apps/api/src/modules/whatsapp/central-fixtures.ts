@@ -53,7 +53,7 @@ export let clock = NOW;
 export const sends: { url: string; auth: string | null; body: Record<string, unknown> }[] = [];
 /** Each read of a WABA's templates: which WABA, with which token. */
 export const templateReads: { url: string; auth: string | null }[] = [];
-export const json = (body: unknown, status = 200) =>
+export const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 export const whatsappFetch = (async (input: string | URL | Request, init?: RequestInit) => {

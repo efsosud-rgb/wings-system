@@ -3,7 +3,7 @@
   "compilerOptions": {
     "noEmit": false
   },
-  // Tests are not shipped; migrate.ts and seed.ts are, because the container
+  // Tests and their fixtures are not shipped; migrate.ts and seed.ts are, because the container
   // runs them on start.
-  "exclude": ["src/**/*.test.ts"]
+  "exclude": ["src/**/*.test.ts", "src/**/*-fixtures.ts"]
 }
