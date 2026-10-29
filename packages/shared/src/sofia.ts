@@ -59,6 +59,7 @@ export const SOFIA_HANDOFF_REASONS = [
   'teto_diario',
   'sofia_desligada',
   'outro_assunto',
+  'nao_me_contate',
 ] as const;
 export type SofiaHandoffReason = (typeof SOFIA_HANDOFF_REASONS)[number];
 
@@ -74,6 +75,7 @@ export const SOFIA_HANDOFF_LABELS: Record<SofiaHandoffReason, string> = {
   teto_diario: 'Teto diário de IA atingido',
   sofia_desligada: 'Sofia desligada',
   outro_assunto: 'Outro assunto',
+  nao_me_contate: 'Pediu para não ser contatado e escreveu de novo',
 };
 
 /** Why a conversation ended without a deal (the only cases Sofia closes alone). */

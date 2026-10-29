@@ -7,13 +7,16 @@ import {
   type RoleKey,
   type WaConversationItem,
 } from '@wings/shared';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
 import {
   auditLog,
+  contactOptOuts,
+  leadEvents,
+  leadNotes,
   leadTrackingLinks,
   leadTriageQueue,
   leads,
@@ -628,6 +631,12 @@ describe('sending', () => {
     });
     expect(blocked.statusCode).toBe(409);
     expect(blocked.json().error).toBe('opted_out');
+    // The word also goes to the one register, by phone, even with Sofia off.
+    const [registered] = await db
+      .select()
+      .from(contactOptOuts)
+      .where(eq(contactOptOuts.keyValue, '5521912120000'));
+    expect(registered).toMatchObject({ channel: 'whatsapp', origin: 'whatsapp_palavra' });
     await deliver(inbound('5521912120000', 'Pensei melhor, me liga').body);
     await run();
     const thread = await app.inject({
@@ -636,6 +645,88 @@ describe('sending', () => {
       cookies: owner.cookies,
     });
     expect(thread.json<DealWhatsApp>().optedOut).toBe(false);
+  });
+
+  it('a "não me contate" stops the template and the call request; a typed reply still goes', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521912130000', owner.id);
+    await deliver(inbound('5521912130000', 'Oi').body);
+    await run();
+    const recorded = await app.inject({
+      method: 'POST',
+      url: `/leads/${leadId}/contact-opt-outs`,
+      cookies: owner.cookies,
+      payload: { channels: ['whatsapp'], reason: 'Pediu por telefone' },
+    });
+    expect(recorded.statusCode).toBe(201);
+    expect(recorded.json().blocks.whatsapp.blocked).toBe(true);
+    const before = sends.length;
+    for (const [url, payload] of [
+      [
+        `/leads/${leadId}/whatsapp/template`,
+        { name: 'retomar_conversa', language: 'pt_BR', params: ['a', 'b'] },
+      ],
+      [`/leads/${leadId}/whatsapp/call-permission`, {}],
+    ] as const) {
+      const blocked = await app.inject({ method: 'POST', url, cookies: owner.cookies, payload });
+      expect(blocked.statusCode, url).toBe(409);
+      expect(blocked.json(), url).toEqual({
+        error: 'contact_blocked',
+        message: expect.stringContaining('Pediu para não ser contatado'),
+      });
+    }
+    expect(sends.length).toBe(before);
+    const events = await db
+      .select()
+      .from(leadEvents)
+      .where(and(eq(leadEvents.leadId, leadId), eq(leadEvents.kind, 'lead.contact_blocked')));
+    expect(events.map((e) => (e.detail as { path: string }).path).sort()).toEqual([
+      'modelo',
+      'pedido_ligacao',
+    ]);
+    // The person wrote: a person may answer inside the window, as before.
+    nextSend = () => accepted('wamid.REPLY1');
+    const reply = await app.inject({
+      method: 'POST',
+      url: `/leads/${leadId}/whatsapp/text`,
+      cookies: owner.cookies,
+      payload: { text: 'Certo, anotado.' },
+    });
+    expect(reply.statusCode).toBe(201);
+  });
+
+  it('only a manager or the board revokes a "não me contate", with a note on the timeline', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const manager = await sessionFor('gerente_comercial');
+    const leadId = await deal('5521912140000', owner.id);
+    const record = () =>
+      app.inject({
+        method: 'POST',
+        url: `/leads/${leadId}/contact-opt-outs`,
+        cookies: owner.cookies,
+        payload: { channels: ['all'], reason: 'Pediu para não ligar' },
+      });
+    expect((await record()).statusCode).toBe(201);
+    expect((await record()).json().entries).toHaveLength(1); // idempotent
+    const revoke = (cookies: Record<string, string>) =>
+      app.inject({
+        method: 'POST',
+        url: `/leads/${leadId}/contact-opt-outs/revoke`,
+        cookies,
+        payload: { channel: 'all', reason: 'Voltou a pedir contato' },
+      });
+    expect((await revoke(owner.cookies)).statusCode).toBe(403);
+    const done = await revoke(manager.cookies);
+    expect(done.statusCode).toBe(200);
+    expect(done.json().blocks.whatsapp.blocked).toBe(false);
+    expect((await revoke(manager.cookies)).statusCode).toBe(409);
+    const [audit] = await db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, 'lead.contact_opt_out_revoked'));
+    expect(audit).toMatchObject({ actorEmployeeId: manager.id, entityId: leadId });
+    const [note] = await db.select().from(leadNotes).where(eq(leadNotes.leadId, leadId));
+    expect(note!.body).toContain('Voltou a pedir contato');
   });
 });
 

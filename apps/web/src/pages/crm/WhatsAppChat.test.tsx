@@ -42,6 +42,8 @@ const thread = (messages: WaMessage[]): DealWhatsApp => ({
   phone: '5521999990001',
   window: { open: false, expiresAt: null },
   optedOut: false,
+  contactBlock: { blocked: false, reason: null, origin: null },
+  callBlock: { blocked: false, reason: null, origin: null },
   callPermission: { status: null, expiresAt: null, requestedAt: null },
   attendance: null,
   speaksFor: null,

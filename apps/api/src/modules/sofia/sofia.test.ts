@@ -16,6 +16,7 @@ import type { Database } from '../../db/client.js';
 import {
   auditLog,
   clients,
+  contactOptOuts,
   crmContacts,
   crmDistributionMembers,
   crmNotifications,
@@ -514,6 +515,62 @@ describe('who answers', () => {
     });
     const [contact] = await db.select().from(waContacts).where(eq(waContacts.phone, phone));
     expect(contact!.optOutAt).not.toBeNull();
+    // The word also goes to the one "não me contate" register, by phone, for WhatsApp.
+    const rows = await db.select().from(contactOptOuts).where(eq(contactOptOuts.keyValue, phone));
+    expect(rows).toMatchObject([
+      { channel: 'whatsapp', keyKind: 'phone', origin: 'whatsapp_palavra', createdBy: null },
+    ]);
+  });
+
+  it('who said SAIR and writes again gets no answer from Sofia: a person decides', async () => {
+    await createEmployee(db, { role: 'gerente_comercial', sector: 'comercial' });
+    const phone = newPhone();
+    await write(phone, text('SAIR'));
+    await sofiaAnswers();
+    const before = sends.length;
+    llmAnswers = [said({ intent: 'formatacao' })];
+    await write(phone, text('mudei de ideia, quero saber mais'));
+    await sofiaAnswers();
+    expect(sends.length).toBe(before);
+    expect(llmCalls).toHaveLength(0);
+    const conversation = await conversationOf(phone);
+    expect(conversation).toMatchObject({ attendance: 'waiting_human', reason: 'nao_me_contate' });
+    const notices = await db
+      .select()
+      .from(crmNotifications)
+      .where(eq(crmNotifications.kind, 'contact_opt_out_wrote'));
+    expect(notices.length).toBeGreaterThan(0);
+    expect(notices[0]!.message).toContain('Pediu para não ser contatado e escreveu de novo');
+  });
+
+  it('a "não me contate" from the CRM, or the Prospecção opt-in rule, keeps Sofia quiet too', async () => {
+    const registered = newPhone();
+    await db.insert(contactOptOuts).values({
+      channel: 'all',
+      keyKind: 'phone',
+      keyValue: registered,
+      origin: 'crm',
+      reason: 'Pediu por telefone',
+    });
+    const prospected = newPhone();
+    await db.insert(leads).values({
+      source: 'google_places',
+      name: 'Empresa da prospecção',
+      phone: prospected,
+      pipeline: 'formatacao',
+      legalBasis: 'legitimate_interest',
+      consentSource: 'prospeccao',
+    });
+    const before = sends.length;
+    for (const phone of [registered, prospected]) {
+      await write(phone, text('oi'));
+      await sofiaAnswers();
+      expect(await conversationOf(phone)).toMatchObject({
+        attendance: 'waiting_human',
+        reason: 'nao_me_contate',
+      });
+    }
+    expect(sends.length).toBe(before);
   });
 
   it('an AI failure sends the fixed line and a person takes over', async () => {
@@ -1001,6 +1058,11 @@ describe('what the review found (each was a real path)', () => {
       cookies: admin.cookies,
       payload: { action: 'close' },
     });
+    // The PARAR went to the register: a manager revoked it (the person's choice), Sofia may talk.
+    await db
+      .update(contactOptOuts)
+      .set({ revokedAt: new Date(), revokedReason: 'Pediu para continuar' })
+      .where(eq(contactOptOuts.keyValue, phone));
     llmAnswers = [said({ intent: 'formatacao' })];
     await write(phone, text('Quero franquear minha empresa'));
     await sofiaAnswers();
