@@ -1541,6 +1541,50 @@ describe('Sofia per conversation, and a person in the middle of her turn', () =>
   });
 });
 
+describe("Sofia's list", () => {
+  it('goes 50 at a time and past the 200 where it used to stop', async () => {
+    const admin = await sessionFor('admin_master');
+    const newest = Date.parse('2030-01-01T00:00:00Z');
+    const contacts = await db
+      .insert(waContacts)
+      .values(
+        Array.from({ length: 260 }, (_, i) => ({ phone: `55218${String(i).padStart(8, '0')}` })),
+      )
+      .returning({ id: waContacts.id });
+    await db.insert(waConversations).values(
+      contacts.map((contact, i) => ({
+        contactId: contact.id,
+        attendance: 'waiting_human',
+        lastMessageAt: new Date(newest - i * 1_000),
+      })),
+    );
+    const seen: string[] = [];
+    let next: string | null = '';
+    let pages = 0;
+    while (next !== null) {
+      const url: string = `/sofia/conversations${next ? `?before=${encodeURIComponent(next)}` : ''}`;
+      const res = await app.inject({ method: 'GET', url, cookies: admin.cookies });
+      expect(res.statusCode).toBe(200);
+      const page: { conversations: { conversationId: string }[]; next: string | null } = res.json();
+      if (pages === 0) expect(page.conversations).toHaveLength(50);
+      seen.push(...page.conversations.map((c) => c.conversationId));
+      next = page.next;
+      pages++;
+    }
+    expect(seen.length).toBeGreaterThanOrEqual(260);
+    expect(new Set(seen).size).toBe(seen.length);
+    expect(
+      (
+        await app.inject({
+          method: 'GET',
+          url: '/sofia/conversations?before=nonsense',
+          cookies: admin.cookies,
+        })
+      ).statusCode,
+    ).toBe(400);
+  });
+});
+
 describe('the guards', () => {
   it('drops a model line with a number, a price word, a promise, a question or a claim to be a person', () => {
     expect(guardReply('Que legal!')).toBe('Que legal!');

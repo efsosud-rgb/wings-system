@@ -609,6 +609,14 @@ export const waNumbers = pgTable(
     historySyncRequest: text('history_sync_request'),
     /** 0–100, the highest Meta reported in a `history` webhook. */
     historyProgress: integer('history_progress'),
+    /**
+     * A connection (or "Tentar de novo") under way holds the number until this time: the one-time
+     * syncs are never asked twice, whatever API container runs it. Expires on its own if one dies.
+     */
+    connectingUntil: timestamp('connecting_until', { withTimezone: true }),
+    /** The last try to renew the token before it ends, and Meta's code when it failed. */
+    tokenRenewTriedAt: timestamp('token_renew_tried_at', { withTimezone: true }),
+    tokenRenewError: text('token_renew_error'),
     createdBy: uuid('created_by').references(() => employees.id),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -619,5 +627,32 @@ export const waNumbers = pgTable(
       .on(table.tenantId, table.phone)
       .where(sql`${table.phone} is not null`),
     index('wa_numbers_waba_idx').on(table.wabaId),
+  ],
+);
+
+/**
+ * The message templates of each work number's own WABA (docs/whatsapp/central.md), as read from
+ * Meta: a number sends only its own WABA's approved templates. The official number's stay in
+ * `wa_templates`, with the Modelos screen.
+ */
+export const waNumberTemplates = pgTable(
+  'wa_number_templates',
+  {
+    tenantId: tenantId(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    numberId: uuid('number_id')
+      .notNull()
+      .references(() => waNumbers.id, { onDelete: 'cascade' }),
+    metaId: text('meta_id'),
+    name: text('name').notNull(),
+    language: text('language').notNull(),
+    category: text('category'),
+    status: text('status').notNull(),
+    rejectedReason: text('rejected_reason'),
+    components: jsonb('components').notNull().default([]),
+    syncedAt: timestamp('synced_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('wa_number_templates_name_lang_uq').on(table.numberId, table.name, table.language),
   ],
 );

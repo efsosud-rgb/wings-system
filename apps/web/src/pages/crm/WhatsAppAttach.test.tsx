@@ -379,18 +379,27 @@ describe('a work number’s chat (docs/whatsapp/central.md)', () => {
     ownerName: 'Fernando',
   };
 
-  it('writes free text and files inside its 24 h, with no template', () => {
+  it('writes free text and files inside its 24 h, and offers its own templates', () => {
     show(thread({ number }), { conversationId: 'c1' });
     expect(screen.getByRole('button', { name: 'Enviar' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Usar modelo' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Usar modelo' })).toBeTruthy();
   });
 
-  it('outside its 24 h says to wait for the person, and offers no template either', () => {
+  it("outside its 24 h, picks among that number's own templates (its WABA), never the official ones", async () => {
+    fetchMock.mockImplementation(() =>
+      Promise.resolve(answer(200, { templates: [], configured: true, syncError: null })),
+    );
     show(thread({ number, window: { open: false, expiresAt: null } }), { conversationId: 'c1' });
-    expect(
-      screen.getByText(/Fora das 24 h da última mensagem da pessoa para este número/),
-    ).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Enviar' })).toBeNull();
-    expect(screen.queryByText(/Escolha um modelo|Usar modelo/)).toBeNull();
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([url]) =>
+          String(url).endsWith('/whatsapp/templates?numberId=n1'),
+        ),
+      ).toBe(true),
+    );
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/whatsapp/templates'))).toBe(
+      false,
+    );
   });
 });

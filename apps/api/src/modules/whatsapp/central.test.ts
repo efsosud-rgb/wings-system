@@ -15,13 +15,16 @@ import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
 import {
   auditLog,
+  crmNotifications,
   leadEvents,
   leadTriageQueue,
   leads,
   waContacts,
   waConversations,
   waMessages,
+  waNumberTemplates,
   waNumbers,
+  waTemplates,
   waWebhookEvents,
 } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
@@ -68,6 +71,8 @@ let app: FastifyInstance;
 let clock = NOW;
 
 const sends: { url: string; auth: string | null; body: Record<string, unknown> }[] = [];
+/** Each read of a WABA's templates: which WABA, with which token. */
+const templateReads: { url: string; auth: string | null }[] = [];
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
@@ -76,6 +81,21 @@ const whatsappFetch = (async (input: string | URL | Request, init?: RequestInit)
     typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
   );
   const auth = new Headers(init?.headers).get('authorization');
+  if (url.pathname.endsWith('/message_templates')) {
+    templateReads.push({ url: url.pathname, auth });
+    return json({
+      data: [
+        {
+          id: '9100000000000001',
+          name: 'retomar_conversa_numero',
+          language: 'pt_BR',
+          status: 'APPROVED',
+          category: 'UTILITY',
+          components: [{ type: 'BODY', text: 'Olá! Ainda quer conversar sobre a franquia?' }],
+        },
+      ],
+    });
+  }
   if (url.pathname.endsWith('/messages')) {
     sends.push({ url: url.pathname, auth, body: JSON.parse(String(init?.body)) });
     return json({ contacts: [{ wa_id: PERSON }], messages: [{ id: `wamid.SENT${sends.length}` }] });
@@ -141,6 +161,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   clock = NOW;
   sends.length = 0;
+  templateReads.length = 0;
   await setOfficialLive(db, true);
   await db.delete(leadTriageQueue);
   await db.delete(waMessages);
@@ -417,7 +438,7 @@ describe('sending through a work number', () => {
     expect(audit?.metadata).toMatchObject({ numberId, outcome: 'sent' });
   });
 
-  it('refuses a template, and free text outside the 24 h, without calling Meta', async () => {
+  it('refuses free text outside the 24 h, without calling Meta', async () => {
     await apply(fixtures.message('wamid.S2', ago(60 * 25)));
     const chat = await chatOfPerson();
     const late = await app.inject({
@@ -428,15 +449,95 @@ describe('sending through a work number', () => {
     });
     expect(late.statusCode).toBe(409);
     expect(late.json()).toMatchObject({ error: 'window_closed' });
-    const template = await app.inject({
-      method: 'POST',
-      url: `/whatsapp/conversations/${chat!.id}/template`,
-      cookies: owner.cookies,
-      payload: { name: 'boas_vindas', language: 'pt_BR', params: [], companyArticle: 'a' },
-    });
-    expect(template.statusCode).toBe(409);
-    expect(template.json()).toMatchObject({ error: 'number_templates_soon' });
     expect(sends).toHaveLength(0);
+  });
+
+  it("outside the 24 h, sends its own WABA's templates, read with its token; never the official ones", async () => {
+    await apply(fixtures.message('wamid.S3', ago(60 * 25)));
+    const chat = await chatOfPerson();
+    await db
+      .insert(waTemplates)
+      .values({
+        name: 'so_do_oficial',
+        language: 'pt_BR',
+        status: 'APPROVED',
+        category: 'UTILITY',
+        components: [{ type: 'BODY', text: 'Olá! Só no número oficial.' }],
+      })
+      .onConflictDoNothing();
+    const list = await app.inject({
+      method: 'GET',
+      url: `/whatsapp/templates?numberId=${numberId}`,
+      cookies: owner.cookies,
+    });
+    expect(list.statusCode).toBe(200);
+    expect(list.json<{ templates: { name: string }[] }>().templates.map((t) => t.name)).toEqual([
+      'retomar_conversa_numero',
+    ]);
+    expect(templateReads).toEqual([
+      { url: `/v23.0/${WORK_WABA}/message_templates`, auth: `Bearer ${NUMBER_TOKEN}` },
+    ]);
+    // A seller who does not reach the number does not read its templates either...
+    const asOther = () =>
+      app.inject({
+        method: 'GET',
+        url: `/whatsapp/templates?numberId=${numberId}`,
+        cookies: otherSeller.cookies,
+      });
+    expect((await asOther()).statusCode).toBe(404);
+    // ...until one of its chats is given to them.
+    await db
+      .update(waConversations)
+      .set({ assigneeEmployeeId: otherSeller.id })
+      .where(eq(waConversations.id, chat!.id));
+    expect((await asOther()).statusCode).toBe(200);
+    await db
+      .update(waConversations)
+      .set({ assigneeEmployeeId: null })
+      .where(eq(waConversations.id, chat!.id));
+    const send = (name: string) =>
+      app.inject({
+        method: 'POST',
+        url: `/whatsapp/conversations/${chat!.id}/template`,
+        cookies: owner.cookies,
+        payload: { name, language: 'pt_BR', params: [], companyArticle: 'a' },
+      });
+    // SAIR is said to the company: no template by any of our numbers.
+    await db
+      .update(waContacts)
+      .set({ optOutAt: ago(5) })
+      .where(eq(waContacts.id, chat!.contactId));
+    const optedOut = await send('retomar_conversa_numero');
+    expect(optedOut.statusCode).toBe(409);
+    expect(optedOut.json()).toMatchObject({ error: 'opted_out' });
+    await db.update(waContacts).set({ optOutAt: null }).where(eq(waContacts.id, chat!.contactId));
+    const official = await send('so_do_oficial');
+    expect(official.statusCode).toBe(422);
+    expect(official.json()).toMatchObject({ error: 'template_unknown' });
+    expect(sends).toHaveLength(0);
+    const sent = await send('retomar_conversa_numero');
+    expect(sent.statusCode).toBe(201);
+    expect(sends).toHaveLength(1);
+    expect(sends[0]).toMatchObject({
+      url: `/v23.0/${WORK_ID}/messages`,
+      auth: `Bearer ${NUMBER_TOKEN}`,
+      body: { type: 'template', template: { name: 'retomar_conversa_numero' } },
+    });
+    // Its review on Meta moves only its own row.
+    await apply(
+      workChange('message_template_status_update', {
+        event: 'PAUSED',
+        message_template_id: '9100000000000001',
+        message_template_name: 'retomar_conversa_numero',
+        message_template_language: 'pt_BR',
+        reason: null,
+      }),
+    );
+    const [row] = await db
+      .select()
+      .from(waNumberTemplates)
+      .where(eq(waNumberTemplates.numberId, numberId));
+    expect(row?.status).toBe('PAUSED');
   });
 });
 
@@ -728,6 +829,74 @@ describe('joining a chat to a deal (the person chooses)', () => {
   });
 });
 
+describe('our sends Meta never answered', () => {
+  it('are marked unknown after 10 minutes and the sender hears; nothing is sent again', async () => {
+    const phone = '5521977771234';
+    const [contact] = await db.insert(waContacts).values({ phone }).returning();
+    const [conversation] = await db
+      .insert(waConversations)
+      .values({ contactId: contact!.id, lastMessageAt: ago(30) })
+      .returning();
+    const [stuck] = await db
+      .insert(waMessages)
+      .values({
+        conversationId: conversation!.id,
+        contactId: contact!.id,
+        direction: 'out',
+        author: 'employee',
+        employeeId: owner.id,
+        kind: 'text',
+        text: 'Mensagem de teste',
+        status: 'pending',
+        createdAt: ago(20),
+      })
+      .returning();
+    const [fresh] = await db
+      .insert(waMessages)
+      .values({
+        conversationId: conversation!.id,
+        contactId: contact!.id,
+        direction: 'out',
+        author: 'employee',
+        employeeId: owner.id,
+        kind: 'text',
+        text: 'Ainda indo',
+        status: 'pending',
+        createdAt: ago(2),
+      })
+      .returning();
+    const swept = await processWhatsAppEvents({
+      db,
+      phoneNumberId: PHONE_ID,
+      wabaId: WABA,
+      log: () => {},
+      now: () => clock,
+    });
+    expect(swept.processed).toBe(0);
+    const [after] = await db.select().from(waMessages).where(eq(waMessages.id, stuck!.id));
+    expect(after).toMatchObject({ status: 'pending', wamid: null, errorTitle: 'unknown_outcome' });
+    const [still] = await db.select().from(waMessages).where(eq(waMessages.id, fresh!.id));
+    expect(still!.errorTitle).toBeNull();
+    const notices = await db
+      .select()
+      .from(crmNotifications)
+      .where(eq(crmNotifications.kind, 'whatsapp_send_unknown'));
+    expect(notices.map((n) => n.recipientEmployeeId)).toEqual([owner.id]);
+    expect(sends).toHaveLength(0);
+    // A second pass tells nobody twice.
+    await processWhatsAppEvents({
+      db,
+      phoneNumberId: PHONE_ID,
+      wabaId: WABA,
+      log: () => {},
+      now: () => clock,
+    });
+    expect(
+      await db.$count(crmNotifications, eq(crmNotifications.kind, 'whatsapp_send_unknown')),
+    ).toBe(1);
+  });
+});
+
 describe('the webhook queue', () => {
   // A timestamp no Date can hold: the body fails every time, as a broken database would.
   const broken = () =>
@@ -762,6 +931,14 @@ describe('the webhook queue', () => {
       await run();
     }
     expect(await state()).toMatchObject({ status: 'failed', attempts: 5 });
+    // The Admin Master hears it in Avisos, once, by the screen it is on (never its content).
+    const notices = await db
+      .select()
+      .from(crmNotifications)
+      .where(eq(crmNotifications.kind, 'whatsapp_webhook_failed'));
+    expect(notices.map((n) => n.recipientEmployeeId)).toContain(admin.id);
+    expect(notices.map((n) => n.recipientEmployeeId)).not.toContain(owner.id);
+    expect(JSON.stringify(notices)).not.toContain(PERSON);
 
     const failed = await app.inject({
       method: 'GET',

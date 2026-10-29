@@ -5,6 +5,7 @@ import {
   SOFIA_MODEL,
   SOFIA_SEGMENTS,
   SOFIA_STATES,
+  WA_INBOX_PAGE,
   sofiaAttendanceSchema,
   sofiaSettingsSchema,
   type LeadPipeline,
@@ -55,6 +56,8 @@ const listQuery = z.object({
   state: z.enum(SOFIA_STATES).optional(),
   segment: z.enum([...SOFIA_SEGMENTS, 'none']).optional(),
   q: z.string().trim().max(80).optional(),
+  /** The cursor `next` of the previous page (it stopped at 200 before: auditoria, 26/10). */
+  before: z.string().max(80).optional(),
 });
 
 export function reasonLabel(reason: string | null): string | null {
@@ -134,15 +137,24 @@ export const sofiaRoutes: FastifyPluginAsync = async (app) => {
     const query = listQuery.safeParse(request.query);
     if (!query.success)
       return reply.status(400).send({ error: 'invalid', message: 'Filtro inválido.' });
-    const { state, segment, q } = query.data;
+    const { state, segment, q, before } = query.data;
     const digits = q?.replace(/\D/g, '') ?? '';
+    // The page's cursor, as the Central's: the last row's time (with its microseconds) and id.
+    const cursor = before?.match(/^(.+)\|([0-9a-f-]{36})$/i);
+    if (before && (!cursor || Number.isNaN(Date.parse(cursor[1]!))))
+      return reply.status(400).send({ error: 'invalid', message: 'Página inválida.' });
     const rows = await db.execute<ConversationListRow>(
       conversationListSql({
         owner: ownerOf(request),
         readerId: request.session.actor.employeeId,
-        limit: 200,
+        limit: WA_INBOX_PAGE + 1,
         where: sql`
         and c.number_id is null
+        ${
+          cursor
+            ? sql`and (c.last_message_at, c.id) < (${cursor[1]}::timestamptz, ${cursor[2]}::uuid)`
+            : sql``
+        }
         ${state ? sql`and c.attendance = ${state}` : sql``}
         ${
           segment === 'none'
@@ -160,7 +172,12 @@ export const sofiaRoutes: FastifyPluginAsync = async (app) => {
       }),
     );
     const at = now();
-    return reply.send({ conversations: rows.rows.map((row) => itemOf(row, at)) });
+    const page = rows.rows.slice(0, WA_INBOX_PAGE);
+    const last = page.at(-1);
+    return reply.send({
+      conversations: page.map((row) => itemOf(row, at)),
+      next: rows.rows.length > WA_INBOX_PAGE && last ? `${last.cursor_at}|${last.id}` : null,
+    });
   });
 
   /** The conversation, if the reader may see it. */

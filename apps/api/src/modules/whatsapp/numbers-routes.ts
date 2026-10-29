@@ -19,6 +19,7 @@ import {
   numbersDepsOf,
   officialNumberOf,
   registerNumber,
+  renewToken,
   retryConnection,
   signupConfigOf,
   updateNumber,
@@ -204,6 +205,33 @@ export const whatsappNumbersRoutes: FastifyPluginAsync = async (app) => {
         entityId: result.number.id,
         ip: request.ip,
         metadata: { steps: result.steps },
+      });
+      return reply.send(result);
+    } catch (error) {
+      if (error instanceof ConnectError) return refuse(reply, error);
+      throw error;
+    }
+  });
+
+  /** "Renovar acesso": a new 60-day token before the current one ends (never shown, never logged). */
+  app.post('/whatsapp/numbers/:id/renew', manage, async (request, reply) => {
+    const ready = deps();
+    if (!ready) return off(reply);
+    const params = idParams.safeParse(request.params);
+    if (!params.success) return refuse(reply, new ConnectError('not_found'));
+    try {
+      const result = await renewToken(ready, params.data.id);
+      await writeAudit(db, {
+        actorEmployeeId: request.session.actor.employeeId,
+        action: 'whatsapp.number_token_renewed',
+        entity: 'wa_numbers',
+        entityId: result.number.id,
+        ip: request.ip,
+        metadata: {
+          renewed: result.renewed,
+          metaCode: result.metaCode,
+          tokenExpiresAt: result.number.tokenExpiresAt,
+        },
       });
       return reply.send(result);
     } catch (error) {

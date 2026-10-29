@@ -12,7 +12,7 @@ import {
   type WaSignupConfig,
   type WaSyncState,
 } from '@wings/shared';
-import { and, asc, eq, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import type { Database } from '../../db/client.js';
 import { employees, waNumbers } from '../../db/schema/index.js';
@@ -22,6 +22,7 @@ import {
   exchangeSignupCode,
   readWabaNumbers,
   readWabaOwner,
+  refreshBusinessToken,
   requestSmbSync,
   subscribeWaba,
   WHATSAPP_GRAPH_VERSION,
@@ -175,6 +176,8 @@ function numberOf(row: Row, ownerName: string | null, byName: string | null): Wa
     connectedAt: row.connectedAt?.toISOString() ?? null,
     connectedByName: byName,
     tokenExpiresAt: row.tokenExpiresAt?.toISOString() ?? null,
+    tokenRenewTriedAt: row.tokenRenewTriedAt?.toISOString() ?? null,
+    tokenRenewError: row.tokenRenewError,
     disconnectReason: row.disconnectReason,
     disconnectedAt: row.disconnectedAt?.toISOString() ?? null,
     webhooksSubscribed: row.webhooksSubscribed,
@@ -303,7 +306,15 @@ export async function connectNumber(
   if (registered.eligibility !== 'confirmado') throw new ConnectError('not_eligible');
   await activeOwner(deps.db, registered.ownerEmployeeId);
   if (input.wabaId === deps.official.wabaId) throw new ConnectError('official_number');
+  return reserved(deps, registered.id, () => connectReserved(deps, registered, input, actorId));
+}
 
+async function connectReserved(
+  deps: NumbersDeps,
+  registered: Row,
+  input: WaNumberConnect,
+  actorId: string,
+): Promise<{ number: WaNumber; steps: FinishSteps }> {
   // First: the code dies 30 seconds after Meta issued it.
   const exchanged = await exchangeSignupCode(deps.fetchImpl, deps.app, input.code);
   if (!exchanged.ok) throw new ConnectError('code_refused', exchanged.code);
@@ -369,79 +380,101 @@ export interface FinishSteps {
   history: WaSyncState | 'skipped' | null;
 }
 
-// shortcut: an in-process lock, right while the API runs as one container; with replicas, claim
-// each step in the row instead.
-const running = new Set<string>();
+/** Longer than a connection's Meta calls (15 s each); a reservation left by a dead container ends. */
+const RESERVE_MS = 2 * 60_000;
+
+/**
+ * Runs `work` holding the number's reservation in the row (`connecting_until`), so two
+ * connections of one number never run at once, whatever API container takes each request.
+ */
+async function reserved<T>(deps: NumbersDeps, id: string, work: () => Promise<T>): Promise<T> {
+  const now = deps.now();
+  const until = new Date(now.getTime() + RESERVE_MS);
+  const [held] = await deps.db
+    .update(waNumbers)
+    .set({ connectingUntil: until })
+    .where(
+      and(
+        eq(waNumbers.id, id),
+        or(isNull(waNumbers.connectingUntil), lt(waNumbers.connectingUntil, now)),
+      ),
+    )
+    .returning({ id: waNumbers.id });
+  if (!held) throw new ConnectError('busy');
+  try {
+    return await work();
+  } finally {
+    // Only its own: past its end another container may hold the number now.
+    await deps.db
+      .update(waNumbers)
+      .set({ connectingUntil: null })
+      .where(and(eq(waNumbers.id, id), eq(waNumbers.connectingUntil, until)));
+  }
+}
 
 /**
  * Subscribe, then the contacts, then the history — in that order, because a sync sent before the
  * subscription would deliver its webhooks to nobody. Stops at the first failure. A sync already
  * requested, or with no answer from Meta (`unknown`), is never sent again; after the 24 hours
- * only the subscription (which has no deadline) is tried. One run per number at a time, so a
- * one-time sync is never sent twice.
+ * only the subscription (which has no deadline) is tried. The caller holds the number's
+ * reservation (`reserved`), so a one-time sync is never sent twice.
  */
 async function finishConnection(
   deps: NumbersDeps,
   id: string,
   token: string,
 ): Promise<FinishSteps> {
-  if (running.has(id)) throw new ConnectError('busy');
-  running.add(id);
-  try {
-    const row = await deps.db.query.waNumbers.findFirst({ where: eq(waNumbers.id, id) });
-    if (!row?.wabaId || !row.phoneNumberId || !row.connectedAt) throw new ConnectError('not_found');
-    const { wabaId, phoneNumberId } = row;
-    const syncsOpen = deps.now() <= deadlineOf(row.connectedAt);
-    const steps: FinishSteps = {
-      webhooks: 'ok',
-      contacts: row.contactsSync as WaSyncState | null,
-      history: row.historySync as WaSyncState | null,
-    };
-    const skipRest = (): FinishSteps => ({
-      ...steps,
-      contacts: steps.contacts ?? 'skipped',
-      history: steps.history ?? 'skipped',
-    });
-    const save = (values: Partial<typeof waNumbers.$inferInsert>) =>
-      deps.db
-        .update(waNumbers)
-        .set({ ...values, updatedAt: deps.now() })
-        .where(eq(waNumbers.id, row.id));
+  const row = await deps.db.query.waNumbers.findFirst({ where: eq(waNumbers.id, id) });
+  if (!row?.wabaId || !row.phoneNumberId || !row.connectedAt) throw new ConnectError('not_found');
+  const { wabaId, phoneNumberId } = row;
+  const syncsOpen = deps.now() <= deadlineOf(row.connectedAt);
+  const steps: FinishSteps = {
+    webhooks: 'ok',
+    contacts: row.contactsSync as WaSyncState | null,
+    history: row.historySync as WaSyncState | null,
+  };
+  const skipRest = (): FinishSteps => ({
+    ...steps,
+    contacts: steps.contacts ?? 'skipped',
+    history: steps.history ?? 'skipped',
+  });
+  const save = (values: Partial<typeof waNumbers.$inferInsert>) =>
+    deps.db
+      .update(waNumbers)
+      .set({ ...values, updatedAt: deps.now() })
+      .where(eq(waNumbers.id, row.id));
 
-    if (!row.webhooksSubscribed) {
-      const subscribed = await subscribeWaba(deps.fetchImpl, token, wabaId);
-      if (!subscribed.ok || !subscribed.data) {
-        steps.webhooks = 'failed';
-        return skipRest();
-      }
-      await save({ webhooksSubscribed: true });
+  if (!row.webhooksSubscribed) {
+    const subscribed = await subscribeWaba(deps.fetchImpl, token, wabaId);
+    if (!subscribed.ok || !subscribed.data) {
+      steps.webhooks = 'failed';
+      return skipRest();
     }
-    if (!syncsOpen) return skipRest();
-
-    const sync = async (type: 'contacts' | 'history'): Promise<WaSyncState> => {
-      const result = await requestSmbSync(
-        deps.fetchImpl,
-        token,
-        phoneNumberId,
-        type === 'contacts' ? 'smb_app_state_sync' : 'history',
-      );
-      const state: WaSyncState = result.ok ? 'requested' : result.unknown ? 'unknown' : 'failed';
-      await save(
-        type === 'contacts'
-          ? { contactsSync: state, contactsSyncRequest: result.ok ? result.data : null }
-          : { historySync: state, historySyncRequest: result.ok ? result.data : null },
-      );
-      return state;
-    };
-    if (steps.contacts === null || steps.contacts === 'failed') {
-      steps.contacts = await sync('contacts');
-      if (steps.contacts !== 'requested') return skipRest();
-    }
-    if (steps.history === null || steps.history === 'failed') steps.history = await sync('history');
-    return steps;
-  } finally {
-    running.delete(id);
+    await save({ webhooksSubscribed: true });
   }
+  if (!syncsOpen) return skipRest();
+
+  const sync = async (type: 'contacts' | 'history'): Promise<WaSyncState> => {
+    const result = await requestSmbSync(
+      deps.fetchImpl,
+      token,
+      phoneNumberId,
+      type === 'contacts' ? 'smb_app_state_sync' : 'history',
+    );
+    const state: WaSyncState = result.ok ? 'requested' : result.unknown ? 'unknown' : 'failed';
+    await save(
+      type === 'contacts'
+        ? { contactsSync: state, contactsSyncRequest: result.ok ? result.data : null }
+        : { historySync: state, historySyncRequest: result.ok ? result.data : null },
+    );
+    return state;
+  };
+  if (steps.contacts === null || steps.contacts === 'failed') {
+    steps.contacts = await sync('contacts');
+    if (steps.contacts !== 'requested') return skipRest();
+  }
+  if (steps.history === null || steps.history === 'failed') steps.history = await sync('history');
+  return steps;
 }
 
 /** Whether a sync is still owed: not asked for yet, or refused by Meta. */
@@ -461,8 +494,93 @@ export async function retryConnection(
   const syncsLeft = syncOwed(row.contactsSync) || syncOwed(row.historySync);
   if (row.webhooksSubscribed && syncsLeft && deps.now() > deadlineOf(row.connectedAt))
     throw new ConnectError('sync_expired');
-  const steps = await finishConnection(deps, row.id, deps.box.open(row.tokenEnc));
+  const token = deps.box.open(row.tokenEnc);
+  const steps = await reserved(deps, row.id, () => finishConnection(deps, row.id, token));
   return { number: await numberById(deps.db, row.id), steps };
+}
+
+/** Ten days before the end: the screen warns, the daily pass renews, the Admin Masters hear. */
+export const TOKEN_WARN_DAYS = 10;
+
+/**
+ * "Renovar acesso" (and the daily pass, `renewExpiringTokens`): a new 60-day token for a connected
+ * number, sealed at once. A refusal keeps the current token and records Meta's code; never the
+ * token itself, anywhere.
+ */
+export async function renewToken(
+  deps: NumbersDeps,
+  id: string,
+): Promise<{ number: WaNumber; renewed: boolean; metaCode: number | null }> {
+  const result = await reserved(deps, id, async () => {
+    // Read inside the reservation: a connection that just ended may have brought a new token.
+    const row = await deps.db.query.waNumbers.findFirst({ where: eq(waNumbers.id, id) });
+    if (!row || row.status !== 'connected' || !row.tokenEnc) throw new ConnectError('not_found');
+    const answer = await refreshBusinessToken(
+      deps.fetchImpl,
+      deps.app,
+      deps.box.open(row.tokenEnc),
+    );
+    const now = deps.now();
+    await deps.db
+      .update(waNumbers)
+      .set(
+        answer.ok
+          ? {
+              tokenEnc: deps.box.seal(answer.data.token),
+              tokenExpiresAt: answer.data.expiresIn
+                ? new Date(now.getTime() + answer.data.expiresIn * 1000)
+                : null,
+              tokenRenewTriedAt: now,
+              tokenRenewError: null,
+              updatedAt: now,
+            }
+          : {
+              tokenRenewTriedAt: now,
+              tokenRenewError: answer.code === null ? 'no_answer' : `meta_${answer.code}`,
+              updatedAt: now,
+            },
+      )
+      .where(eq(waNumbers.id, id));
+    return answer;
+  });
+  return {
+    number: await numberById(deps.db, id),
+    renewed: result.ok,
+    metaCode: result.ok ? null : result.code,
+  };
+}
+
+/** Once a day: each connected number within ten days of its end is renewed (one try a day). */
+export async function renewExpiringTokens(
+  deps: NumbersDeps,
+  log: (facts: Record<string, unknown>) => void,
+) {
+  const now = deps.now();
+  const due = await deps.db
+    .select({ id: waNumbers.id })
+    .from(waNumbers)
+    .where(
+      and(
+        eq(waNumbers.status, 'connected'),
+        lt(waNumbers.tokenExpiresAt, new Date(now.getTime() + TOKEN_WARN_DAYS * 86_400_000)),
+        or(
+          isNull(waNumbers.tokenRenewTriedAt),
+          lt(waNumbers.tokenRenewTriedAt, new Date(now.getTime() - 20 * 3_600_000)),
+        ),
+      ),
+    );
+  for (const { id } of due) {
+    try {
+      const { renewed, metaCode } = await renewToken(deps, id);
+      log({ job: 'whatsapp_token', number: id, renewed, ...(metaCode ? { metaCode } : {}) });
+    } catch (error) {
+      log({
+        job: 'whatsapp_token',
+        number: id,
+        error: error instanceof ConnectError ? error.code : 'error',
+      });
+    }
+  }
 }
 
 async function numberById(db: Database, id: string): Promise<WaNumber> {

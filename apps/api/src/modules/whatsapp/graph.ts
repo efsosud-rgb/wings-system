@@ -544,6 +544,12 @@ export async function exchangeSignupCode(
     'GET',
     `/oauth/access_token?${query}`,
   );
+  return tokenOf(result);
+}
+
+function tokenOf(
+  result: GraphResult<{ access_token?: unknown; expires_in?: unknown }>,
+): GraphResult<{ token: string; expiresIn: number | null }> {
   if (!result.ok) return result;
   // Seconds until the token ends (60 days with Meta's default configuration); absent: no end given.
   const expiresIn = Number(result.data.expires_in);
@@ -556,6 +562,33 @@ export async function exchangeSignupCode(
         },
       }
     : { ok: false, code: null, title: 'no_token', unknown: false };
+}
+
+/**
+ * A work number's 60-day token renewed before it ends: Meta's `fb_exchange_token` with
+ * `set_token_expires_in_60_days`, as its docs give it for an expiring system user token. NOT
+ * verified live (no number was ever connected); a refusal leaves the current token as it is.
+ */
+export async function refreshBusinessToken(
+  fetchImpl: Fetch,
+  app: { appId: string; appSecret: string },
+  token: string,
+): Promise<GraphResult<{ token: string; expiresIn: number | null }>> {
+  const query = new URLSearchParams({
+    grant_type: 'fb_exchange_token',
+    client_id: app.appId,
+    client_secret: app.appSecret,
+    set_token_expires_in_60_days: 'true',
+    fb_exchange_token: token,
+  });
+  return tokenOf(
+    await graph<{ access_token?: unknown; expires_in?: unknown }>(
+      fetchImpl,
+      null,
+      'GET',
+      `/oauth/access_token?${query}`,
+    ),
+  );
 }
 
 export interface GraphBusinessNumber {

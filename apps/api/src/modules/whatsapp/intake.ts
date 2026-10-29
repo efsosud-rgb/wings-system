@@ -21,6 +21,7 @@ import {
   waConversationEvents,
   waConversations,
   waMessages,
+  waNumberTemplates,
   waTemplates,
   waWebhookEvents,
 } from '../../db/schema/index.js';
@@ -34,6 +35,7 @@ import { formContextOf } from '../sofia/form-context.js';
 import { loadSofiaSettings } from '../sofia/settings.js';
 import { factsOf, routeInbound } from '../sofia/state.js';
 import { ART_MEDIA_GONE_CODES, invalidateArtMedia } from './art.js';
+import { alertWebhookFailed, sweepUnknownSends, warnExpiringTokens } from './alerts.js';
 import { distribute } from './attendance.js';
 import { notifyCallsChanged } from './call-signal.js';
 import { callingOn } from './calling.js';
@@ -42,7 +44,12 @@ import { officialNumberLive } from './official-number.js';
 import { deliverWhatsApp, type Contact } from './outbox.js';
 import { reasonOf } from './templates.js';
 import { brandOf, callPermissionText, permissionOf } from './thread.js';
-import { applyNumberChange, workNumberOf } from './numbers.js';
+import {
+  applyNumberChange,
+  renewExpiringTokens,
+  workNumberOf,
+  type NumbersDeps,
+} from './numbers.js';
 import { applyWorkNumberChange } from './number-intake.js';
 import {
   isOptOut,
@@ -87,6 +94,8 @@ export interface WhatsAppIntakeDeps {
   now?: () => Date;
   /** How Meta's call-permission request answers a "Prefiro uma ligação"; absent, the owner's task only. */
   send?: { config: WhatsAppConfig; fetch: typeof fetch } | null;
+  /** The work numbers' connection (app and key): absent, their tokens are only warned about. */
+  numbers?: NumbersDeps | null;
 }
 
 export interface WhatsAppIntakeResult {
@@ -147,12 +156,17 @@ export async function processWhatsAppEvents(
           nextAttemptAt: new Date(now().getTime() + retryMinutesOf(event.attempts) * 60_000),
         })
         .where(eq(waWebhookEvents.id, event.id));
-      if (giveUp) result.failed++;
-      else result.retried++;
+      if (giveUp) {
+        result.failed++;
+        // The Números screen lists it either way: the notice is a courtesy.
+        await alertWebhookFailed(db, event.id).catch(() => undefined);
+      } else result.retried++;
       deps.log({ job: WHATSAPP_JOB, event: event.id, error: code });
     }
   }
   await sweepCalls(db, now());
+  const unknownSends = await sweepUnknownSends(db, now());
+  if (unknownSends > 0) deps.log({ job: WHATSAPP_JOB, unknownSends });
   return result;
 }
 
@@ -182,6 +196,9 @@ export async function applyWhatsAppPayload(deps: WhatsAppIntakeDeps, body: unkno
       const now = deps.now?.() ?? new Date();
       await applyNumberChange(deps.db, change, now);
       await applyWorkNumberChange(deps.db, number.id, change, now);
+      // Its own WABA's template reviews (phase 2): only its own rows move.
+      for (const template of change.templates)
+        await applyTemplateReview(deps.db, template, number.id);
       continue;
     }
     if (deps.phoneNumberId && change.phoneNumberId && change.phoneNumberId !== deps.phoneNumberId)
@@ -732,7 +749,24 @@ export async function applyStatus(db: Database, update: WaStatusUpdate) {
 
 // --- a template review ------------------------------------------------------------------------
 
-async function applyTemplateReview(db: Database, update: WaTemplateUpdate) {
+async function applyTemplateReview(
+  db: Database,
+  update: WaTemplateUpdate,
+  numberId: string | null = null,
+) {
+  if (numberId) {
+    await db
+      .update(waNumberTemplates)
+      .set({ status: update.status, rejectedReason: reasonOf(update.reason), syncedAt: new Date() })
+      .where(
+        and(
+          eq(waNumberTemplates.numberId, numberId),
+          eq(waNumberTemplates.name, update.name),
+          update.language ? eq(waNumberTemplates.language, update.language) : sql`true`,
+        ),
+      );
+    return;
+  }
   await db
     .update(waTemplates)
     .set({ status: update.status, rejectedReason: reasonOf(update.reason), syncedAt: new Date() })
@@ -967,6 +1001,13 @@ export function startWhatsAppIntake(deps: WhatsAppIntakeDeps & { tickMs?: number
       purgedOn = today;
       const { purged } = await purgeWhatsAppPayloads(deps.db, deps.now?.());
       if (purged > 0) deps.log({ job: WHATSAPP_JOB, purgedPayloads: purged });
+      // The work numbers' 60-day access: renewed near its end, and people told when it was not
+      // (told even when the renewal pass itself broke).
+      if (deps.numbers)
+        await renewExpiringTokens(deps.numbers, deps.log).catch(() =>
+          deps.log({ job: 'whatsapp_token', error: 'renew_pass_failed' }),
+        );
+      await warnExpiringTokens(deps.db, deps.now?.() ?? new Date());
     }
   };
   const timer = setInterval(() => void tick().catch(() => undefined), deps.tickMs ?? 60_000);

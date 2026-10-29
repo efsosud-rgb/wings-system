@@ -49,14 +49,21 @@ whatsapp_business_app_onboarding` (o exemplo da página de coexistência da Meta
   qualquer hora, os pedidos só dentro das 24 horas. Um pedido sem resposta da Meta (`unknown`) nunca é mandado de
   novo. Para pedir de novo depois das 24 horas, o número precisa sair e conectar outra vez.
 - Uma conexão por número de cada vez: um segundo clique enquanto a primeira espera a Meta responde 409 (`busy`), e
-  nenhum pedido sai duas vezes. A trava é do processo da API (um contêiner hoje); com réplicas, precisa ir para o
-  banco.
+  nenhum pedido sai duas vezes. A trava é uma reserva na linha do número (`connecting_until`, 2 minutos, fase 2b):
+  vale com mais de um contêiner da API, e a de um contêiner que caiu expira sozinha.
 - Conectar de novo o mesmo número troca o token (e o vencimento) e recomeça as 24 horas.
 - **Vencimento do acesso:** a configuração padrão do Embedded Signup dá um token de **60 dias**. A tela mostra "vence
   em" por número e um aviso a partir de 10 dias. Renovar é uma de duas escolhas do Eric na Meta: refazer o Embedded
   Signup (**Conectar de novo pela Meta**, com o celular do dono; o histórico não vem de novo) ou mudar a configuração
   do Facebook Login for Business para um token que não vence ("never expires"), antes da conexão. Sem
   `expires_in`, a tela diz "sem vencimento informado".
+- **Renovar acesso (fase 2b):** o botão na linha pede à Meta um token novo de 60 dias com o atual
+  (`GET /oauth/access_token`, `grant_type=fb_exchange_token`, `set_token_expires_in_60_days=true`, como a
+  referência da Meta dá para token de usuário do sistema com vencimento) e guarda cifrado. Uma vez por dia a fila
+  tenta o mesmo para cada número a 10 dias ou menos do fim (uma tentativa por dia). Recusado, o token atual continua
+  até vencer e a linha mostra o código da Meta. O Admin Master e o dono do número recebem aviso a 10 dias, a 3 dias e
+  no dia do fim (uma vez cada, pelo nome do número, nunca pelo telefone). **Não verificado ao vivo:** se a Meta não
+  renovar esse tipo de token, sobra Conectar de novo pela Meta ou o token que não vence.
 - Webhook (`intake.ts`, `number-intake.ts`): uma mudança de um número cadastrado aqui (pelo número, ou pela WABA
   quando não é a do número oficial; o id do número oficial nunca conta como número de trabalho) vai para o número:
   `account_update` com `ACCOUNT_OFFBOARDED` ou `PARTNER_REMOVED` marca o número como desconectado; `history` atualiza
