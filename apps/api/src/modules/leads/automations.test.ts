@@ -16,6 +16,7 @@ import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
 import { processDueRuns, sendTemplateToLead } from './automations.js';
+import { recordContactOptOut } from './contact-block.js';
 import { entryStageOf } from './crm.js';
 import { testTransport } from './crm-mail.js';
 import { upsertLead } from './service.js';
@@ -267,6 +268,49 @@ describe('Regras de automação', () => {
       .from(crmAutomationRuns)
       .where(and(eq(crmAutomationRuns.leadId, lead.id), eq(crmAutomationRuns.status, 'cancelled')));
     expect(cancelled.length).toBeGreaterThan(0);
+  });
+
+  it('a "não me contate" by e-mail skips the rule\u2019s e-mail and the sequence\u2019s, nothing in the outbox', async () => {
+    const lead = await newLead('5511911110011', 'naoquer@example.test');
+    // Registered under another form of the same address: the key is normalised.
+    await recordContactOptOut(db, {
+      email: 'NaoQuer@Example.test',
+      channels: ['email'],
+      origin: 'crm',
+      reason: 'Pediu',
+      createdBy: manager.employeeId,
+    });
+    await app.inject({
+      method: 'PATCH',
+      url: `/leads/${lead.id}`,
+      cookies: manager.cookies,
+      payload: { ownerEmployeeId: seller.employeeId },
+    });
+    await app.inject({
+      method: 'PATCH',
+      url: `/leads/${lead.id}`,
+      cookies: manager.cookies,
+      payload: { stageId: stage['Proposta']!.id },
+    });
+    const afterTwoDays = new Date(Date.now() + 49 * 3_600_000);
+    await processDueRuns(db, { mail: testTransport, now: () => afterTwoDays });
+    const mails = await db
+      .select()
+      .from(crmAutomationRuns)
+      .where(and(eq(crmAutomationRuns.leadId, lead.id), eq(crmAutomationRuns.kind, 'send_email')));
+    // The rule's own e-mail and the sequence's step 48 h later.
+    expect(mails).toHaveLength(2);
+    for (const run of mails)
+      expect(run).toMatchObject({ status: 'skipped', result: { reason: 'contact_blocked' } });
+    expect(
+      await db.select().from(crmEmailOutbox).where(eq(crmEmailOutbox.leadId, lead.id)),
+    ).toHaveLength(0);
+    const blocked = await db
+      .select()
+      .from(leadEvents)
+      .where(and(eq(leadEvents.leadId, lead.id), eq(leadEvents.kind, 'lead.contact_blocked')));
+    expect(blocked).toHaveLength(2);
+    expect(blocked[0]!.detail).toMatchObject({ channel: 'email', path: 'automacao' });
   });
 
   it('a removed rule that already ran is kept off, not deleted', async () => {

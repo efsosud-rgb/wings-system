@@ -27,6 +27,7 @@ import {
   waMessages,
 } from '../../db/schema/index.js';
 import type { Env } from '../../env.js';
+import { contactBlock } from '../leads/contact-block.js';
 import { callingOn } from './calling.js';
 import { errorText, whatsappConfigOf } from './graph.js';
 import type { Contact, MessageRow } from './outbox.js';
@@ -370,6 +371,8 @@ export async function buildThread(
     phone: contact?.phone ?? null,
     window: windowOf(contact, deps.now),
     optedOut: Boolean(contact?.optOutAt),
+    contactBlock: await contactBlock(db, 'whatsapp', { leadId, phone: contact?.phone }),
+    callBlock: await contactBlock(db, ['whatsapp', 'phone'], { leadId, phone: contact?.phone }),
     callPermission: permissionOf(contact, deps.now),
     attendance: (conversation?.attendance as SofiaState | undefined) ?? null,
     speaksFor: await brandVoiceOf(db, leadId, conversation?.id ?? null),

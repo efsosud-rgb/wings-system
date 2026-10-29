@@ -259,6 +259,51 @@ export const leadEvents = pgTable(
 );
 
 /**
+ * The one "não me contate" register (docs/crm/nao-me-contate.md, Eric 29/10). One row per channel
+ * and key (`lead` id, phone, e-mail, Instagram user, place_id, CNPJ), the value in the form
+ * `normalizeContactKey` gives it. Never updated but to revoke; `contactBlock` reads it together
+ * with the older sources (`wa_contacts.opt_out_at`, prospect `nao_contatar`), which stay as they are.
+ */
+export const contactOptOuts = pgTable(
+  'contact_opt_outs',
+  {
+    tenantId: tenantId(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** A ContactChannel: all | whatsapp | phone | email | instagram. */
+    channel: text('channel').notNull(),
+    /** A ContactKeyKind: lead | phone | email | instagram_user | place_id | cnpj. */
+    keyKind: text('key_kind').notNull(),
+    keyValue: text('key_value').notNull(),
+    reason: text('reason'),
+    /** A ContactOptOutOrigin: crm | whatsapp_palavra | prospeccao | instagram | importacao. */
+    origin: text('origin').notNull(),
+    /** Null when the system recorded it (a SAIR on WhatsApp). */
+    createdBy: uuid('created_by').references(() => employees.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    revokedBy: uuid('revoked_by').references(() => employees.id),
+    revokedReason: text('revoked_reason'),
+  },
+  (table) => [
+    uniqueIndex('contact_opt_outs_active_uq')
+      .on(table.tenantId, table.channel, table.keyKind, table.keyValue)
+      .where(sql`${table.revokedAt} is null`),
+    check(
+      'contact_opt_outs_channel_check',
+      sql`${table.channel} in ('all', 'whatsapp', 'phone', 'email', 'instagram')`,
+    ),
+    check(
+      'contact_opt_outs_key_kind_check',
+      sql`${table.keyKind} in ('lead', 'phone', 'email', 'instagram_user', 'place_id', 'cnpj')`,
+    ),
+    check(
+      'contact_opt_outs_origin_check',
+      sql`${table.origin} in ('crm', 'whatsapp_palavra', 'prospeccao', 'instagram', 'importacao')`,
+    ),
+  ],
+);
+
+/**
  * Landing page / Meta form / Meta campaign -> client and funnel. Kept by
  * whoever holds `clients.manage` (Formatação → Clientes) or, for the
  * brands' landing pages, `integrations.manage` (Integrações → Entrada de

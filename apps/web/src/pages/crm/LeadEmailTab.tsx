@@ -30,7 +30,7 @@ export function LeadEmailTab({ leadId }: { leadId: string }) {
     ) : (
       <p className="crm-muted">Carregando…</p>
     );
-  const { to, hidden, mode, from, templates, sent } = emails.data;
+  const { to, hidden, blocked, mode, from, templates, sent } = emails.data;
   // A refresh failed: what was loaded stays on screen, with the reason above it.
   const stale = emails.isError ? (
     <LoadFailure what="os e-mails" error={emails.error} onRetry={() => void emails.refetch()} />
@@ -123,11 +123,17 @@ export function LeadEmailTab({ leadId }: { leadId: string }) {
             <button
               type="submit"
               className="crm-btn is-primary"
-              disabled={!templateId || !preview.data || send.isPending}
+              disabled={!templateId || !preview.data || send.isPending || blocked !== null}
+              aria-describedby={blocked ? 'lead-email-blocked' : undefined}
             >
               {mode === 'test' ? 'Registrar e-mail (teste)' : 'Enviar e-mail'}
             </button>
           </div>
+          {blocked && (
+            <p className="crm-error" id="lead-email-blocked">
+              Não me contate: {blocked}
+            </p>
+          )}
           {send.isSuccess && (
             <p className="crm-sub">
               {send.data.mode === 'test' ? 'E-mail registrado (teste).' : 'E-mail enviado.'}

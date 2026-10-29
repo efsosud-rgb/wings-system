@@ -26,6 +26,7 @@ import {
   prospects,
 } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
+import { recordContactOptOut } from '../leads/contact-block.js';
 import type { PageTransport } from '../../lib/public-probe.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
@@ -238,6 +239,33 @@ describe('search: filters, incomplete records, possible duplicates', () => {
     // A profile page is not a company's own site: no duplicate by it.
     expect(item(F.id).tags.filter((t) => t.kind === 'possible_duplicate')).toEqual([]);
     expect(item(A.id).tags).toEqual([]);
+  });
+
+  it('a "não me contate" on the place or on its phone shows on the card', async () => {
+    await recordContactOptOut(db, {
+      placeId: G.id,
+      channels: ['all'],
+      origin: 'crm',
+      reason: 'Pediu',
+      createdBy: null,
+    });
+    await recordContactOptOut(db, {
+      phone: H.nationalPhoneNumber,
+      channels: ['whatsapp'],
+      origin: 'whatsapp_palavra',
+      reason: null,
+      createdBy: null,
+    });
+    const answer = (await search(sellerA)).json<ProspectSearchResponse>();
+    const tags = (id: string) => answer.items.find((i) => i.placeId === id)!.tags;
+    expect(tags(G.id)).toContainEqual({
+      kind: 'do_not_contact',
+      text: expect.stringMatching(
+        /^não me contate: todos os canais, desde \d{2}\/\d{2}\/\d{4} \(registrado no CRM\)$/,
+      ),
+    });
+    expect(tags(H.id).find((t) => t.kind === 'do_not_contact')?.text).toContain('WhatsApp');
+    expect(tags(A.id)).toEqual([]);
   });
 
   it('"só com telefone" leaves out the results without one and says so', async () => {

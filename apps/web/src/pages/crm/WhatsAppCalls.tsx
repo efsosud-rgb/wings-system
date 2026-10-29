@@ -329,8 +329,10 @@ export function WhatsAppCallSection({
   const ask = useRequestCallPermission(leadId);
   const permission = live.data ?? thread.data?.callPermission ?? null;
   const granted = permission?.status === 'temporary' || permission?.status === 'permanent';
+  // A "não me contate" on WhatsApp or the phone: no call and no request start from here.
+  const blocked = thread.data?.callBlock.blocked ? thread.data.callBlock.reason : null;
   const canCall =
-    on && Boolean(phone) && !center.active && (granted || live.data?.canCall === true);
+    on && Boolean(phone) && !center.active && !blocked && (granted || live.data?.canCall === true);
   const windowOpen = thread.data?.window.open ?? false;
 
   return (
@@ -360,7 +362,9 @@ export function WhatsAppCallSection({
         <p className="crm-sub">O WhatsApp oficial ainda não está ligado no sistema.</p>
       ) : !thread.data.calling ? (
         <p className="crm-sub">As ligações ainda não estão ligadas neste número do WhatsApp.</p>
-      ) : !phone ? null : (
+      ) : !phone ? null : blocked ? (
+        <p className="crm-error">Não me contate: {blocked}</p>
+      ) : (
         <>
           <p className="crm-sub">
             {permission?.status

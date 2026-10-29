@@ -38,6 +38,7 @@ import { onStageEntered } from './modules/leads/automations.js';
 import { crmMailOf } from './modules/leads/crm-mail.js';
 import { crmRoutes } from './modules/leads/crm-routes.js';
 import { automationRoutes } from './modules/leads/automation-routes.js';
+import { contactOptOutRoutes } from './modules/leads/contact-opt-out-routes.js';
 import { leadEmailRoutes } from './modules/leads/lead-email-routes.js';
 import { leadFilesRoutes } from './modules/leads/lead-files-routes.js';
 import { nucleoRoutes } from './modules/leads/nucleo-routes.js';
@@ -350,6 +351,7 @@ export async function buildApp(deps: {
   await app.register(crmRoutes);
   await app.register(automationRoutes);
   await app.register(leadEmailRoutes);
+  await app.register(contactOptOutRoutes);
   await app.register(nucleoRoutes);
   await app.register(prospectingRoutes);
   await app.register(leadFilesRoutes);

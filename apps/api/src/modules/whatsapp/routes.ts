@@ -14,6 +14,7 @@ import {
   type WaTemplate,
   type WaCallPermission,
   type WaCallPermissionLive,
+  CONTACT_BLOCKED_ERROR,
 } from '@wings/shared';
 import { and, asc, eq, isNull, max, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
@@ -28,6 +29,7 @@ import {
   setOfficialNumberLive,
 } from './official-number.js';
 import { leadInScope, leadOwnerFilter } from '../leads/access.js';
+import { contactBlock, noteContactBlocked } from '../leads/contact-block.js';
 import { storageOf } from '../../lib/storage/index.js';
 import {
   ART_MEDIA_GONE_CODES,
@@ -377,6 +379,29 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       mediaId: string | null;
       artFileId: string | null;
     } | null = null;
+    // A template or a call request starts a contact: the "não me contate" register decides first.
+    // A typed reply inside the window keeps the rules above, unchanged.
+    if (outgoing.kind !== 'text') {
+      const block = await contactBlock(db, 'whatsapp', {
+        leadId: target.leadId,
+        phone: target.contact?.phone ?? target.phone,
+      });
+      // A SAIR keeps its own answer below (`opted_out`), as before.
+      if (block.blocked && !(outgoing.kind === 'template' && target.contact?.optOutAt)) {
+        if (target.leadId)
+          await noteContactBlocked(
+            db,
+            target.leadId,
+            {
+              channel: 'whatsapp',
+              path: outgoing.kind === 'template' ? 'modelo' : 'pedido_ligacao',
+              origin: block.origin,
+            },
+            request.session.actor.employeeId,
+          );
+        return reply.status(409).send({ error: CONTACT_BLOCKED_ERROR, message: block.reason });
+      }
+    }
     if (outgoing.kind === 'call_permission') {
       if (!window.open)
         return reply.status(409).send({

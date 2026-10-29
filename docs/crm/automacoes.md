@@ -6,13 +6,13 @@ uma negociação **entra** nela. Tela: `/crm-vendas/configuracoes/automacoes/:pi
 
 ## Ações
 
-| Ação | O que faz | Serviço usado |
-| --- | --- | --- |
-| Criar tarefa | tarefa automática (`auto`) para o responsável ou uma pessoa, prazo em horas úteis (seg–sex 9h–18h) ou corridas | `createTask` |
-| Mudar o responsável | para uma pessoa ou o próximo do rodízio do funil | `nextInRotation` + `changeLead` |
-| Avisar alguém | aviso no painel (`crm_notifications`), texto da regra, sem dado pessoal | — |
-| Iniciar sequência | agenda os passos (tarefa, e-mail ou aviso) com intervalo em horas | — |
-| Enviar modelo de e-mail | grava no `crm_email_outbox` e na linha do tempo (`lead.email_sent`, só ids) | transporte de CRM |
+| Ação                    | O que faz                                                                                                      | Serviço usado                   |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| Criar tarefa            | tarefa automática (`auto`) para o responsável ou uma pessoa, prazo em horas úteis (seg–sex 9h–18h) ou corridas | `createTask`                    |
+| Mudar o responsável     | para uma pessoa ou o próximo do rodízio do funil                                                               | `nextInRotation` + `changeLead` |
+| Avisar alguém           | aviso no painel (`crm_notifications`), texto da regra, sem dado pessoal                                        | —                               |
+| Iniciar sequência       | agenda os passos (tarefa, e-mail ou aviso) com intervalo em horas                                              | —                               |
+| Enviar modelo de e-mail | grava no `crm_email_outbox` e na linha do tempo (`lead.email_sent`, só ids)                                    | transporte de CRM               |
 
 Cada regra pode ter atraso (minutos, horas ou dias após a entrada).
 
@@ -90,7 +90,10 @@ envio é recusado e fica `failed`). O outbox guarda `from_email`, o `Message-ID`
 id da mensagem e da conversa (`gmail_thread_id`), para a leitura das respostas numa etapa seguinte.
 **Expansão com marca** (`leadHidesWings`): nenhum e-mail sai para o lead, pela ficha
 (`409 brand_hidden`) nem por automação (`reason: brand_hidden`, sem linha no outbox) — o lead não
-pode ver a Wings; o contato é pelo WhatsApp em nome da marca. Variáveis dos modelos: `{{nome}}` (primeiro nome), `{{marca}}`,
+pode ver a Wings; o contato é pelo WhatsApp em nome da marca. **Não me contate por e-mail**
+([nao-me-contate.md](nao-me-contate.md)): nada sai, pela ficha (`409 contact_blocked`, com o
+motivo) nem por regra ou sequência (`reason: contact_blocked`, sem linha no outbox), e a linha do
+tempo ganha `lead.contact_blocked`. Variáveis dos modelos: `{{nome}}` (primeiro nome), `{{marca}}`,
 `{{vendedor}}`, `{{etapa}}`; qualquer outra é recusada ao salvar. O texto fica no outbox
 (a ficha do lead), nunca em log.
 

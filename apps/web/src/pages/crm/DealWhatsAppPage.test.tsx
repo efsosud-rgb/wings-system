@@ -58,6 +58,8 @@ const thread = (over: Partial<DealWhatsApp> = {}): DealWhatsApp => ({
   phone: '5521999990001',
   window: { open: true, expiresAt: '2026-10-07T18:00:00.000Z' },
   optedOut: false,
+  contactBlock: { blocked: false, reason: null, origin: null },
+  callBlock: { blocked: false, reason: null, origin: null },
   callPermission: { status: null, expiresAt: null, requestedAt: null },
   attendance: null,
   speaksFor: null,
