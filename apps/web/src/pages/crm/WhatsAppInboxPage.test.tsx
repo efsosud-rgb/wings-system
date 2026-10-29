@@ -1,19 +1,39 @@
-import type { DealWhatsApp, WaConversationItem, WaNewTarget } from '@wings/shared';
+import type {
+  DealWhatsApp,
+  WaAttendanceView,
+  WaConversationItem,
+  WaNewTarget,
+} from '@wings/shared';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../api/client.js';
 import { WhatsAppInboxPage, WhatsAppWaitingPage } from './WhatsAppInboxPage.js';
 
 /**
- * CRM Vendas → WhatsApp as WhatsApp Web: the list with unread and status, the
- * open conversation (marked read), and "Nova conversa" with the template
- * notice, an existing deal and a new number.
+ * CRM Vendas → WhatsApp, the Central: the list with unread, status, the
+ * company number, Sofia or a person and the responsible; the tabs and filters
+ * kept in the address; the next page; the open conversation (marked read) with
+ * the deal beside it, or the deals of its phone to join; "Nova conversa" by the
+ * official number or a work number. Made-up numbers only.
  */
 
 const { state } = vi.hoisted(() => ({
   state: {
-    asked: [] as { filter: string; q: string }[],
+    asked: [] as { filter: string; q: string; narrow?: Record<string, string> }[],
+    linked: [] as string[],
+    started: [] as unknown[],
+    nextPage: 0,
+    hasNextPage: false,
+    deals: [] as WaNewTarget[],
+    chatNumbers: [] as {
+      id: string;
+      label: string | null;
+      phone: string | null;
+      ownerName: string | null;
+      sector: string | null;
+      connected: boolean;
+    }[],
     read: [] as string[],
     created: [] as unknown[],
     targets: [] as WaNewTarget[],
@@ -23,6 +43,9 @@ const { state } = vi.hoisted(() => ({
     listQuery: {} as Record<string, unknown>,
     threadQuery: {} as Record<string, unknown>,
     targetsQuery: {} as Record<string, unknown>,
+    attendance: null as WaAttendanceView | null,
+    actions: [] as unknown[],
+    typed: 0,
   },
 }));
 
@@ -42,6 +65,10 @@ const rows: WaConversationItem[] = [
     lastStatus: null,
     attendance: 'waiting_seller',
     ownerName: 'Daniele',
+    holderId: 'e1',
+    holderName: 'Daniele',
+    queue: null,
+    number: null,
   },
   {
     conversationId: 'c2',
@@ -58,6 +85,10 @@ const rows: WaConversationItem[] = [
     lastStatus: 'read',
     attendance: 'sofia',
     ownerName: null,
+    holderId: null,
+    holderName: null,
+    queue: null,
+    number: null,
   },
 ];
 
@@ -70,9 +101,13 @@ const thread: DealWhatsApp = {
   phone: '5521999990001',
   window: { open: true, expiresAt: new Date(Date.now() + 3_600_000).toISOString() },
   optedOut: false,
+  contactBlock: { blocked: false, reason: null, origin: null },
+  callBlock: { blocked: false, reason: null, origin: null },
   callPermission: { status: null, expiresAt: null, requestedAt: null },
   attendance: 'waiting_seller',
   speaksFor: null,
+  number: null,
+  numberChats: [],
   messages: [
     {
       id: 'm1',
@@ -94,7 +129,9 @@ const thread: DealWhatsApp = {
 };
 
 vi.mock('../../api/auth.js', () => ({
-  useSession: () => ({ data: { id: 'e1', role: 'admin_master', permissions: state.permissions } }),
+  useSession: () => ({
+    data: { id: 'e1', employeeId: 'e1', role: 'admin_master', permissions: state.permissions },
+  }),
   hasPermission: (session: { permissions: Record<string, string> } | undefined, key: string) =>
     Boolean(session?.permissions[key]),
   permissionScope: (session: { permissions: Record<string, string> } | undefined, key: string) =>
@@ -104,16 +141,41 @@ vi.mock('../../api/auth.js', () => ({
 vi.mock('../../api/whatsapp.js', () => ({
   useOfficialNumber: () => ({ data: { live: state.officialLive } }),
   useSetOfficialNumber: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
-  useWhatsAppInbox: (filter: string, q: string) => {
-    state.asked.push({ filter, q });
+  useWhatsAppInbox: (filter: string, q: string, narrow?: Record<string, string>) => {
+    state.asked.push({ filter, q, narrow });
     return {
       isLoading: false,
       isError: false,
       isSuccess: true,
       data: { conversations: rows },
+      hasNextPage: state.hasNextPage,
+      isFetchingNextPage: false,
+      fetchNextPage: () => {
+        state.nextPage++;
+        return Promise.resolve();
+      },
       ...state.listQuery,
     };
   },
+  useChatNumbers: () => ({ data: { numbers: state.chatNumbers } }),
+  useConversationDeals: () => ({
+    isLoading: false,
+    isError: false,
+    isSuccess: true,
+    data: { deals: state.deals },
+  }),
+  useLinkConversation: () => ({
+    isPending: false,
+    isError: false,
+    mutate: (leadId: string) => state.linked.push(leadId),
+  }),
+  useStartNumberChat: () => ({
+    isError: false,
+    mutate: (input: unknown, opts: { onSuccess: (data: { conversationId: string }) => void }) => {
+      state.started.push(input);
+      opts.onSuccess({ conversationId: 'c7' });
+    },
+  }),
   useWhatsAppConversation: (id: string | undefined) => ({
     isLoading: false,
     isError: false,
@@ -121,6 +183,15 @@ vi.mock('../../api/whatsapp.js', () => ({
     ...state.threadQuery,
   }),
   useMarkWhatsAppRead: () => ({ mutate: (id: string) => state.read.push(id) }),
+  useConversationAttendance: () => ({ isError: false, data: state.attendance ?? undefined }),
+  useAttendanceAction: () => ({
+    isPending: false,
+    isError: false,
+    mutate: (input: unknown) => state.actions.push(input),
+  }),
+  useReplying: () => ({ mutate: () => state.typed++ }),
+  useAssignmentMode: () => ({ data: { mode: 'manual' } }),
+  useSetAssignmentMode: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
   useWhatsAppTargets: (q: string) => ({
     isFetching: false,
     isError: false,
@@ -130,7 +201,20 @@ vi.mock('../../api/whatsapp.js', () => ({
   }),
 }));
 
+vi.mock('./DealSidePanel.js', () => ({
+  DealSidePanel: ({ data, back }: { data: { lead: { name: string } }; back?: string }) => (
+    <aside data-testid="deal-panel" data-back={back}>
+      {data.lead.name}
+    </aside>
+  ),
+}));
+
 vi.mock('../../api/leads.js', () => ({
+  useLead: (id: string | undefined) => ({
+    isLoading: false,
+    isError: false,
+    data: id ? { lead: { id, name: 'Elena Prado' } } : undefined,
+  }),
   useCreateLead: () => ({
     isPending: false,
     error: null,
@@ -142,15 +226,31 @@ vi.mock('../../api/leads.js', () => ({
 }));
 
 vi.mock('./WhatsAppChat.js', () => ({
-  WhatsAppChat: ({ thread: t }: { thread: { leadId?: string; conversationId?: string } }) => (
+  WhatsAppChat: ({
+    thread: t,
+    heldBy,
+    onTyping,
+  }: {
+    thread: { leadId?: string; conversationId?: string };
+    heldBy?: string | null;
+    onTyping?: () => void;
+  }) => (
     <div data-testid="chat">
       {t.leadId ? `deal:${t.leadId}` : `conversation:${t.conversationId}`}
+      {heldBy ? ` (com ${heldBy})` : ''}
+      <input aria-label="Mensagem" onChange={() => onTyping?.()} />
     </div>
   ),
 }));
 
 beforeEach(() => {
   state.asked.length = 0;
+  state.linked.length = 0;
+  state.started.length = 0;
+  state.nextPage = 0;
+  state.hasNextPage = false;
+  state.deals = [];
+  state.chatNumbers = [];
   state.read.length = 0;
   state.created.length = 0;
   state.targets = [];
@@ -159,6 +259,9 @@ beforeEach(() => {
   state.listQuery = {};
   state.threadQuery = {};
   state.targetsQuery = {};
+  state.attendance = null;
+  state.actions = [];
+  state.typed = 0;
 });
 afterEach(cleanup);
 
@@ -170,8 +273,15 @@ function renderAt(path: string) {
         <Route path="/crm-vendas/whatsapp/:id" element={<WhatsAppWaitingPage />} />
         <Route path="/crm-vendas/negociacoes/:id/whatsapp" element={<p>aba da negociação</p>} />
       </Routes>
+      <Where />
     </MemoryRouter>,
   );
+}
+
+/** Where the screen is now: the path and the filters in the address. */
+function Where() {
+  const location = useLocation();
+  return <span data-testid="where">{`${location.pathname}${location.search}`}</span>;
 }
 
 describe('the WhatsApp screen', () => {
@@ -186,6 +296,53 @@ describe('the WhatsApp screen', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Não lidas' }));
     expect(state.asked.at(-1)?.filter).toBe('unread');
     expect(screen.getByText(/Escolha uma conversa/)).toBeTruthy();
+  });
+
+  it('reads as WhatsApp Desktop: initials, the time of today by the clock, older ones by day', () => {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    state.listQuery = {
+      data: {
+        conversations: [
+          { ...rows[0]!, lastAt: new Date(new Date().setHours(9, 7, 0, 0)).toISOString() },
+          { ...rows[1]!, lastAt: yesterday.toISOString() },
+          // A profile name in a "fancy" alphabet: two UTF-16 units per letter.
+          { ...rows[1]!, conversationId: 'c3', profileName: '𝓜𝓪𝓻𝓲𝓪 𝓢𝓸𝓾𝔃𝓪' },
+        ],
+      },
+    };
+    renderAt('/crm-vendas/whatsapp');
+    const elena = screen.getByRole('link', { name: /Elena Prado/ });
+    expect(elena.querySelector('.crm-wa-avatar')?.textContent).toBe('EP');
+    expect(elena.querySelector('time')?.textContent).toBe('09:07');
+    const carlos = screen.getByRole('link', { name: /Carlos/ });
+    expect(carlos.querySelector('time')?.textContent).toBe('Ontem');
+    const fancy = screen.getByRole('link', { name: /𝓜𝓪𝓻𝓲𝓪/ });
+    expect(fancy.querySelector('.crm-wa-avatar')?.textContent).toBe('𝓜𝓢');
+  });
+
+  it('a search that found a message shows that message, with the term marked', () => {
+    state.listQuery = {
+      data: {
+        conversations: [
+          {
+            ...rows[0]!,
+            match: { text: '…fazem franquia de padaria em Niterói?', at: rows[0]!.lastAt },
+          },
+        ],
+      },
+    };
+    renderAt('/crm-vendas/whatsapp');
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Buscar conversa' }), {
+      target: { value: 'PADARIA' },
+    });
+    return waitFor(() => {
+      const elena = screen.getByRole('link', { name: /Elena Prado/ });
+      expect(elena.querySelector('mark')?.textContent).toBe('padaria');
+      expect(elena.textContent).toContain('franquia de padaria em Niterói?');
+      expect(elena.textContent).not.toContain('Oi, tudo bem?');
+      expect(state.asked.at(-1)?.q).toBe('PADARIA');
+    });
   });
 
   it('opens a deal’s conversation on the right, sends in that conversation and marks it read', async () => {
@@ -385,5 +542,253 @@ describe('the "Importar em lote" link', () => {
     state.permissions = permissions;
     renderAt('/crm-vendas/whatsapp');
     expect(screen.queryByRole('link', { name: 'Importar em lote' })).toBeNull();
+  });
+});
+
+describe('the Central (docs/whatsapp/central.md)', () => {
+  const workRow: WaConversationItem = {
+    ...rows[0]!,
+    conversationId: 'c5',
+    leadId: null,
+    leadName: null,
+    profileName: 'Nome no Celular',
+    ownerName: null,
+    // The API's holder of a work number's chat with nobody assigned: the number's owner.
+    holderId: 'e9',
+    holderName: 'Fernando',
+    attendance: 'with_person',
+    number: { id: 'n1', label: 'Comercial Teste', phone: '5521911110000', ownerName: 'Fernando' },
+  };
+
+  it('each row says the company number, Sofia or a person, and who is responsible', () => {
+    state.listQuery = { data: { conversations: [rows[0]!, rows[1]!, workRow] } };
+    renderAt('/crm-vendas/whatsapp');
+    expect(screen.getByRole('link', { name: /Elena Prado/ }).textContent).toContain(
+      'Oficial · Pessoa · Daniele',
+    );
+    expect(screen.getByRole('link', { name: /Carlos/ }).textContent).toContain(
+      'Oficial · Sofia · sem responsável',
+    );
+    expect(screen.getByRole('link', { name: /Nome no Celular/ }).textContent).toContain(
+      'Comercial Teste · Pessoa · Fernando',
+    );
+  });
+
+  it('tabs and filters go to the address and to the list; a row keeps them when it opens', () => {
+    state.chatNumbers = [
+      {
+        id: 'n1',
+        label: 'Comercial Teste',
+        phone: '5521911110000',
+        ownerName: 'Fernando',
+        sector: 'comercial',
+        connected: true,
+      },
+    ];
+    renderAt('/crm-vendas/whatsapp');
+    fireEvent.click(screen.getByRole('tab', { name: 'Minhas' }));
+    fireEvent.change(screen.getByLabelText('Número'), { target: { value: 'n1' } });
+    fireEvent.change(screen.getByLabelText('Departamento'), { target: { value: 'comercial' } });
+    fireEvent.change(screen.getByLabelText('De'), { target: { value: '2026-10-01' } });
+    expect(state.asked.at(-1)).toMatchObject({
+      filter: 'mine',
+      narrow: { number: 'n1', sector: 'comercial', from: '2026-10-01' },
+    });
+    expect(screen.getByTestId('where').textContent).toBe(
+      '/crm-vendas/whatsapp?filtro=mine&numero=n1&setor=comercial&de=2026-10-01',
+    );
+    fireEvent.click(screen.getByRole('link', { name: /Elena Prado/ }));
+    expect(screen.getByTestId('where').textContent).toBe(
+      '/crm-vendas/whatsapp/c1?filtro=mine&numero=n1&setor=comercial&de=2026-10-01',
+    );
+  });
+
+  it('a link with the filters opens the list already narrowed (back from the deal)', () => {
+    renderAt('/crm-vendas/whatsapp/c1?filtro=sofia&situacao=sofia');
+    expect(state.asked.at(-1)).toMatchObject({ filter: 'sofia', narrow: { state: 'sofia' } });
+    expect(
+      (screen.getByRole('tab', { name: 'Sofia' }) as HTMLElement).getAttribute('aria-selected'),
+    ).toBe('true');
+    // The deal beside the conversation; its link brings back here with the filters.
+    const panel = screen.getByTestId('deal-panel');
+    expect(panel.textContent).toBe('Elena Prado');
+    expect(panel.getAttribute('data-back')).toBe(
+      '/crm-vendas/whatsapp/c1?filtro=sofia&situacao=sofia',
+    );
+  });
+
+  it('loads the next page on asking', () => {
+    state.hasNextPage = true;
+    renderAt('/crm-vendas/whatsapp');
+    fireEvent.click(screen.getByRole('button', { name: 'Carregar mais conversas' }));
+    expect(state.nextPage).toBe(1);
+  });
+
+  it('a conversation with no deal lists the deals of its phone; the person chooses one', () => {
+    state.listQuery = { data: { conversations: [workRow] } };
+    state.threadQuery = {
+      data: {
+        ...thread,
+        conversationId: 'c5',
+        leadId: null,
+        number: workRow.number,
+      },
+    };
+    state.deals = [{ ...rows0Target('l7', 'Primeira') }, { ...rows0Target('l8', 'Segunda') }];
+    renderAt('/crm-vendas/whatsapp/c5');
+    expect(screen.getByText(/2 negociações têm este telefone/)).toBeTruthy();
+    expect(screen.getByText(/Pelo WhatsApp de trabalho Comercial Teste \(Fernando\)/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Ligar a Segunda/ }));
+    expect(state.linked).toEqual(['l8']);
+  });
+
+  it('a refresh that fails keeps the conversation on screen and says it is reconnecting', () => {
+    state.threadQuery = { isError: true, error: new TypeError('x') };
+    renderAt('/crm-vendas/whatsapp/c1');
+    expect(screen.getByTestId('chat').textContent).toBe('conversation:c1');
+    expect(screen.getByText(/Reconectando/)).toBeTruthy();
+  });
+
+  it('"WhatsApp" from a contact opens "Nova conversa" on its phone; a work number can be chosen', () => {
+    state.chatNumbers = [
+      {
+        id: 'n1',
+        label: 'Comercial Teste',
+        phone: '5521911110000',
+        ownerName: 'Fernando',
+        sector: 'comercial',
+        connected: true,
+      },
+    ];
+    state.targets = [rows0Target('l5', 'Patrícia')];
+    renderAt('/crm-vendas/whatsapp?nova=5521977776666');
+    const dialog = within(screen.getByRole('dialog'));
+    expect(
+      (dialog.getByPlaceholderText('Nome, telefone ou contato') as HTMLInputElement).value,
+    ).toBe('5521977776666');
+    fireEvent.change(dialog.getByLabelText('Enviar por'), { target: { value: 'n1' } });
+    expect(dialog.getByText(/Por este número só vai mensagem livre/)).toBeTruthy();
+    fireEvent.click(dialog.getByRole('button', { name: /Patrícia/ }));
+    expect(state.started).toEqual([{ numberId: 'n1', leadId: 'l5', phone: '5521977776666' }]);
+    expect(screen.getByTestId('where').textContent).toBe('/crm-vendas/whatsapp/c7');
+  });
+});
+
+function rows0Target(leadId: string, name: string): WaNewTarget {
+  return {
+    leadId,
+    name,
+    phone: '5521977776666',
+    contactName: null,
+    pipeline: 'formatacao',
+    ownerName: 'Luana',
+    open: true,
+    conversationId: null,
+  };
+}
+
+const attendanceView = (over: Partial<WaAttendanceView['attendance']> = {}): WaAttendanceView => ({
+  attendance: {
+    conversationId: 'c1',
+    version: 7,
+    holderId: 'e2',
+    holderName: 'Daniele',
+    assigned: true,
+    queue: null,
+    replyingName: null,
+    sofiaPaused: false,
+    sofia: null,
+    can: {
+      take: true,
+      transfer: true,
+      resolve: true,
+      reopen: false,
+      pauseSofia: false,
+      resumeSofia: false,
+    },
+    ...over,
+  },
+  events: [
+    {
+      id: 'v1',
+      kind: 'sofia_handoff',
+      fromName: null,
+      toName: null,
+      queue: null,
+      reason: 'Pediu para falar com uma pessoa',
+      actorName: null,
+      at: new Date().toISOString(),
+    },
+    {
+      id: 'v2',
+      kind: 'transferred',
+      fromName: 'Luana',
+      toName: 'Daniele',
+      queue: null,
+      reason: null,
+      actorName: 'Luana',
+      at: new Date().toISOString(),
+    },
+  ],
+  people: [
+    { id: 'e1', name: 'Eu Mesmo' },
+    { id: 'e2', name: 'Daniele' },
+    { id: 'e3', name: 'Umberto' },
+  ],
+});
+
+describe('who answers the conversation (Atendimento)', () => {
+  it('held by someone else: the composer says so, and Assumir goes with the version on screen', () => {
+    state.attendance = attendanceView({ replyingName: 'Daniele' });
+    renderAt('/crm-vendas/whatsapp/c1');
+    expect(screen.getByTestId('chat').textContent).toContain('com Daniele');
+    expect(screen.getByRole('status').textContent).toBe('Daniele está respondendo…');
+    fireEvent.click(screen.getByRole('button', { name: 'Assumir' }));
+    expect(state.actions).toEqual([{ version: 7, action: { kind: 'assign', employeeId: 'e1' } }]);
+  });
+
+  it('passes it to a person or to a department queue', () => {
+    state.attendance = attendanceView();
+    renderAt('/crm-vendas/whatsapp/c1');
+    const to = screen.getByRole('combobox', { name: 'Passar para' });
+    // The one who holds it is not offered.
+    expect(within(to).queryByRole('option', { name: 'Daniele' })).toBeNull();
+    fireEvent.change(to, { target: { value: 'e3' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Passar' }));
+    fireEvent.change(to, { target: { value: 'fila:formatacao-financeiro' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Passar' }));
+    expect(state.actions).toEqual([
+      { version: 7, action: { kind: 'assign', employeeId: 'e3' } },
+      { version: 7, action: { kind: 'assign', employeeId: null, queue: 'formatacao-financeiro' } },
+    ]);
+  });
+
+  it('the panel shows what Sofia left and who had it; typing says "está respondendo" once in a while', () => {
+    state.attendance = attendanceView({
+      holderId: 'e1',
+      holderName: 'Eu Mesmo',
+      sofia: {
+        reason: 'Pediu para falar com uma pessoa',
+        facts: [{ key: 'nome', label: 'Nome', answer: 'Pessoa Fictícia' }],
+      },
+    });
+    renderAt('/crm-vendas/whatsapp/c1');
+    const history = screen.getByRole('region', { name: 'Histórico do atendimento' });
+    expect(history.textContent).toContain('Motivo: Pediu para falar com uma pessoa');
+    expect(history.textContent).toContain('Pessoa Fictícia');
+    expect(history.textContent).toContain('Sofia: A Sofia passou para uma pessoa');
+    expect(history.textContent).toContain('Luana: Transferiu a conversa para Daniele');
+    expect(screen.getByTestId('chat').textContent).not.toContain('com ');
+    const field = screen.getByRole('textbox', { name: 'Mensagem' });
+    fireEvent.change(field, { target: { value: 'O' } });
+    fireEvent.change(field, { target: { value: 'Ol' } });
+    expect(state.typed).toBe(1);
+  });
+
+  it('with nobody holding it, the row says the queue', () => {
+    rows[1] = { ...rows[1]!, holderId: null, holderName: null, queue: 'comercial' };
+    renderAt('/crm-vendas/whatsapp');
+    expect(screen.getByRole('link', { name: /Carlos/ }).textContent).toContain('fila Comercial');
+    rows[1] = { ...rows[1]!, queue: null };
   });
 });

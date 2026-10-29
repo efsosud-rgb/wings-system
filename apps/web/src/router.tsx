@@ -30,8 +30,11 @@ import { DealPage } from './pages/crm/DealPage.js';
 import { DealWhatsAppPage } from './pages/crm/DealWhatsAppPage.js';
 import { WhatsAppInboxPage, WhatsAppWaitingPage } from './pages/crm/WhatsAppInboxPage.js';
 import { WhatsAppBulkImportPage } from './pages/crm/WhatsAppBulkImportPage.js';
+import { WhatsAppNumbersPage } from './pages/crm/WhatsAppNumbersPage.js';
+import { WhatsAppTemplatesPage } from './pages/crm/WhatsAppTemplatesPage.js';
 import { SofiaPage } from './pages/crm/SofiaPage.js';
 import { DealsPage } from './pages/crm/DealsPage.js';
+import { ProspectingPage } from './pages/crm/ProspectingPage.js';
 import { TasksPage } from './pages/crm/TasksPage.js';
 import { LoginPage } from './pages/LoginPage.js';
 import { MyAccountPage } from './pages/MyAccountPage.js';
@@ -90,7 +93,9 @@ const SCREENS: Record<string, RouteObject[]> = {
     { index: true, element: <WhatsAppInboxPage /> },
     { path: 'importar-lote', element: <WhatsAppBulkImportPage /> },
     { path: ':id', element: <WhatsAppWaitingPage /> },
+    { path: 'numeros', element: <WhatsAppNumbersPage /> },
   ],
+  '/crm-vendas/whatsapp/modelos': [{ index: true, element: <WhatsAppTemplatesPage /> }],
   '/crm-vendas/sofia': [
     { index: true, element: <SofiaPage /> },
     { path: ':id', element: <SofiaPage /> },
@@ -103,6 +108,7 @@ const SCREENS: Record<string, RouteObject[]> = {
     { index: true, element: <CompaniesPage /> },
     { path: ':id', element: <CompaniesPage /> },
   ],
+  '/crm-vendas/prospeccao': [{ index: true, element: <ProspectingPage /> }],
   '/crm-vendas/tarefas': [{ index: true, element: <TasksPage /> }],
   '/crm-vendas/avisos': [{ index: true, element: <NotificationsPage /> }],
   '/crm-vendas/configuracoes': [

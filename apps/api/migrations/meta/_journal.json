@@ -652,6 +652,62 @@
       "when": 1792439676361,
       "tag": "0094_whatsapp_bulk_import",
       "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1792521813953,
+      "tag": "0095_wa_numbers",
+      "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1793028688633,
+      "tag": "0096_wa_template_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "7",
+      "when": 1793129312821,
+      "tag": "0097_prospecting",
+      "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1793281672593,
+      "tag": "0098_contact_opt_outs",
+      "breakpoints": true
+    },
+    {
+      "idx": 99,
+      "version": "7",
+      "when": 1793292671239,
+      "tag": "0099_wa_message_files",
+      "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "7",
+      "when": 1793292674799,
+      "tag": "0100_wa_central",
+      "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1793292678396,
+      "tag": "0101_wa_attendance",
+      "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1793292681812,
+      "tag": "0102_wa_reliability",
+      "breakpoints": true
     }
   ]
 }

@@ -23,7 +23,13 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { siteEventSchema, WINGS_CLIENT_ID } from '@wings/shared';
+import {
+  SITE_FORM_REVENUE_OPTIONS,
+  SITE_FORM_REVENUE_QUESTION,
+  siteEventSchema,
+  WINGS_CLIENT_ID,
+  type SiteFormRevenue,
+} from '@wings/shared';
 import { buildApp } from '../../api/src/app.js';
 import { FALE_COM_A_WINGS, seed } from '../../api/src/db/seed.js';
 import { loadEnv } from '../../api/src/env.js';
@@ -69,6 +75,8 @@ interface Submission {
   label: string;
   answer: string;
   answerText: string;
+  revenue: SiteFormRevenue;
+  revenueText: string;
   instagramTyped: string;
   email: string;
   phone: string;
@@ -324,16 +332,23 @@ async function checkDatabase(db: TestDatabase['db'], report: Report): Promise<vo
       lead.instagram === expectedInstagram,
       `instagram ${lead.instagram ?? 'null'}`,
     );
+    const revenue = SITE_FORM_REVENUE_OPTIONS[submission.revenue];
     check(
       `${label}: e-mail kept as ${expectedEmail ? 'the one typed' : 'null (none typed)'}`,
       lead.email === expectedEmail,
       `e-mail ${lead.email ? 'set' : 'null'}`,
     );
     check(
-      `${label}: form_answers holds the option's text under the question`,
+      `${label}: form_answers holds each option's text under its question`,
       option !== undefined &&
-        JSON.stringify(lead.formAnswers) === JSON.stringify({ [question]: option }),
+        JSON.stringify(lead.formAnswers) ===
+          JSON.stringify({ [question]: option, [SITE_FORM_REVENUE_QUESTION]: revenue }),
       JSON.stringify(lead.formAnswers),
+    );
+    check(
+      `${label}: the page shows the API's revenue text`,
+      submission.revenueText === revenue,
+      submission.revenueText,
     );
     check(
       `${label}: the page shows the API's option text`,

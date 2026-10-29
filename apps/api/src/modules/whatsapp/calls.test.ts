@@ -5,7 +5,15 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
-import { leadActivities, leads, waCalls, waContacts } from '../../db/schema/index.js';
+import {
+  leadActivities,
+  leadEvents,
+  leads,
+  leadTasks,
+  waCalls,
+  waContacts,
+} from '../../db/schema/index.js';
+import { recordContactOptOut } from '../leads/contact-block.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import {
@@ -15,7 +23,7 @@ import {
   TEST_INDEX_KEY,
 } from '../../test/factories.js';
 import { forgetCallingSettings } from './calling.js';
-import { processWhatsAppEvents, sweepCalls } from './intake.js';
+import { CALL_REQUEST_TASK, processWhatsAppEvents, sweepCalls } from './intake.js';
 
 /**
  * WhatsApp voice calls against a simulated Meta: placing one (the browser's
@@ -40,6 +48,7 @@ let connectAnswer: () => Response = () =>
   json({ messaging_product: 'whatsapp', calls: [{ id: 'wacid.OUT1' }] });
 let permissionAnswer: unknown = { permission: { status: 'no_permission' }, actions: [] };
 const posts: Record<string, unknown>[] = [];
+let wamids = 0;
 /** Every request that reached the simulated Meta, whatever it was. */
 const fetched: string[] = [];
 
@@ -67,7 +76,8 @@ const whatsappFetch = (async (input: string | URL | Request, init?: RequestInit)
     return json({
       messaging_product: 'whatsapp',
       contacts: [{ wa_id: String(body.to) }],
-      messages: [{ id: `wamid.M${posts.length}` }],
+      // Unique across the file: wa_messages.wamid is unique.
+      messages: [{ id: `wamid.M${++wamids}` }],
     });
   }
   return json({ error: { code: 100 } }, 400);
@@ -255,6 +265,37 @@ describe('placing a call', () => {
       actorEmployeeId: owner.id,
       note: 'Pelo WhatsApp · ligação feita',
     });
+  });
+
+  it('a "não me contate" on WhatsApp or on the phone stops the call before Meta', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    for (const [phone, channel] of [
+      ['5521977001112', 'whatsapp'],
+      ['5521977001113', 'phone'],
+    ] as const) {
+      const leadId = await deal(phone, owner.id);
+      await recordContactOptOut(db, {
+        leadId,
+        channels: [channel],
+        origin: 'crm',
+        reason: 'Pediu',
+        createdBy: owner.id,
+      });
+      const refused = await app.inject({
+        method: 'POST',
+        url: `/leads/${leadId}/whatsapp/calls`,
+        cookies: owner.cookies,
+        payload: { sdp: OFFER },
+      });
+      expect(refused.statusCode, channel).toBe(409);
+      expect(refused.json().error).toBe('contact_blocked');
+      const [event] = await db
+        .select()
+        .from(leadEvents)
+        .where(and(eq(leadEvents.leadId, leadId), eq(leadEvents.kind, 'lead.contact_blocked')));
+      expect(event?.detail).toMatchObject({ path: 'ligacao', origin: 'crm' });
+    }
+    expect(posts).toHaveLength(0);
   });
 
   it('finds the call by our own id when Meta’s webhook beats its answer', async () => {
@@ -646,5 +687,132 @@ describe('the seller lock until the official number is live (Eric, 19/10)', () =
       expect(started.statusCode, role).toBe(201);
       expect(posts, role).toHaveLength(1);
     }
+  });
+});
+
+describe('"Prefiro uma ligação" on a template (Eric, 26/10)', () => {
+  const send = {
+    config: { token: TOKEN, phoneNumberId: PHONE_ID, wabaId: WABA },
+    fetch: whatsappFetch,
+  };
+  async function tap(phone: string, id: string) {
+    const body = JSON.stringify({
+      object: 'whatsapp_business_account',
+      entry: [
+        {
+          id: WABA,
+          changes: [
+            {
+              field: 'messages',
+              value: {
+                messaging_product: 'whatsapp',
+                metadata: { phone_number_id: PHONE_ID },
+                contacts: [{ wa_id: phone, profile: { name: 'Elena' } }],
+                messages: [
+                  {
+                    from: phone,
+                    id,
+                    timestamp: unix(new Date()),
+                    type: 'button',
+                    button: { text: 'Prefiro uma ligação', payload: 'Prefiro uma ligação' },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/integrations/whatsapp/webhook',
+      headers: { 'content-type': 'application/json', 'x-hub-signature-256': sign(body) },
+      payload: body,
+    });
+    expect(response.statusCode).toBe(200);
+    await processWhatsAppEvents({ db, phoneNumberId: PHONE_ID, log: () => {}, send });
+  }
+  const callTasks = (leadId: string) =>
+    db
+      .select()
+      .from(leadTasks)
+      .where(and(eq(leadTasks.leadId, leadId), eq(leadTasks.title, CALL_REQUEST_TASK)));
+
+  it('gives the owner a task to call now and asks Meta for the permission once', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977200001', owner.id);
+    await tap('5521977200001', 'wamid.CALLME1');
+    const [task] = await callTasks(leadId);
+    expect(task).toMatchObject({ kind: 'call', assigneeEmployeeId: owner.id, auto: true });
+    const requests = posts.filter((p) => p.type === 'interactive');
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      to: '5521977200001',
+      interactive: { type: 'call_permission_request' },
+    });
+    const [contact] = await db
+      .select()
+      .from(waContacts)
+      .where(eq(waContacts.phone, '5521977200001'));
+    expect(contact?.callPermission).toBe('requested');
+    // The system's own request is not an answer: the conversation still waits for a person.
+    const admin = await sessionFor('admin_master');
+    const waiting = await app.inject({
+      method: 'GET',
+      url: '/whatsapp/conversations?filter=unanswered',
+      cookies: admin.cookies,
+    });
+    expect(
+      waiting
+        .json<{ conversations: { leadId: string | null }[] }>()
+        .conversations.map((c) => c.leadId),
+    ).toContain(leadId);
+    // A second tap the same day: no second task, no second request (Meta allows 1 a day).
+    await tap('5521977200001', 'wamid.CALLME2');
+    expect(await callTasks(leadId)).toHaveLength(1);
+    expect(posts.filter((p) => p.type === 'interactive')).toHaveLength(1);
+  });
+
+  it('a "não me contate" keeps the task for the owner and sends no request', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977200010', owner.id);
+    await recordContactOptOut(db, {
+      phone: '5521977200010',
+      channels: ['all'],
+      origin: 'crm',
+      reason: 'Pediu',
+      createdBy: owner.id,
+    });
+    await tap('5521977200010', 'wamid.CALLME10');
+    expect(await callTasks(leadId)).toHaveLength(1);
+    expect(posts.filter((p) => p.type === 'interactive')).toHaveLength(0);
+    const [event] = await db
+      .select()
+      .from(leadEvents)
+      .where(and(eq(leadEvents.leadId, leadId), eq(leadEvents.kind, 'lead.contact_blocked')));
+    expect(event?.detail).toMatchObject({ path: 'pedido_ligacao_automatico' });
+  });
+
+  it('with no open deal (a closed one only), nothing is sent and no task made', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const closed = await deal('5521977200009', owner.id);
+    await db.update(leads).set({ won: false, closedAt: new Date() }).where(eq(leads.id, closed));
+    await tap('5521977200009', 'wamid.CALLME9');
+    expect(posts.filter((p) => p.type === 'interactive')).toHaveLength(0);
+  });
+
+  it('before the number is live or with calling off: the task only, nothing sent', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    await setOfficialLive(db, false);
+    const first = await deal('5521977200002', owner.id);
+    await tap('5521977200002', 'wamid.CALLME3');
+    expect(await callTasks(first)).toHaveLength(1);
+    await setOfficialLive(db, true);
+    callingStatus = 'DISABLED';
+    forgetCallingSettings();
+    const second = await deal('5521977200003', owner.id);
+    await tap('5521977200003', 'wamid.CALLME4');
+    expect(await callTasks(second)).toHaveLength(1);
+    expect(posts).toHaveLength(0);
   });
 });

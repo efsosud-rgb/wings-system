@@ -11,11 +11,12 @@ import {
   siteUrlOf,
 } from './form-rules.js';
 
-/** The three required answers alone. */
+/** The four required answers alone. */
 const SHORT = {
   'f-nome': 'Pessoa de Teste',
   'f-tel': '(21) 90000-0000',
   'f-int': 'formatacao',
+  'f-fat': 'nao-informar',
 };
 
 const FILLED = {
@@ -33,15 +34,16 @@ describe('missingOf', () => {
       'nome',
       'WhatsApp',
       'o que você procura',
+      'faturamento mensal',
       'aceite da política',
       CAPTCHA_LABEL,
     ]);
     expect(missingLineOf(lacking).text).toBe(
-      'Para enviar, falta: nome, WhatsApp, o que você procura, aceite da política, verificação antirrobô.',
+      'Para enviar, falta: nome, WhatsApp, o que você procura, faturamento mensal, aceite da política, verificação antirrobô.',
     );
   });
 
-  it('is empty with the three answers, the consent and the robot check; the rest is optional', () => {
+  it('is empty with the four answers, the consent and the robot check; the rest is optional', () => {
     expect(missingOf(SHORT, true, true)).toEqual([]);
     expect(missingOf(FILLED, true, true)).toEqual([]);
     expect(missingLineOf([])).toEqual({ text: READY_TEXT, ready: true });
@@ -55,6 +57,10 @@ describe('missingOf', () => {
     expect(
       missingOf({ ...SHORT, 'f-email': 'sem-arroba', 'f-ig': 'marca..x' }, true, true),
     ).toEqual([]);
+  });
+
+  it('wants the monthly revenue, "Prefiro não informar" included', () => {
+    expect(missingOf({ ...FILLED, 'f-fat': '' }, true, true)).toEqual(['faturamento mensal']);
   });
 
   it('wants a WhatsApp with area code', () => {

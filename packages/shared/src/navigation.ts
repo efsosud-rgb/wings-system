@@ -46,6 +46,7 @@ export const NAV_ICONS = [
   'globe',
   'bell',
   'message',
+  'search',
 ] as const;
 export type NavIcon = (typeof NAV_ICONS)[number];
 
@@ -148,11 +149,30 @@ export const NAVIGATION: readonly NavModule[] = [
         kind: 'crud',
       },
       {
+        path: '/crm-vendas/prospeccao',
+        label: 'Prospecção',
+        icon: 'search',
+        description: 'Empresas no Google Maps, ao vivo, para levar as boas ao funil Formatação',
+        permission: 'prospecting.use',
+        status: 'ready',
+        kind: 'studio',
+      },
+      {
         path: '/crm-vendas/whatsapp',
         label: 'WhatsApp',
         icon: 'message',
         description: 'As suas conversas pelo WhatsApp da empresa, como no WhatsApp Web',
         permission: 'leads.whatsapp',
+        status: 'ready',
+        kind: 'crud',
+      },
+      {
+        path: '/crm-vendas/whatsapp/modelos',
+        label: 'Modelos',
+        icon: 'file-text',
+        description:
+          'Os modelos de mensagem do WhatsApp: escrever, mandar para a Meta e o que preenche cada campo',
+        permission: 'whatsapp_templates.manage',
         status: 'ready',
         kind: 'crud',
       },

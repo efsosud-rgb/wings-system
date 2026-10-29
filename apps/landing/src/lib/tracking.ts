@@ -31,19 +31,22 @@ export const TRACKING_KEYS = [
 ] as const;
 
 export type TrackingKey = (typeof TRACKING_KEYS)[number];
-export type Tracking = Partial<Record<TrackingKey, string>>;
+/** `utm_id` (Meta's campaign id) is read and kept for the server events only; the form's POST refuses it. */
+export type OriginKey = TrackingKey | 'utm_id';
+export type Tracking = Partial<Record<OriginKey, string>>;
 
 /** The keys read from the address; the referrer comes from the document. */
-export const URL_TRACKING_KEYS: readonly TrackingKey[] = TRACKING_KEYS.filter(
-  (key) => key !== 'referrer',
-);
+export const URL_TRACKING_KEYS: readonly OriginKey[] = [
+  ...TRACKING_KEYS.filter((key) => key !== 'referrer'),
+  'utm_id',
+];
 
 export const FIRST_TOUCH_STORAGE_KEY = 'wings_ft';
 
 /** The API's limit for each value. */
 export const TRACKING_VALUE_MAX = 500;
 
-const KNOWN = new Set<string>(TRACKING_KEYS);
+const KNOWN = new Set<string>(URL_TRACKING_KEYS);
 
 /** The first touch as stored: the address keys plus when it was kept. */
 export type FirstTouch = Tracking & { ts?: number };
@@ -81,8 +84,8 @@ export function firstTouchOf(raw: string | null): FirstTouch | null {
   const kept: FirstTouch = {};
   for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
     if (key === 'ts' && typeof value === 'number') kept.ts = value;
-    else if (key !== 'referrer' && KNOWN.has(key) && typeof value === 'string' && value) {
-      kept[key as TrackingKey] = value.slice(0, TRACKING_VALUE_MAX);
+    else if (KNOWN.has(key) && typeof value === 'string' && value) {
+      kept[key as OriginKey] = value.slice(0, TRACKING_VALUE_MAX);
     }
   }
   return Object.keys(kept).some((key) => key !== 'ts') ? kept : null;

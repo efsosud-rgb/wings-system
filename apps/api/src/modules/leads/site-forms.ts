@@ -2,9 +2,13 @@ import {
   instagramUsernameOf,
   LEAD_PIPELINES,
   normalizeBrazilianPhone,
+  SITE_FORM_REVENUE_OPTIONS,
+  SITE_FORM_REVENUE_QUESTION,
   siteFormCopyOf,
   siteFormSpecSchema,
   siteFormSubmitSchema,
+  siteLinkText,
+  wameLinkOf,
   whatsappLinkOf,
   type LeadPipeline,
   type SiteFormInfo,
@@ -25,7 +29,6 @@ import { RdMarketing } from '../expansion/rd.js';
 import { shapeOf } from '../media/kairogen-adapter.js';
 import { rdAttributionOf } from './rd-attribution.js';
 import { brandOfLink, resolveLandingPage, upsertLead, type ClientResolution } from './service.js';
-import { leadTriageEnabled } from './triage-schedule.js';
 
 /**
  * The site form (CRM phase 1, T5): the Wings System's own form on a landing
@@ -72,7 +75,12 @@ export async function siteWhatsappUrl(
     )
     .orderBy(desc(leadTrackingLinks.createdAt))
     .limit(1);
-  return link ? whatsappLinkOf(wingsNumber, link.code, brandOfLink(client), ref) : null;
+  if (!link) return null;
+  const brand = brandOfLink(client);
+  // The Wings site: a sentence with the code at the end; a brand's page keeps "<code> Olá! …".
+  return brand
+    ? whatsappLinkOf(wingsNumber, link.code, brand, ref)
+    : wameLinkOf(wingsNumber, siteLinkText(link.code, ref));
 }
 
 /** `@perfil` from what the record keeps (`@perfil`, `perfil` or an instagram.com address), or null. */
@@ -189,7 +197,7 @@ export type SiteFormAnswers =
       ok: true;
       /** The Instagram to keep: only the username when the page requires it, else as typed. */
       instagram: string | undefined;
-      /** The multiple-choice answer under the question's text, as the option's text. */
+      /** The multiple-choice answer and the revenue band, each under its question's text, as the option's text. */
       formAnswers: Record<string, string> | null;
       /** The chosen option's code, with the funnel it leads to when it names one. */
       choice: SiteFormQualifierValue | null;
@@ -222,31 +230,33 @@ export function siteFormAnswersOf(
   if (required.has('qualifierAnswer') && form?.qualifier && !choice) {
     return refuse(`Escolha uma opção em "${form.qualifier.question}".`);
   }
+  const formAnswers: Record<string, string> = {};
+  if (choice && form?.qualifier) formAnswers[form.qualifier.question] = choice.option;
+  if (body.monthlyRevenue) {
+    formAnswers[SITE_FORM_REVENUE_QUESTION] = SITE_FORM_REVENUE_OPTIONS[body.monthlyRevenue];
+  }
   return {
     ok: true,
     instagram,
-    formAnswers: choice && form?.qualifier ? { [form.qualifier.question]: choice.option } : null,
+    formAnswers: Object.keys(formAnswers).length ? formAnswers : null,
     choice: choice?.code ?? null,
   };
 }
 
 /**
  * The funnel the lead goes to: the page's own, unless the chosen option names
- * another. "None" (null, the Jev triage decides) only while the triage is on:
- * off, nobody would ever give the lead a funnel, so it keeps the page's.
+ * another. An option that names none ("Ainda não sei") keeps the page's funnel
+ * (Eric, 26/10: the origin decides, the rotation takes it); only a page with no
+ * funnel of its own leaves the lead to the Jev triage.
  * Expansão only for a page tied to a brand: without one, nobody would know
  * which franchise the lead wants, so it keeps the page's too.
  */
 export function answerPipelineOf(
   choice: SiteFormQualifierValue | null,
   page: Pick<ClientResolution, 'pipeline' | 'brand'>,
-  triageOn: boolean,
 ): LeadPipeline | null {
-  const override = choice?.pipeline;
-  if (override === undefined) return page.pipeline;
-  if (override === null) return triageOn ? null : page.pipeline;
-  if (override === 'expansao' && !page.brand) return page.pipeline;
-  return override;
+  const override = choice?.pipeline ?? page.pipeline;
+  return override === 'expansao' && !page.brand ? page.pipeline : override;
 }
 
 /** The rule's funnel, when it names one. */
@@ -378,8 +388,8 @@ export const siteFormRoutes: FastifyPluginAsync = async (app) => {
         trafficSource: null,
       });
       const client = await resolveLandingPage(db, { identifier: page.pattern });
-      // The chosen option may send the lead to another funnel, or to none (the Jev triage decides).
-      const pipeline = answerPipelineOf(answers.choice, client, leadTriageEnabled());
+      // The chosen option may send the lead to another funnel; a page with none leaves it to the Jev triage.
+      const pipeline = answerPipelineOf(answers.choice, client);
       const now = new Date();
       // The consent line the page showed: its own when the spec names one, else the funnel's
       // (the rule is the same one the page read).

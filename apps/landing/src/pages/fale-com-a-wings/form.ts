@@ -25,7 +25,7 @@ import { applyWhatsappUrl } from '../../lib/whatsapp.js';
  * it says what is still missing. A sent form gives way to the thank-you.
  */
 
-export const SEND_LABEL = 'Enviar e falar com a Wings';
+export const SEND_LABEL = 'Quero meu diagnóstico';
 export const SENDING_LABEL = 'Enviando…';
 
 export const MESSAGES = {
@@ -228,6 +228,7 @@ export function setupForm(setup: FormSetup): FormController {
       siteUrl: valueOf('f-site'),
       qualifierValue: qualifier.value,
       qualifierText: option?.textContent?.trim() ?? '',
+      monthlyRevenue: valueOf('f-fat'),
       website: honeypot.value,
     };
     const body = submitBodyOf({

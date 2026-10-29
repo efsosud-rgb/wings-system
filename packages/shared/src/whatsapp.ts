@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ContactBlock } from './contact-opt-out.js';
 import type { SofiaState } from './sofia.js';
 
 /**
@@ -91,11 +92,38 @@ export const WA_MEDIA_KINDS: readonly WaMessageKind[] = [
   'sticker',
 ];
 
+/**
+ * The message a reply quotes or a reaction is for, looked up only in the same conversation. Not
+ * found: older than the number's connection to the system, under another deal of the same
+ * person, or kept only on the phone.
+ */
+export type WaQuote =
+  | { found: true; id: string; direction: 'in' | 'out'; kind: WaMessageKind; text: string | null }
+  | { found: false };
+
 export interface WaMessage {
   id: string;
   direction: 'in' | 'out';
   kind: WaMessageKind;
   text: string | null;
+  /** A reply: the message it quotes. Optional only so fixtures of other branches still type. */
+  replyTo?: WaQuote | null;
+  /** A reaction: the message it is for. Its emoji is `text`; no text means it was taken back. */
+  reactionTo?: WaQuote | null;
+  /** The reactions on this message now: the last one of each side, a taken-back one left out. */
+  reactions?: { emoji: string; direction: 'in' | 'out' }[];
+  /**
+   * A contact card: each contact's name and numbers as WhatsApp sent them. Null on a card that came
+   * before the numbers were kept (its first name is the `text`).
+   */
+  contacts?: { name: string | null; phones: string[] }[] | null;
+  /** A location: its point (null when WhatsApp sent none), the place's name and address. */
+  location?: {
+    latitude: number | null;
+    longitude: number | null;
+    name: string | null;
+    address: string | null;
+  } | null;
   /** Present when the message has a file, opened at `/whatsapp/messages/:id/media`. */
   media: { mimeType: string | null; filename: string | null } | null;
   template: { name: string; language: string } | null;
@@ -114,6 +142,8 @@ export interface WaMessage {
   authorName: string | null;
   /** Sent by Sofia, the virtual SDR. */
   bySofia: boolean;
+  /** Written on a work number's phone (or a linked device), not in the system (`author` app). */
+  fromPhone?: boolean;
   /** Brought in from a phone's export: the media file the line named, or that it was left out. */
   imported: { file: string | null; omitted: boolean } | null;
   at: string;
@@ -133,6 +163,10 @@ export interface DealWhatsApp {
   /** Meta's 24-hour window for free text, from the person's last message. */
   window: { open: boolean; expiresAt: string | null };
   optedOut: boolean;
+  /** A "não me contate" (or the Prospecção opt-in rule): no template and no call request start here. */
+  contactBlock: ContactBlock;
+  /** The same for a call: WhatsApp or the phone. */
+  callBlock: ContactBlock;
   /** Whether the person lets the business call them, as last known. */
   callPermission: WaCallPermissionState;
   /** Who has the conversation now (Sofia, a seller, ...); null before any message. */
@@ -142,6 +176,10 @@ export interface DealWhatsApp {
    * lead never hears of Wings), or null for Wings Company.
    */
   speaksFor: string | null;
+  /** The work number this chat is on; null on the official number. */
+  number: WaChatNumber | null;
+  /** On a deal's page: the deal's chats on work numbers the reader may open (the Central has them). */
+  numberChats: { conversationId: string; number: WaChatNumber }[];
   messages: WaMessage[];
 }
 
@@ -155,12 +193,68 @@ export interface WaTemplate {
   paramCount: number;
   /** An approved `<name>_arte` exists: with the art registered, that one goes. */
   artVersion: boolean;
+  /** Why the system cannot send it yet (a title or link with a field, a video header...). */
+  unsupported: string | null;
 }
 
 export const waSendTextSchema = z.object({
   text: z.string().trim().min(1, 'Escreva a mensagem.').max(4096, 'Até 4096 caracteres.'),
 });
 export type WaSendText = z.infer<typeof waSendTextSchema>;
+
+// --- a file of the deal, sent in the conversation ---------------------------------------
+
+/** Meta's limits, in decimal megabytes so a file at the edge is never refused for a rounding. */
+export const WA_SEND_LIMITS = {
+  image: 5_000_000,
+  video: 16_000_000,
+  audio: 16_000_000,
+  document: 100_000_000,
+} as const;
+export type WaSendKind = keyof typeof WA_SEND_LIMITS;
+
+/** Text under a photo, a video or a document; an audio goes without. */
+export const WA_CAPTION_MAX = 1024;
+
+const WA_SEND_TYPES: Record<Exclude<WaSendKind, 'document'>, readonly string[]> = {
+  image: ['image/jpeg', 'image/png'],
+  video: ['video/mp4', 'video/3gpp'],
+  audio: ['audio/aac', 'audio/amr', 'audio/mpeg', 'audio/mp4', 'audio/ogg'],
+};
+
+/** Names browsers give that Meta knows by another one. */
+const WA_TYPE_ALIASES: Record<string, string> = { 'audio/x-m4a': 'audio/mp4' };
+
+/**
+ * How a file of the deal goes on WhatsApp: a JPG or PNG up to 5 MB as a photo, an MP4 or 3GP up
+ * to 16 MB as a video, an audio of Meta's types up to 16 MB as an audio; anything else, or over
+ * its limit, as a document up to 100 MB. `type` is what Meta is told the file is. Null: too big
+ * even as a document. The composer asks before the upload; the API asks again before it sends.
+ */
+export function waSendKindOf(file: {
+  mimeType: string;
+  byteSize: number;
+}): { kind: WaSendKind; type: string } | null {
+  const declared = file.mimeType.split(';')[0]!.trim().toLowerCase();
+  const type = WA_TYPE_ALIASES[declared] ?? declared;
+  for (const kind of ['image', 'video', 'audio'] as const)
+    if (WA_SEND_TYPES[kind].includes(type) && file.byteSize <= WA_SEND_LIMITS[kind])
+      return { kind, type };
+  return file.byteSize <= WA_SEND_LIMITS.document
+    ? { kind: 'document', type: type || 'application/octet-stream' }
+    : null;
+}
+
+export const waSendMediaSchema = z.object({
+  /** One of the deal's own files (it went up to the deal's Arquivos first). */
+  fileId: z.uuid(),
+  caption: z
+    .string()
+    .trim()
+    .max(WA_CAPTION_MAX, `Legenda de até ${WA_CAPTION_MAX} caracteres.`)
+    .optional(),
+});
+export type WaSendMedia = z.infer<typeof waSendMediaSchema>;
 
 /**
  * The forms a Brazilian mobile takes on WhatsApp: Meta's `wa_id` may lack the
@@ -210,7 +304,88 @@ export interface WaConversationItem {
   attendance: SofiaState;
   /** The deal's owner, when there is a deal. */
   ownerName: string | null;
+  /** Who answers it (WaAttendance): the one assigned, else the deal's or the number's owner. */
+  holderId: string | null;
+  holderName: string | null;
+  /** The department queue it waits in, when nobody holds it. */
+  queue: string | null;
+  /** The work number the chat is on; null on the official number. */
+  number: WaChatNumber | null;
+  /** With a search: the latest message whose text has it, cut around the term. */
+  match?: { text: string; at: string } | null;
 }
+
+/**
+ * A company work number a chat is on (docs/whatsapp/central.md): the person's phone, mirrored by
+ * coexistence. Its chats are never Sofia's; free text only inside 24 h of the person's last
+ * message on that number, and its own templates come in phase 2.
+ */
+export interface WaChatNumber {
+  id: string;
+  label: string | null;
+  /** 55 + DDD + number, or as Meta shows it. */
+  phone: string | null;
+  ownerName: string | null;
+}
+
+/** The Central's tabs (Eric, 26/10): one at a time, with the selects below. */
+export const WA_INBOX_FILTERS = [
+  'all',
+  'unread',
+  'unanswered',
+  'mine',
+  'unassigned',
+  'human',
+  'sofia',
+] as const;
+export type WaInboxFilter = (typeof WA_INBOX_FILTERS)[number];
+
+export const WA_INBOX_FILTER_LABELS: Record<WaInboxFilter, string> = {
+  all: 'Todas',
+  unread: 'Não lidas',
+  unanswered: 'Sem resposta',
+  mine: 'Minhas',
+  unassigned: 'Sem responsável',
+  human: 'Pessoa',
+  sofia: 'Sofia',
+};
+
+/** A page of the Central's list. */
+export const WA_INBOX_PAGE = 50;
+
+const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+/** `GET /whatsapp/conversations`: everything the list can narrow by, all optional. */
+export const waInboxQuerySchema = z.object({
+  filter: z.enum(WA_INBOX_FILTERS).optional(),
+  /** Older form of "Sem resposta". */
+  unanswered: z.enum(['1', '0']).optional(),
+  q: z.string().trim().max(80).optional(),
+  /** `official` or a work number's id. */
+  number: z.union([z.literal('official'), z.uuid()]).optional(),
+  /** The department (SectorSlug): the queue it waits in, else its work number's. */
+  sector: z.string().trim().max(60).optional(),
+  /** Who has the conversation (a SofiaState). */
+  state: z.string().trim().max(30).optional(),
+  /** The last message's day, from and to (inclusive, São Paulo days). */
+  from: day.optional(),
+  to: day.optional(),
+  /** The cursor `next` of the previous page. */
+  before: z.string().max(80).optional(),
+});
+export type WaInboxQuery = z.infer<typeof waInboxQuerySchema>;
+
+export interface WaInboxPage {
+  conversations: WaConversationItem[];
+  /** Pass as `before` for the next page; null on the last one. */
+  next: string | null;
+}
+
+/** Starting a chat on a work number: the deal (in the reader's scope) and which of its phones. */
+export const waNumberStartSchema = z.object({
+  leadId: z.uuid(),
+  phone: z.string().trim().max(30),
+});
 
 /** "Nova conversa": a deal (or a contact's deal) in the reader's scope to write to. */
 export interface WaNewTarget {

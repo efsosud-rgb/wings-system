@@ -31,6 +31,7 @@ export const LEAD_SOURCES = [
   'site_form',
   'csv_import',
   'whatsapp',
+  'google_places',
 ] as const;
 export type LeadSource = (typeof LEAD_SOURCES)[number];
 
@@ -45,6 +46,7 @@ export const LEAD_SOURCE_LABELS: Record<LeadSource, string> = {
   site_form: 'Formulário do site',
   csv_import: 'Planilha importada',
   whatsapp: 'WhatsApp (Sofia)',
+  google_places: 'Prospecção Google Maps',
 };
 
 /**
@@ -340,14 +342,29 @@ export function isTrackingCode(value: string): boolean {
   return TRACKING_CODE_RE.test(value);
 }
 
+/** `(K7M2QX)` or `(K7M2QX ABC234)`: the code, and the form's ref, in brackets (`siteLinkText`). */
+const BRACKETED_CODES = /\(\s*#?([A-Za-z2-9]{6})(?:\s+([A-Za-z2-9]{6}))?\s*\)/g;
+
+/** The last bracketed code in a message, with the ref after it when there is one. */
+function bracketedCodesOf(message: string): { code: string; ref: string | null } | null {
+  for (const match of [...message.matchAll(BRACKETED_CODES)].reverse()) {
+    const code = match[1]?.toUpperCase() ?? '';
+    const ref = match[2]?.toUpperCase() ?? '';
+    if (isTrackingCode(code)) return { code, ref: isTrackingCode(ref) ? ref : null };
+  }
+  return null;
+}
+
 /**
- * The code an inbound WhatsApp message starts with, or null. A leading `#`
- * and surrounding spaces are ignored; anything after the first word is the
- * person's own text.
+ * The code an inbound WhatsApp message carries, or null: its first word (a
+ * leading `#` and surrounding spaces are ignored; the rest is the person's own
+ * text), else the last code in brackets, where the Wings site's sentence puts
+ * it (`siteLinkText`).
  */
 export function trackingCodeOf(message: string | null | undefined): string | null {
   const first = (message ?? '').trim().replace(/^#/, '').split(/\s+/)[0]?.toUpperCase() ?? '';
-  return isTrackingCode(first) ? first : null;
+  if (isTrackingCode(first)) return first;
+  return bracketedCodesOf(message ?? '')?.code ?? null;
 }
 
 /**
@@ -358,6 +375,16 @@ export function trackingCodeOf(message: string | null | undefined): string | nul
 export function trackedLinkText(code: string, brand?: string | null, ref?: string | null): string {
   const start = ref ? `${code} ${ref}` : code;
   return brand ? `${start} Olá! Quero saber sobre a franquia ${brand}.` : start;
+}
+
+/**
+ * What the Wings site's link pre-fills: a sentence a person would send, with
+ * the code (and the form's ref) in brackets at the end. A bare code reads as
+ * junk and was not being sent (Eric, 22/10); `trackingCodeOf` and
+ * `trackingRefOf` read the brackets.
+ */
+export function siteLinkText(code: string, ref?: string | null): string {
+  return `Olá! Vim pelo site da Wings e quero saber como formatar a minha franquia. (${ref ? `${code} ${ref}` : code})`;
 }
 
 /**
@@ -380,11 +407,14 @@ export function generateFormRef(random: () => number = Math.random): string {
 
 /**
  * The form reference an inbound message carries: the word right after the tracking code, when the
- * message starts with one. The shape is only a hint; a ref counts when a recent lead holds it.
+ * message starts with one, else the one after the code in brackets (`siteLinkText`). The shape is
+ * only a hint; a ref counts when a recent lead holds it.
  */
 export function trackingRefOf(message: string | null | undefined): string | null {
   const words = (message ?? '').trim().replace(/^#/, '').split(/\s+/);
-  if (!isTrackingCode(words[0]?.toUpperCase() ?? '')) return null;
+  if (!isTrackingCode(words[0]?.toUpperCase() ?? '')) {
+    return bracketedCodesOf(message ?? '')?.ref ?? null;
+  }
   const second = words[1]?.toUpperCase() ?? '';
   return isTrackingCode(second) ? second : null;
 }
@@ -401,7 +431,12 @@ export function whatsappLinkOf(
   brand?: string | null,
   ref?: string | null,
 ): string {
-  return `https://wa.me/${phone}?text=${encodeURIComponent(trackedLinkText(code, brand, ref))}`;
+  return wameLinkOf(phone, trackedLinkText(code, brand, ref));
+}
+
+/** `https://wa.me/<phone>?text=<text>`, the text encoded. */
+export function wameLinkOf(phone: string, text: string): string {
+  return `https://wa.me/${phone}?text=${encodeURIComponent(text)}`;
 }
 
 // --- source rules: landing page / Meta form -> client -------------------------
@@ -1085,6 +1120,8 @@ export interface Lead {
   /** The RD CRM deal, when the lead has one. */
   crm: LeadCrm | null;
   consent: LeadConsent;
+  /** The Google Maps place the lead came from (Prospecção); only the id is kept, the rest is read live. */
+  googlePlaceId: string | null;
   research: LeadResearch;
   /** The AI summary of the deal (ficha do cliente, Etapa 4); null until asked for. */
   aiSummary: LeadAiSummary | null;
@@ -1659,6 +1696,29 @@ export type SiteFormTrackingKey = (typeof SITE_FORM_TRACKING_KEYS)[number];
 export const SITE_FORM_CONSENT_TEXT =
   'Autorizo a Wings Company a entrar em contato comigo sobre a franquia, por telefone, WhatsApp e e-mail.';
 
+/**
+ * "Faturamento mensal da empresa" on "Fale com a Wings" (Eric, 27/10/2026): the
+ * page sends the code; the lead keeps the option's text under the question.
+ */
+export const SITE_FORM_REVENUE_QUESTION = 'Faturamento mensal da empresa';
+export const SITE_FORM_REVENUE_VALUES = [
+  'ate-50k',
+  '50k-100k',
+  '100k-300k',
+  '300k-1mi',
+  'acima-1mi',
+  'nao-informar',
+] as const;
+export type SiteFormRevenue = (typeof SITE_FORM_REVENUE_VALUES)[number];
+export const SITE_FORM_REVENUE_OPTIONS: Record<SiteFormRevenue, string> = {
+  'ate-50k': 'Até R$ 50 mil',
+  '50k-100k': 'De R$ 50 mil a R$ 100 mil',
+  '100k-300k': 'De R$ 100 mil a R$ 300 mil',
+  '300k-1mi': 'De R$ 300 mil a R$ 1 milhão',
+  'acima-1mi': 'Acima de R$ 1 milhão',
+  'nao-informar': 'Prefiro não informar',
+};
+
 export const siteFormSubmitSchema = z.object({
   name: z.string().trim().min(2, 'Informe o nome').max(LEAD_NAME_MAX),
   /** The standard form (2026-10-07) asks no e-mail: the WhatsApp is the contact. An older page may still send one. */
@@ -1698,6 +1758,15 @@ export const siteFormSubmitSchema = z.object({
    * the form's answers as the option's text, never read as a contact field.
    */
   qualifierAnswer: z.string().trim().max(80).optional(),
+  /**
+   * The monthly revenue band (`SITE_FORM_REVENUE_VALUES`). Optional here so an
+   * older page or a cached one still sends; the page itself requires it.
+   */
+  monthlyRevenue: z
+    .enum(SITE_FORM_REVENUE_VALUES, {
+      error: `Escolha uma opção em "${SITE_FORM_REVENUE_QUESTION}".`,
+    })
+    .optional(),
 });
 export type SiteFormSubmitInput = z.infer<typeof siteFormSubmitSchema>;
 
@@ -1738,6 +1807,8 @@ export const SITE_EVENT_UTM_KEYS = [
   'utm_medium',
   'utm_campaign',
   'utm_content',
+  'utm_term',
+  'utm_id',
 ] as const;
 
 const siteEventUtm = z.string().trim().max(100).optional();
@@ -1755,6 +1826,8 @@ export const siteEventSchema = z.strictObject({
   utm_medium: siteEventUtm,
   utm_campaign: siteEventUtm,
   utm_content: siteEventUtm,
+  utm_term: siteEventUtm,
+  utm_id: siteEventUtm,
 });
 export type SiteEvent = z.infer<typeof siteEventSchema>;
 

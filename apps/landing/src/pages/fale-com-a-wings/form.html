@@ -1,6 +1,6 @@
 <form class="form" id="lead-form" novalidate aria-labelledby="form-title">
-  <h2 class="ft" id="form-title">Quero conversar com a Wings</h2>
-  <p class="sub">Só três respostas, em menos de um minuto. A Wings chama você no WhatsApp.</p>
+  <h2 class="ft" id="form-title">Peça seu diagnóstico gratuito</h2>
+  <p class="sub">Só quatro respostas, em menos de um minuto. A Wings chama você no WhatsApp.</p>
   <div class="field">
     <label for="f-nome">Nome completo</label
     ><input
@@ -36,6 +36,19 @@
       <option value="nao-sei">Ainda não sei</option>
     </select>
     <p class="err" id="e-int"></p>
+  </div>
+  <div class="field">
+    <label for="f-fat">Faturamento mensal da empresa</label>
+    <select id="f-fat" name="monthlyRevenue" required>
+      <option value="">Escolha uma opção</option>
+      <option value="ate-50k">Até R$ 50 mil</option>
+      <option value="50k-100k">De R$ 50 mil a R$ 100 mil</option>
+      <option value="100k-300k">De R$ 100 mil a R$ 300 mil</option>
+      <option value="300k-1mi">De R$ 300 mil a R$ 1 milhão</option>
+      <option value="acima-1mi">Acima de R$ 1 milhão</option>
+      <option value="nao-informar">Prefiro não informar</option>
+    </select>
+    <p class="err" id="e-fat"></p>
   </div>
   <details class="more" id="f-more">
     <summary>Quer adiantar? <span class="opt">(opcional)</span></summary>
@@ -119,16 +132,17 @@
     disabled
     aria-describedby="f-missing"
   >
-    <span>Enviar e falar com a Wings</span>
+    <span>Quero meu diagnóstico</span>
   </button>
   <p class="err send-err" id="f-error" aria-live="assertive"></p>
   <p class="missing" id="f-missing" aria-live="polite"></p>
 </form>
 <div class="form thanks" id="thanks" hidden>
-  <p class="eyebrow">Recebemos</p>
-  <p class="big">Obrigado! A Wings vai falar com você.</p>
+  <p class="eyebrow">Diagnóstico gratuito</p>
+  <p class="big">Recebemos.</p>
   <p>
-    Um consultor entra em contato pelo WhatsApp que você informou. Se preferir, chame a Wings agora.
+    Um consultor da Wings chama você no WhatsApp em até 1 hora útil. Se preferir, chame a Wings
+    agora.
   </p>
   <a class="btn btn-primary magnetic" href="#" data-wa><span>Chamar no WhatsApp</span></a>
 </div>

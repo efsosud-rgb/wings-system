@@ -15,7 +15,10 @@ import {
   normalizeBrazilianPhone,
   parseExpansionEntry,
   regionOfPhone,
+  siteLinkText,
   trackingCodeOf,
+  trackingRefOf,
+  wameLinkOf,
   whatsappLinkOf,
   trackedLinkText,
   type EnrichmentFacts,
@@ -83,6 +86,37 @@ describe('tracking codes', () => {
     expect(whatsappLinkOf('5521999470288', 'K7M2QX', 'Iguari')).toBe(
       `https://wa.me/5521999470288?text=${encodeURIComponent('K7M2QX Olá! Quero saber sobre a franquia Iguari.')}`,
     );
+  });
+});
+
+describe('the Wings site sentence', () => {
+  const sent = 'Olá! Vim pelo site da Wings e quero saber como formatar a minha franquia. (J9K8WF)';
+
+  it('says why the person writes, with the code in brackets at the end, and the ref after it', () => {
+    expect(siteLinkText('J9K8WF')).toBe(sent);
+    expect(siteLinkText('J9K8WF', 'ABC234')).toBe(
+      'Olá! Vim pelo site da Wings e quero saber como formatar a minha franquia. (J9K8WF ABC234)',
+    );
+    expect(wameLinkOf('5521999470288', siteLinkText('J9K8WF'))).toBe(
+      `https://wa.me/5521999470288?text=${encodeURIComponent(sent)}`,
+    );
+  });
+
+  it('the CRM still finds the code and the ref with text before them', () => {
+    expect(trackingCodeOf(sent)).toBe('J9K8WF');
+    expect(trackingRefOf(sent)).toBeNull();
+    expect(trackingCodeOf(siteLinkText('J9K8WF', 'ABC234'))).toBe('J9K8WF');
+    expect(trackingRefOf(siteLinkText('J9K8WF', 'ABC234'))).toBe('ABC234');
+    // The person edits around it, writes it in lower case, or adds a line after it.
+    expect(trackingCodeOf('Boa tarde, vim do site (j9k8wf) e queria um orçamento')).toBe('J9K8WF');
+    expect(trackingRefOf('Oi (J9K8WF abc234)\nobrigado')).toBe('ABC234');
+    // The old shape, code first, still wins.
+    expect(trackingCodeOf('K7M2QX ABC234 Olá! (J9K8WF)')).toBe('K7M2QX');
+    expect(trackingRefOf('K7M2QX ABC234 Olá! (J9K8WF)')).toBe('ABC234');
+    // Brackets with something that is not a code (I, O, 0, 1 are not in the alphabet).
+    expect(trackingCodeOf('Olá (BRASIL) tudo bem?')).toBeNull();
+    expect(trackingCodeOf('Olá (12345678)')).toBeNull();
+    expect(trackingRefOf('Olá, vim pelo site')).toBeNull();
   });
 });
 

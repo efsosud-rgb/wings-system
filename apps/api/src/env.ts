@@ -139,6 +139,13 @@ const schema = z.object({
     'must be a 5-field cron expression (digits, *, ranges, steps, lists)',
   ),
   /**
+   * Google Places API (New), for CRM Vendas → Prospecção (docs/crm/prospeccao.md).
+   * The key stays on the server: never in the web, an answer or a log (it goes
+   * in a header, never in a URL). Without it every route that calls Google
+   * answers 503 and the screen says the key is not configured.
+   */
+  GOOGLE_PLACES_API_KEY: optionalString,
+  /**
    * Google Analytics 4, read through the Data API. The property id is the
    * number in GA4 → Admin → Detalhes da propriedade (not the G-… measurement
    * id). Without it and GA4_REFRESH_TOKEN the site section says "não
@@ -537,6 +544,14 @@ const schema = z.object({
   WHATSAPP_APP_SECRET: optionalString,
   /** The system user's permanent token (whatsapp_business_messaging + whatsapp_business_management). Secret. */
   WHATSAPP_ACCESS_TOKEN: optionalString,
+  /**
+   * The Embedded Signup configuration of "Wings CRM Vendas" (Facebook Login for Business), for
+   * connecting the sellers' numbers (docs/whatsapp/conectar-numero.md). Not secret.
+   */
+  WHATSAPP_ES_CONFIG_ID: optionalString.refine(
+    (value) => value === undefined || /^\d+$/.test(value),
+    'must be digits',
+  ),
   /** Reads Lead Ads form answers (leads_retrieval). Falls back to META_WRITE_TOKEN, read-only use. */
   META_LEADS_ACCESS_TOKEN: optionalString,
   /** "false" turns off reading the forms every 5 minutes (the webhook, if set, still works). */

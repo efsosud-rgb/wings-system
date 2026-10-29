@@ -13,6 +13,9 @@ import net from 'node:net';
  * the check and the connection (DNS rebinding) is still refused. Redirects are
  * followed by hand, each hop checked the same way. Only the status line is
  * read; the body is dropped.
+ *
+ * `readPublicPage` is the same guard for a page whose body is read (a company's
+ * site, Prospecção): GET only, the body cut at a byte cap.
  */
 
 export type ProbeResult =
@@ -128,8 +131,9 @@ function allowed(url: URL): boolean {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
   if (url.username || url.password) return false;
   if (url.port && url.port !== '80' && url.port !== '443') return false;
-  // An address typed as an IP is checked like any resolved one.
-  const host = url.hostname.replace(/^\[|\]$/g, '');
+  // An address typed as an IP is checked like any resolved one. A final dot names the same host
+  // ("postgres."), so it is dropped first: a bare internal name never passes.
+  const host = url.hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '');
   if (net.isIP(host)) return isPublicAddress(host);
   return host.includes('.') && !host.endsWith('.local') && !host.endsWith('.internal');
 }
@@ -186,12 +190,128 @@ export const probePublicUrl: Probe = async (raw) => {
       if (answer.status >= 200 && answer.status < 400) return { kind: 'ok', status: answer.status };
       return { kind: 'http_error', status: answer.status };
     } catch (error) {
-      if (error instanceof Blocked) return { kind: 'blocked' };
-      if (error instanceof NotFound) return { kind: 'not_found' };
-      if (error instanceof Error && error.message === 'timeout') return { kind: 'timeout' };
-      if (Date.now() >= deadline) return { kind: 'timeout' };
-      return { kind: 'error' };
+      return failureOf(error, deadline);
     }
   }
   return { kind: 'error' };
 };
+
+function failureOf(error: unknown, deadline: number): Exclude<ProbeResult, { kind: 'ok' }> {
+  if (error instanceof Blocked) return { kind: 'blocked' };
+  if (error instanceof NotFound) return { kind: 'not_found' };
+  if (error instanceof Error && error.message === 'timeout') return { kind: 'timeout' };
+  if (Date.now() >= deadline) return { kind: 'timeout' };
+  return { kind: 'error' };
+}
+
+// --- reading a page -------------------------------------------------------------------
+
+export type PageResult =
+  | { kind: 'ok'; status: number; /** Where the redirects ended. */ url: string; body: string }
+  /** `permits` said no to a hop. */
+  | { kind: 'disallowed' }
+  | Exclude<ProbeResult, { kind: 'ok' }>;
+
+/** One GET, no redirect followed, the body read up to `maxBytes`; tests pass their own. */
+export type PageTransport = (
+  url: URL,
+  limits: { maxBytes: number; deadline: number; userAgent: string },
+) => Promise<{ status: number; location: string | null; body: string }>;
+
+const requestPage: PageTransport = (url, { maxBytes, deadline, userAgent }) =>
+  new Promise((resolve, reject) => {
+    const client = url.protocol === 'https:' ? https : http;
+    const request = client.request(
+      url,
+      {
+        method: 'GET',
+        lookup: guardedLookup as unknown as typeof dnsLookup,
+        headers: { 'user-agent': userAgent, accept: 'text/html,text/plain,*/*;q=0.5' },
+      },
+      (response) => {
+        const status = response.statusCode ?? 0;
+        const location =
+          typeof response.headers.location === 'string' ? response.headers.location : null;
+        const chunks: Buffer[] = [];
+        let size = 0;
+        const done = () => {
+          clearTimeout(timer);
+          resolve({ status, location, body: Buffer.concat(chunks).toString('utf8') });
+        };
+        if (status < 200 || status >= 300) {
+          response.destroy();
+          return done();
+        }
+        response.on('data', (chunk: Buffer) => {
+          chunks.push(chunk.subarray(0, maxBytes - size));
+          size += Math.min(chunk.length, maxBytes - size);
+          // Past the cap: stop reading and keep what arrived.
+          if (size >= maxBytes) {
+            response.destroy();
+            done();
+          }
+        });
+        response.on('end', done);
+        response.on('error', reject);
+      },
+    );
+    // The whole page, not just an idle socket, must fit in the time.
+    const timer = setTimeout(
+      () => {
+        request.destroy();
+        reject(new Error('timeout'));
+      },
+      Math.max(1, deadline - Date.now()),
+    );
+    request.on('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    request.end();
+  });
+
+/**
+ * GET a public page and read its body up to `maxBytes`, with the same guard as
+ * `probePublicUrl`: every hop (at most 4 redirects) checked before it is asked,
+ * and by `permits` too when given (robots.txt, for a reader that obeys it).
+ */
+export async function readPublicPage(
+  raw: string,
+  options: {
+    maxBytes: number;
+    timeoutMs: number;
+    userAgent: string;
+    transport?: PageTransport;
+    permits?: (url: URL) => Promise<boolean>;
+  },
+): Promise<PageResult> {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return { kind: 'error' };
+  }
+  const transport = options.transport ?? requestPage;
+  const deadline = Date.now() + options.timeoutMs;
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    if (!allowed(url)) return { kind: 'blocked' };
+    if (options.permits && !(await options.permits(url))) return { kind: 'disallowed' };
+    try {
+      const answer = await transport(url, {
+        maxBytes: options.maxBytes,
+        deadline,
+        userAgent: options.userAgent,
+      });
+      if (answer.status >= 300 && answer.status < 400 && answer.location) {
+        url = new URL(answer.location, url);
+        continue;
+      }
+      if (answer.status >= 200 && answer.status < 300)
+        return { kind: 'ok', status: answer.status, url: url.href, body: answer.body };
+      return { kind: 'http_error', status: answer.status };
+    } catch (error) {
+      return failureOf(error, deadline);
+    }
+  }
+  return { kind: 'error' };
+}

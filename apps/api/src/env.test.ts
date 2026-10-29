@@ -45,6 +45,12 @@ describe('env', () => {
     );
   });
 
+  it('reads the Google Places key, and an empty one as not configured', () => {
+    expect(loadEnv({ ...valid, GOOGLE_PLACES_API_KEY: 'k' }).GOOGLE_PLACES_API_KEY).toBe('k');
+    expect(loadEnv({ ...valid, GOOGLE_PLACES_API_KEY: '' }).GOOGLE_PLACES_API_KEY).toBeUndefined();
+    expect(loadEnv(valid).GOOGLE_PLACES_API_KEY).toBeUndefined();
+  });
+
   it('refuses reusing one key for both CPF purposes', () => {
     const key = randomBytes(32).toString('base64');
     expect(() => loadEnv({ ...valid, CPF_ENCRYPTION_KEY: key, CPF_INDEX_KEY: key })).toThrow(

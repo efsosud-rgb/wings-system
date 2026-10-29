@@ -8,6 +8,7 @@ import {
   type OutgoingPayload,
   type WhatsAppConfig,
 } from './graph.js';
+import { notifyInboxChanged } from './inbox-signal.js';
 
 /**
  * The one way a message leaves: written first (`pending`), sent to Meta once
@@ -17,20 +18,25 @@ import {
  */
 
 export type Contact = typeof waContacts.$inferSelect;
+
+/** Meta's id inside a work number: two of our numbers talking would otherwise share one wamid. */
+export const numberWamid = (numberId: string, wamid: string) => `${numberId}:${wamid}`;
 export type MessageRow = typeof waMessages.$inferSelect;
 
 export interface Delivery {
   contact: Contact;
   conversationId: string;
   leadId: string | null;
-  author: 'employee' | 'sofia';
+  author: 'employee' | 'sofia' | 'system';
   employeeId: string | null;
   kind: WaMessageKind;
-  /** What the screen shows (the body, a filled template). */
-  shown: string;
+  /** What the screen shows (the body, a filled template, a file's caption or none). */
+  shown: string | null;
   content: Record<string, unknown>;
   payload: OutgoingPayload;
   at: Date;
+  /** Sent through a work number: Meta's id is kept under it (`numberWamid`). */
+  numberId?: string | null;
 }
 
 export interface Delivered {
@@ -72,7 +78,14 @@ export async function deliverWhatsApp(
     .update(waMessages)
     .set(
       result.ok
-        ? { wamid: result.data.wamid, status: 'sent', sentAt: at, waTimestamp: at }
+        ? {
+            wamid: delivery.numberId
+              ? numberWamid(delivery.numberId, result.data.wamid)
+              : result.data.wamid,
+            status: 'sent',
+            sentAt: at,
+            waTimestamp: at,
+          }
         : result.unknown
           ? { errorTitle: UNKNOWN_OUTCOME, waTimestamp: at }
           : {
@@ -94,6 +107,7 @@ export async function deliverWhatsApp(
     .update(waConversations)
     .set({ lastMessageAt: at })
     .where(eq(waConversations.id, delivery.conversationId));
+  notifyInboxChanged();
   return {
     row: saved!,
     outcome: result.ok ? 'sent' : result.unknown ? 'unknown' : 'failed',

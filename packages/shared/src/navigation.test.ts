@@ -208,11 +208,12 @@ describe('menu by access level', () => {
     });
   });
 
-  it('adds Leads das Campanhas inside the CRM for a Vendedor Formatação, and nothing more', () => {
+  it('adds Prospecção and Leads das Campanhas inside the CRM for a Vendedor Formatação, and nothing more', () => {
     expect(menuOf('vendedor_formatacao')).toEqual({
       inicio: ['/inicio'],
       'crm-vendas': [
         '/crm-vendas/negociacoes',
+        '/crm-vendas/prospeccao',
         '/crm-vendas/whatsapp',
         '/crm-vendas/contatos',
         '/crm-vendas/tarefas',
@@ -309,6 +310,7 @@ describe('menu by access level', () => {
     ]);
     expect(menuOf('gerente_comercial')['crm-vendas']).toEqual([
       '/crm-vendas/negociacoes',
+      '/crm-vendas/prospeccao',
       '/crm-vendas/whatsapp',
       '/crm-vendas/contatos',
       '/crm-vendas/empresas',
@@ -325,6 +327,13 @@ describe('menu by access level', () => {
       Object.values(menuOf(role)).some((paths) => paths.includes('/crm-vendas/sofia')),
     );
     expect(withSofia.sort()).toEqual(['admin_master', 'diretoria', 'gerente_comercial']);
+  });
+
+  it('keeps the WhatsApp templates screen to Admin Master and Diretoria', () => {
+    const withTemplates = ROLE_KEYS.filter((role) =>
+      Object.values(menuOf(role)).some((paths) => paths.includes('/crm-vendas/whatsapp/modelos')),
+    );
+    expect(withTemplates.sort()).toEqual(['admin_master', 'diretoria']);
   });
 
   it('shows "em breve" placeholders only to Admin Master and Diretoria', () => {

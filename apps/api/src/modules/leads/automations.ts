@@ -24,6 +24,7 @@ import {
   leadTasks,
   leads,
 } from '../../db/schema/index.js';
+import { contactBlock, noteContactBlocked } from './contact-block.js';
 import { changeLead, createTask, nextInRotation } from './crm.js';
 import {
   testTransport,
@@ -376,8 +377,16 @@ export async function sendTemplateToLead(
   | { ok: true; outboxId: string; mode: CrmMailMode }
   | {
       ok: false;
-      reason: 'template_gone' | 'template_off' | 'no_email' | 'brand_hidden' | 'send_failed';
+      reason:
+        | 'template_gone'
+        | 'template_off'
+        | 'no_email'
+        | 'brand_hidden'
+        | 'contact_blocked'
+        | 'send_failed';
       outboxId?: string;
+      /** Why a "não me contate" stopped it, for the screen. */
+      message?: string;
     }
 > {
   const { lead } = input;
@@ -389,6 +398,16 @@ export async function sendTemplateToLead(
   // Expansão with a brand: no e-mail from a Wings address reaches the lead (the brand rule).
   if (leadHidesWings(lead)) return { ok: false, reason: 'brand_hidden' };
   if (!lead.email) return { ok: false, reason: 'no_email' };
+  const block = await contactBlock(db, 'email', { leadId: lead.id });
+  if (block.blocked) {
+    await noteContactBlocked(
+      db,
+      lead.id,
+      { channel: 'email', path: input.runId ? 'automacao' : 'email_manual', origin: block.origin },
+      input.sentBy,
+    );
+    return { ok: false, reason: 'contact_blocked', message: block.reason ?? undefined };
+  }
   const { subject, body } = await renderForLead(db, lead, template);
   let status: 'recorded' | 'sent' | 'failed' =
     input.transport.mode === 'test' ? 'recorded' : 'sent';

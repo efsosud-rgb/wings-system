@@ -27,6 +27,13 @@ export const PERMISSIONS = {
   'companies.read': 'Ver a tela de Empresas do CRM, com o cadastro de cada empresa',
   'landing_pages.read': 'Ver as landing pages de cada cliente e funil no CRM',
   'crm.manage': 'Configurar as etapas do funil e a distribuição de leads',
+  'prospecting.use':
+    'Prospectar empresas no Google Maps: buscar, reservar, descartar, enriquecer e criar o lead',
+  'prospecting.configure':
+    'Editar os pesos da nota ICP, a lista de exclusão e os prazos (reserva e dados do site) da prospecção',
+  'prospecting.quota': 'Mudar a cota de chamadas ao Google da prospecção',
+  'prospecting.export':
+    'Exportar em planilha os prospects (só os dados da Wings, nunca os do Google; registrado em auditoria)',
   'sofia.manage': 'Ligar e desligar a Sofia e editar as perguntas e mensagens dela',
   'sofia.read': 'Ver a tela da Sofia com todas as conversas do WhatsApp',
   'campaign_leads.read': 'Ver os leads das campanhas de tráfego pago (RD CRM)',
@@ -42,7 +49,10 @@ export const PERMISSIONS = {
   'ads.budget_caps.manage': 'Editar o teto interno de orçamento de tráfego pago por conta',
   'ads.reconcile.manual':
     'Forçar agora a reconciliação de uma conta de tráfego pago com a plataforma',
-  'integrations.manage': 'Conectar e desconectar integrações do sistema (Kairogen)',
+  'integrations.manage':
+    'Conectar e desconectar integrações do sistema (Kairogen, os números do WhatsApp dos vendedores)',
+  'whatsapp_templates.manage':
+    'Criar e editar os modelos de mensagem do WhatsApp e mandar para a aprovação da Meta',
   'marketing.media.read': 'Ver a biblioteca de mídia do marketing',
   'marketing.media.generate': 'Gerar imagens e vídeos gastando créditos',
   'marketing.media.edit': 'Editar vídeos no Studio, exportar e salvar no Drive',
@@ -115,6 +125,12 @@ const CRM_FULL_SCREENS: RolePermissions = {
 };
 
 /**
+ * Prospecção (Eric, 24/10): the Formatação seller works their own prospects; the managers see every
+ * one and pass a prospect to another seller. Not for the Expansão seller.
+ */
+const PROSPECTING_ALL: RolePermissions = { 'prospecting.use': 'all' };
+
+/**
  * The Agenda, for every level (Eric, 14/10: "Todos podem ter acesso a esse módulo"). `own`: each
  * person reads and writes only through their own Google connection; Google's sharing decides the
  * Wings Company calendar (docs/agenda.md).
@@ -155,6 +171,10 @@ const SELLER_STAFF: RolePermissions = { 'timeclock.read': 'own', ...AGENDA_READ 
 export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   admin_master: {
     ...AGENDA,
+    ...PROSPECTING_ALL,
+    'prospecting.configure': 'all',
+    'prospecting.quota': 'all',
+    'prospecting.export': 'all',
     'meetings.approve_send': 'all',
     ...CRM_FULL_SCREENS,
     ...DRIVE_ALL,
@@ -175,6 +195,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'employees.assign_roles': 'all',
     'timeclock.read': 'all',
     'timeclock.adjust': 'all',
+    'whatsapp_templates.manage': 'all',
     'leads.read': 'all',
     'leads.write': 'all',
     'leads.assign': 'all',
@@ -207,6 +228,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   },
   diretoria: {
     ...AGENDA,
+    ...PROSPECTING_ALL,
     'meetings.approve_send': 'all',
     ...CRM_FULL_SCREENS,
     ...DRIVE_ALL,
@@ -221,6 +243,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     // Access levels only: Diretoria still cannot edit the rest of a record.
     'employees.assign_roles': 'all',
     'timeclock.read': 'all',
+    'whatsapp_templates.manage': 'all',
     'leads.read': 'all',
     'leads.assign': 'all',
     // Eric, 07/10: Diretoria reads, sends and calls on any lead's WhatsApp, though it does not edit the deal.
@@ -253,6 +276,9 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   },
   gerente_comercial: {
     ...AGENDA,
+    ...PROSPECTING_ALL,
+    'prospecting.configure': 'all',
+    'prospecting.export': 'all',
     'meetings.approve_send': 'all',
     ...CRM_FULL_SCREENS,
     ...DRIVE_STAFF,
@@ -315,6 +341,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'leads.whatsapp': 'own',
     'campaign_leads.read': 'own',
     'campaign_leads.reveal': 'own',
+    'prospecting.use': 'own',
   },
 };
 

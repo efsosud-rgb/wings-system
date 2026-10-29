@@ -17,10 +17,13 @@ let harness: TestDatabase;
 let db: Database;
 let app: FastifyInstance;
 let outbox: Mail[] = [];
+/** When set, the SMTP server refuses the message, quoting the address as real servers do. */
+let smtpRefuses = false;
 
 const testMailer: Mailer = {
   enabled: true,
   send: async (mail) => {
+    if (smtpRefuses) throw new Error(`550 5.1.1 <${mail.to}>: Recipient address rejected`);
     outbox.push(mail);
   },
 };
@@ -49,6 +52,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   outbox = [];
+  smtpRefuses = false;
 });
 
 function tokenFromLastMail(): string {
@@ -76,6 +80,14 @@ async function sessionCookieFor(role: 'admin_master' | 'vendedor_expansao') {
   return { actor, cookie: { [SESSION_COOKIE]: cookie.value } };
 }
 
+async function managerCookie(role: 'marketing', sector: 'marketing') {
+  const actor = await createEmployee(db, { role, sector, isSectorManager: true });
+  const res = await loginAs(actor.email, actor.password);
+  const cookie = res.cookies.find((c) => c.name === SESSION_COOKIE);
+  if (!cookie) throw new Error('login failed in test setup');
+  return { [SESSION_COOKIE]: cookie.value };
+}
+
 describe('POST /auth/invite', () => {
   it('requires the employees.create permission', async () => {
     const target = await createEmployee(db, { password: null });
@@ -89,6 +101,44 @@ describe('POST /auth/invite', () => {
     });
     expect(res.statusCode).toBe(403);
     expect(outbox).toHaveLength(0);
+  });
+
+  it('does not let a sector manager invite someone outside their sector', async () => {
+    const outsider = await createEmployee(db, { role: 'vendedor_expansao', sector: 'comercial' });
+    const cookies = await managerCookie('marketing', 'marketing');
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/invite',
+      cookies,
+      payload: { employeeId: outsider.id },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(outbox).toHaveLength(0);
+    const tokens = await db
+      .select()
+      .from(credentialTokens)
+      .where(eq(credentialTokens.employeeId, outsider.id));
+    expect(tokens).toHaveLength(0);
+  });
+
+  it('lets a sector manager invite inside their own sector', async () => {
+    const insider = await createEmployee(db, {
+      role: 'marketing',
+      sector: 'marketing',
+      password: null,
+    });
+    const cookies = await managerCookie('marketing', 'marketing');
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/invite',
+      cookies,
+      payload: { employeeId: insider.id },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(outbox).toHaveLength(1);
+    expect(outbox[0]?.to).toBe(insider.email);
   });
 
   it('requires authentication', async () => {
@@ -193,6 +243,24 @@ describe('POST /auth/forgot-password', () => {
     expect(known.json()).toEqual(unknown.json());
     expect(outbox).toHaveLength(1);
     expect(outbox[0]?.to).toBe(employee.email);
+  });
+
+  it('with the SMTP refusing, a real address still gets the same 202 and none of its words (audit A10)', async () => {
+    const employee = await createEmployee(db);
+    smtpRefuses = true;
+    const ask = (email: string) =>
+      app.inject({ method: 'POST', url: '/auth/forgot-password', payload: { email } });
+    const unknown = await ask('ninguem@wingscompany.com.br');
+    const known = await ask(employee.email);
+    expect(known.statusCode).toBe(202);
+    expect(known.json()).toEqual(unknown.json());
+    expect(known.body).not.toContain('550');
+    const [audit] = await db
+      .select({ metadata: auditLog.metadata })
+      .from(auditLog)
+      .where(eq(auditLog.targetEmployeeId, employee.id));
+    expect(audit?.metadata).toEqual({ delivered: false, reason: 'smtp_failed', error: 'Error' });
+    expect(JSON.stringify(audit)).not.toContain(employee.email);
   });
 
   it('sends nothing for a deactivated employee', async () => {

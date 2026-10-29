@@ -17,11 +17,14 @@ import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
 import {
   crmMeetings,
+  crmStages,
   crmNotifications,
   leadEvents,
   leadNotes,
   leadTasks,
   leads,
+  waContacts,
+  waConversations,
 } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
@@ -584,6 +587,65 @@ describe("a new or imported lead never reaches into somebody else's", () => {
     expect(refused.statusCode).toBe(201);
     const row = await db.query.leads.findFirst({ where: eq(leads.phone, '5521977770009') });
     expect(row?.ownerEmployeeId).toBe(sellerA.id);
+  });
+
+  it("a seller's import adds no stage to the funnel (crm.manage), and says why (audit A5)", async () => {
+    const stage = 'Etapa que o vendedor inventou';
+    const run = await call(sellerA, 'POST', '/leads/import', {
+      csv: `Nome;Telefone;Etapa\nLinha;21977770011;${stage}`,
+      mapping: { Nome: 'name', Telefone: 'phone', Etapa: 'stage' },
+      pipeline: 'expansao',
+    });
+    expect(run.statusCode).toBe(201);
+    const report = run.json<{ created: number; errors: { message: string }[] }>();
+    expect(report.created).toBe(1);
+    expect(report.errors.map((e) => e.message).join()).toContain('não existe neste funil');
+    expect(
+      await db.query.crmStages.findFirst({ where: eq(crmStages.name, stage) }),
+    ).toBeUndefined();
+  });
+});
+
+describe('a number someone is attending, with no deal yet (audit WA-03)', () => {
+  // A conversation Sofia (or the team) is attending, as GET /whatsapp/targets reports "busy".
+  async function inAttendance(phone: string, attendance = 'sofia') {
+    const [contact] = await db
+      .insert(waContacts)
+      .values({ phone })
+      .returning({ id: waContacts.id });
+    await db.insert(waConversations).values({ contactId: contact!.id, attendance });
+  }
+  const create = (session: Session, phone: string) =>
+    call(session, 'POST', '/leads', { name: 'Negociação Inventada', phone, pipeline: 'expansao' });
+
+  it('a seller cannot open it as their own deal; the conversation stays out of it', async () => {
+    await inAttendance('5521966660001');
+    const res = await create(sellerA, '21 96666-0001');
+    expect(res.statusCode).toBe(409);
+    expect(res.json<{ error: string }>().error).toBe('number_in_attendance');
+    expect(
+      await db.query.leads.findFirst({ where: eq(leads.phone, '5521966660001') }),
+    ).toBeUndefined();
+  });
+
+  it('nor through an import; whoever may assign deals still opens it', async () => {
+    await inAttendance('5521966660002');
+    const run = await call(sellerA, 'POST', '/leads/import', {
+      csv: 'Nome;Telefone\nLinha;21966660002',
+      mapping: { Nome: 'name', Telefone: 'phone' },
+      pipeline: 'expansao',
+    });
+    const report = run.json<{ created: number; errors: { message: string }[] }>();
+    expect({ created: report.created, message: report.errors[0]?.message }).toEqual({
+      created: 0,
+      message: 'Esta pessoa já está em atendimento (Sofia ou equipe) e ainda não tem negociação.',
+    });
+    expect((await create(admin, '21 96666-0002')).statusCode).toBe(201);
+  });
+
+  it("a closed conversation is nobody's: the seller opens the deal", async () => {
+    await inAttendance('5521966660003', 'closed');
+    expect((await create(sellerA, '21 96666-0003')).statusCode).toBe(201);
   });
 });
 

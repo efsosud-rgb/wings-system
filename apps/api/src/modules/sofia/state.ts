@@ -1,9 +1,14 @@
-import { WINGS_CLIENT_ID, type SofiaState } from '@wings/shared';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import {
+  WINGS_CLIENT_ID,
+  type SofiaFact,
+  type SofiaSegment,
+  type SofiaSettings,
+  type SofiaState,
+} from '@wings/shared';
+import { eq, sql } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
-import type { Database } from '../../db/client.js';
 import type { Executor } from '../leads/crm.js';
-import { waConversations } from '../../db/schema/index.js';
+import { waConversationEvents, waConversations } from '../../db/schema/index.js';
 
 /**
  * Who has a WhatsApp conversation (docs/whatsapp/sofia.md), and the rule for
@@ -11,9 +16,10 @@ import { waConversations } from '../../db/schema/index.js';
  * - a deal of that phone that is open and has an owner: straight to the owner;
  * - otherwise a new (or closed) conversation is Sofia's, when she is on, and
  *   waits for a person when she is off;
- * - a conversation a person already holds stays with that person.
- * A person writing in the conversation takes it (`takeConversation`); the
- * seller can give it back to Sofia.
+ * - a conversation a person already holds stays with that person, and one
+ *   assigned to a person goes back to that person (whatsapp/attendance.ts).
+ * A person writing in the conversation takes it (`holdForSend`); the seller
+ * can give it back to Sofia, and anyone can pause her in it.
  */
 
 export type ConversationRow = typeof waConversations.$inferSelect;
@@ -35,6 +41,8 @@ export interface SofiaFacts {
   channel?: string | null;
   /** The conversation is tied to the lead a site form made: its answers are already in `answers`. */
   formKnown?: boolean;
+  /** Her questions Meta refused (or never answered) in a row: two, and a person takes over. */
+  lostAsks?: number;
   /** The person's first name from the form, for the greeting (never sent to the AI). */
   formName?: string | null;
   /** The page the form was sent from, without query. */
@@ -48,44 +56,30 @@ export function factsOf(row: { sofiaFacts: unknown }): SofiaFacts {
   return { ...raw, answers: { ...(raw.answers ?? {}) }, step: raw.step ?? null };
 }
 
+/** What Sofia found out, in the order of the funnel's questions, then the rest. */
+export function factListOf(
+  row: { sofiaFacts: unknown },
+  settings: SofiaSettings,
+  segment: SofiaSegment | null,
+): SofiaFact[] {
+  const facts = factsOf(row);
+  const questions = segment === 'expansao' ? settings.expansao : settings.formatacao;
+  const listed: SofiaFact[] = questions
+    .filter((q) => facts.answers[q.key] !== undefined)
+    .map((q) => ({ key: q.key, label: q.label, answer: facts.answers[q.key]! }));
+  const others: SofiaFact[] = Object.entries(facts.answers)
+    .filter(([key]) => !questions.some((q) => q.key === key))
+    .map(([key, answer]) => ({ key, label: key, answer }));
+  if (facts.brandText)
+    others.push({ key: 'marca', label: 'Marca citada', answer: facts.brandText });
+  return [...listed, ...others];
+}
+
 /** `reason` of a conversation a person gave back to Sofia. */
 export const SOFIA_GIVEN_BACK = 'devolvida';
 
 /** Quiet time before Sofia answers, so a burst of short messages gets one reply. */
 export const SOFIA_DEBOUNCE_MS = 4_000;
-
-const PERSON_TAKES: SofiaState[] = ['sofia', 'waiting_seller', 'waiting_human', 'closed'];
-
-/** A person wrote in the conversation: it is theirs now, and Sofia stops. */
-export async function takeConversation(db: Database, conversationId: string, at: Date) {
-  await db
-    .update(waConversations)
-    .set({ attendance: 'with_person', stateChangedAt: at, reason: null, sofiaDueAt: null })
-    .where(
-      and(
-        eq(waConversations.id, conversationId),
-        inArray(waConversations.attendance, PERSON_TAKES),
-      ),
-    );
-}
-
-export async function setAttendance(
-  db: Database,
-  conversationId: string,
-  state: SofiaState,
-  at: Date,
-  reason: string | null = null,
-) {
-  await db
-    .update(waConversations)
-    .set({
-      attendance: state,
-      stateChangedAt: at,
-      reason,
-      ...(state === 'sofia' ? {} : { sofiaDueAt: null }),
-    })
-    .where(eq(waConversations.id, conversationId));
-}
 
 export interface InboundRoute {
   conversation: ConversationRow;
@@ -109,8 +103,16 @@ export interface InboundRoute {
 
 /** Decides who answers an incoming message, and wakes Sofia when it is hers. */
 export async function routeInbound(db: Executor, input: InboundRoute): Promise<SofiaState> {
-  const { conversation, now } = input;
+  const { now } = input;
+  // The row as it is now, locked until the message is stored: a person taking it meanwhile
+  // waits, and an older read never hands Sofia a conversation a person just took.
+  const [conversation = input.conversation] = await db
+    .select()
+    .from(waConversations)
+    .where(eq(waConversations.id, input.conversation.id))
+    .for('update');
   const current = conversation.attendance as SofiaState;
+  const sofiaOn = input.sofiaOn && !conversation.sofiaPaused;
   const fresh = input.created || current === 'closed';
   let next: SofiaState = current;
   let reason = conversation.reason;
@@ -121,9 +123,14 @@ export async function routeInbound(db: Executor, input: InboundRoute): Promise<S
     patch.sofiaReadUntil = sql`(select max(m.created_at) from wa_messages m where m.conversation_id = ${conversation.id} and m.id <> ${input.messageId})`;
   };
 
-  if (input.lead?.ownerEmployeeId) {
-    // The deal has its seller: the message is the seller's. Sofia keeps it
-    // only when the seller gave it back; a deal that got its owner while she
+  // A conversation that ended starts over (Eric, 07/10): whoever had it then does not keep it.
+  if (fresh && conversation.assigneeEmployeeId) {
+    patch.assigneeEmployeeId = null;
+    patch.queue = null;
+  }
+  if (input.lead?.ownerEmployeeId || (!fresh && conversation.assigneeEmployeeId)) {
+    // The deal has its seller (or a person was given the conversation): the message is theirs.
+    // Sofia keeps it only when it was given back to her; a deal that got its owner while she
     // talked goes to the owner.
     if (
       fresh ||
@@ -135,8 +142,8 @@ export async function routeInbound(db: Executor, input: InboundRoute): Promise<S
   } else if (fresh && input.quietOptOut) {
     // Someone who said SAIR and then sent a sticker: nobody writes back.
   } else if (fresh) {
-    next = input.sofiaOn ? 'sofia' : 'waiting_human';
-    reason = input.sofiaOn ? null : 'sofia_desligada';
+    next = sofiaOn ? 'sofia' : 'waiting_human';
+    reason = sofiaOn ? null : input.sofiaOn ? 'sofia_pausada' : 'sofia_desligada';
     // A new conversation (or one that ended) starts over: the answers stay
     // (no need to ask again), the place in the script does not.
     const old = factsOf(conversation);
@@ -173,7 +180,7 @@ export async function routeInbound(db: Executor, input: InboundRoute): Promise<S
     patch.brandClientId = brand;
   } else if (current === 'waiting_human' && conversation.reason === 'sofia_desligada') {
     // It waited only because Sofia was off; she is on now.
-    if (input.sofiaOn) {
+    if (sofiaOn) {
       next = 'sofia';
       reason = null;
       readFromHere();
@@ -197,27 +204,32 @@ export async function routeInbound(db: Executor, input: InboundRoute): Promise<S
     patch.attendance = next;
     patch.stateChangedAt = now;
     patch.reason = reason;
+    // A change of hands: an action on the version a screen saw before it is refused.
+    patch.version = sql`${waConversations.version} + 1`;
   }
   if (Object.keys(patch).length > 0)
     await db.update(waConversations).set(patch).where(eq(waConversations.id, conversation.id));
+  if (current === 'closed' && next !== 'closed')
+    await db.insert(waConversationEvents).values({
+      conversationId: conversation.id,
+      kind: 'reopened',
+      reason: 'mensagem_da_pessoa',
+      createdAt: now,
+    });
   return next;
 }
 
-/** The seller gives the conversation back: Sofia answers the person's next message. */
-export async function giveBackToSofia(db: Database, conversationId: string, at: Date) {
-  await db
-    .update(waConversations)
-    .set({
-      attendance: 'sofia',
-      stateChangedAt: at,
-      // Marks a give-back: Sofia keeps a deal's conversation only after one.
-      reason: SOFIA_GIVEN_BACK,
-      sofiaMisses: 0,
-      sofiaFacts: sql`jsonb_set(coalesce(${waConversations.sofiaFacts}, '{}'::jsonb), '{step}', 'null'::jsonb)`,
-      // Messages the person sent while a person held it are not hers to answer
-      // (by the database's own clock, like the messages').
-      sofiaReadUntil: sql`(select max(m.created_at) from wa_messages m where m.conversation_id = ${conversationId})`,
-      sofiaDueAt: null,
-    })
-    .where(eq(waConversations.id, conversationId));
-}
+/**
+ * The change that gives a conversation back to Sofia (and lifts a pause): she answers the
+ * person's next message, never one a person already had (by the database's clock).
+ */
+export const givenBack = (conversationId: string): PgUpdateSetSource<typeof waConversations> => ({
+  attendance: 'sofia',
+  // Marks a give-back: Sofia keeps a deal's conversation only after one.
+  reason: SOFIA_GIVEN_BACK,
+  sofiaPaused: false,
+  sofiaMisses: 0,
+  sofiaFacts: sql`jsonb_set(coalesce(${waConversations.sofiaFacts}, '{}'::jsonb), '{step}', 'null'::jsonb)`,
+  sofiaReadUntil: sql`(select max(m.created_at) from wa_messages m where m.conversation_id = ${conversationId})`,
+  sofiaDueAt: null,
+});

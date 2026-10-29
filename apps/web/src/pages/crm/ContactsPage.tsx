@@ -428,6 +428,15 @@ function ContactRecord({ id }: { id: string }) {
                 ) : (
                   '—'
                 )}
+                {/* The Central's "Nova conversa", already on this phone's deals. */}
+                {contact.phone && hasPermission(session.data, 'leads.whatsapp') && (
+                  <Link
+                    className="crm-btn is-small"
+                    to={`/crm-vendas/whatsapp?nova=${encodeURIComponent(contact.phone)}`}
+                  >
+                    WhatsApp
+                  </Link>
+                )}
               </dd>
               <dt>E-mail</dt>
               <dd>

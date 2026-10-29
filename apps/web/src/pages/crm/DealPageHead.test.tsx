@@ -91,6 +91,7 @@ const lead = (over: Omit<Partial<Lead>, 'work'> & { work?: Partial<Lead['work']>
   contacts: [],
   crm: null,
   consent: { legalBasis: null, consentedAt: null, source: null, text: null },
+  googlePlaceId: null,
   fields: { instagram: null, website: null, companyName: null, cnpj: null },
   checks: {},
   aiSummary: null,
@@ -154,6 +155,13 @@ const firstContact = (over: Partial<LeadTask> = {}): LeadTask => ({
   ...over,
 });
 
+// The "Não me contate" strip has its own tests (ContactOptOutStrip.test.tsx).
+vi.mock('../../api/contact-opt-outs.js', () => ({
+  useContactOptOuts: () => ({ data: undefined, isError: false }),
+  useRecordContactOptOut: () => ({ mutate: vi.fn(), isPending: false }),
+  useRevokeContactOptOut: () => ({ mutate: vi.fn(), isPending: false }),
+}));
+
 vi.mock('../../api/auth.js', async () => {
   const actual = await vi.importActual<typeof import('../../api/auth.js')>('../../api/auth.js');
   return {
@@ -197,6 +205,9 @@ vi.mock('../../api/leads.js', () => ({
   useAddNote: () => mutation(),
   useCreateTask: () => mutation(),
 }));
+
+// "Reunião agora" reads the person's Google connection in the Reunião section.
+vi.mock('../../api/google.js', () => ({ useGoogleStatus: idle }));
 
 vi.mock('../../api/crm.js', () => ({
   useUpdateDeal: () => mutation(dealMutate),
@@ -395,7 +406,7 @@ describe('the action bar', () => {
     const panel = within(screen.getByRole('dialog', { name: 'Ligação' }));
     expect(panel.getByRole('button', { name: 'Copiar número' })).toBeTruthy();
     expect(panel.getByRole('button', { name: 'Registrar ligação' })).toBeTruthy();
-    expect(document.querySelector('a[href^="tel:"]')).toBeNull();
+    expect(panel.getByRole('link', { name: 'Ligar pelo celular' })).toBeTruthy();
     fireEvent.click(panel.getByRole('button', { name: 'Fechar' }));
     expect(screen.queryByRole('dialog', { name: 'Ligação' })).toBeNull();
     fireEvent.click(within(bar).getByRole('button', { name: 'Tarefa' }));

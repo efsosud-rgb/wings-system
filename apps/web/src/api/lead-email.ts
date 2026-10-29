@@ -8,6 +8,8 @@ export interface LeadEmails {
   to: string | null;
   /** Expansão with a brand: no e-mail leaves (the lead must not see the Wings). */
   hidden: boolean;
+  /** A "não me contate" by e-mail: why nothing can be sent, or null. */
+  blocked: string | null;
   mode: 'test' | 'smtp' | 'gmail';
   /** The address a message sent now by this person leaves from; null in test mode or with no sender. */
   from: string | null;

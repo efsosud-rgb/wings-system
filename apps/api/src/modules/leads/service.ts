@@ -63,6 +63,7 @@ import { announceNewLead } from './crm-alerts.js';
 import {
   attachLeadContact,
   contactOnForeignDeal,
+  numberInAttendance,
   contactsOfLead,
   findOrCreateCompany,
 } from './contacts.js';
@@ -527,6 +528,9 @@ export class ForeignLeadError extends Error {
   }
 }
 
+/** The phone is in a conversation Sofia or the team is attending, with no deal yet (WA-03). */
+export class NumberInAttendanceError extends ForeignLeadError {}
+
 export async function upsertLead(db: Database, given: IncomingLead): Promise<UpsertResult> {
   const incoming = withFormFields(given);
   const result = await upsertLeadTx(db, incoming);
@@ -611,6 +615,14 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
       (await contactOnForeignDeal(tx, { phone, email }, incoming.mergeOnlyIfOwnedBy))
     )
       throw new ForeignLeadError();
+    // Nor a number someone is attending with no deal yet: the screen's "busy", decided here (WA-03).
+    if (
+      incoming.mergeOnlyIfOwnedBy !== undefined &&
+      !existing &&
+      phone &&
+      (await numberInAttendance(tx, phone))
+    )
+      throw new NumberInAttendanceError();
 
     // The person is known, but their lead is closed or nobody works it: the
     // arrival opens a deal of its own (same contact, the two tied on the
@@ -949,6 +961,7 @@ export function toLead(
       source: row.consentSource,
       text: row.consentText,
     },
+    googlePlaceId: row.googlePlaceId,
     research: {
       state: row.enrichmentState as Lead['research']['state'],
       summary: row.enrichmentSummary,
