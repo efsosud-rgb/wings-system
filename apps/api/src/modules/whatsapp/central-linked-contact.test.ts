@@ -132,6 +132,8 @@ describe("a number in attendance does not join a seller's deal as a contact (WA-
       payload: { phone },
     });
     expect(edited.statusCode).toBe(409);
+    // The refusal is this rule's, not "phone already taken" by the contact made above.
+    expect(edited.json<{ error: string }>().error).toBe('number_in_attendance');
     // Saving the contact with its own phone again is not a change.
     const resaved = await app.inject({
       method: 'PATCH',
@@ -154,6 +156,17 @@ describe("a number in attendance does not join a seller's deal as a contact (WA-
       contact: { name: 'Contato Fictício', phone },
     });
     expect(linked.statusCode).toBe(201);
+    // The seller saves that contact with its phone unchanged: not a new number, so not refused.
+    const contactId = (await db.query.crmContacts.findFirst({
+      where: eq(crmContacts.phone, phone),
+    }))!.id;
+    const resaved = await app.inject({
+      method: 'PATCH',
+      url: `/crm/contacts/${contactId}`,
+      cookies: owner.cookies,
+      payload: { phone, jobTitle: 'Sócio' },
+    });
+    expect(resaved.statusCode).toBe(200);
     await writes(phone, 'wamid.WA03-2');
     expect(await leadOf(chat)).toBe(leadId);
   });
