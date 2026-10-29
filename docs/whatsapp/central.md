@@ -161,7 +161,7 @@ sozinho**: quem mandou confere a conversa antes de mandar de novo.
 
 Nenhum número foi conectado e nada foi chamado na Meta. Os formatos de `smb_message_echoes`, das conversas de
 `history` (incluindo `history_context.status` e quem é o remetente), de `smb_app_state_sync` e do erro 2593109
-seguem a referência da Meta, com dados inventados nos testes (`central.test.ts`). A mídia do histórico (ids que a
+seguem a referência da Meta, com dados inventados nos testes (`central-fixtures.ts`). A mídia do histórico (ids que a
 Meta manda à parte, só dos últimos 14 dias) não é lida. O log `whatsapp webhook` mostra o formato de cada corpo
 para conferir no primeiro número conectado.
 
