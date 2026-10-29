@@ -28,6 +28,7 @@ import {
   useTranscription,
 } from '../../api/studio.js';
 import { errorText } from '../drive/DriveParts.js';
+import { isStaleChunkError, reloadOnceForNewBuild } from '../stale-build.js';
 import {
   applyTimelineOps,
   snapshotClips,
@@ -255,6 +256,8 @@ export function useStudioSession(): StudioSession {
       setStatus('ready');
     })().catch((error: unknown) => {
       if (cancelled) return;
+      // The core's chunk is from the previous build: reload once, the notice stays if it cannot.
+      if (isStaleChunkError(error)) reloadOnceForNewBuild();
       setStatus('failed');
       setFailure(
         error instanceof Error && error.name === 'WebGLUnsupportedError'

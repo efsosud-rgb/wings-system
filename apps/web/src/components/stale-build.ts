@@ -6,6 +6,10 @@
  */
 const LOCK = 'wings:reloaded-for-new-build';
 
+/** What a screen says when it could not load a file of the previous build. */
+export const STALE_BUILD_NOTICE =
+  'Esta tela foi atualizada. Recarregue a página (F5) para abrir a versão mais nova; o que você já salvou continua salvo.';
+
 export function isStaleChunkError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error ?? '');
   return (
