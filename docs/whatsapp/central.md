@@ -88,6 +88,17 @@ liberar o app (Tech Provider e App Review, ainda não pedidos).
   ("Conversa do WhatsApp ligada a esta negociação") e `whatsapp.conversation_linked` na auditoria (ids).
 - O número oficial segue como antes (a negociação aberta mais recente do telefone), porque mudar isso empurraria
   mensagens para a triagem e criaria negociações duplicadas.
+- **Número em atendimento (WA-03):** um número que a Sofia ou a equipe atende sem negociação (o "ocupado" de
+  `GET /whatsapp/targets`) não vira negociação de vendedor, nem pela criação (`POST /leads`, importação) nem como
+  **contato** de uma negociação dele: `POST /leads/:id/contacts` (contato digitado ou já existente) e a troca de
+  telefone em `PATCH /crm/contacts/:id` respondem 409 `number_in_attendance` para quem tem escopo próprio, antes
+  de gravar qualquer coisa, porque a próxima mensagem levaria a conversa para essa negociação. Quem distribui
+  negociações (escopo total) continua vinculando, e a conversa vai para a negociação na próxima mensagem. Conversa
+  encerrada não é de ninguém. Vínculos feitos antes desta trava não foram desfeitos (`DUVIDAS.md` da execução wa03).
+- **Não me contate no contato vinculado:** a conversa que entrou numa negociação pelo telefone de um contato é
+  conferida pelo telefone da própria conversa e pelo id da negociação (`contactBlock`): um registro no telefone do
+  contato, ou na negociação, recusa o modelo com 409 `contact_blocked` e grava `lead.contact_blocked`
+  (`central-linked-contact.test.ts`).
 
 ### Acesso
 
