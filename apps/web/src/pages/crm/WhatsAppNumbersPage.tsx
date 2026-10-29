@@ -13,7 +13,7 @@ import {
   type WaSignupConfig,
   type WaSyncState,
 } from '@wings/shared';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ApiError } from '../../api/client.js';
 import {
   useConnectWhatsAppNumber,
@@ -27,11 +27,8 @@ import {
   type ConnectAnswer,
 } from '../../api/whatsapp-numbers.js';
 import { LoadFailure } from '../../components/LoadFailure.js';
-import {
-  loadFacebookSdk,
-  runEmbeddedSignup,
-  type SignupOutcome,
-} from '../../lib/embedded-signup.js';
+import { connectFailureText, signupFailureText } from '../../lib/connect-errors.js';
+import { loadFacebookSdk, runEmbeddedSignup } from '../../lib/embedded-signup.js';
 import { formatDate, formatDateTime, formatPhone } from './format.js';
 
 /**
@@ -51,15 +48,6 @@ const SYNC_LABELS: Record<WaSyncState, string> = {
 };
 
 const syncLabel = (state: WaSyncState | null) => (state ? SYNC_LABELS[state] : 'Não pedido');
-
-const SIGNUP_FAILURES: Record<Exclude<SignupOutcome, { ok: true }>['reason'], string> = {
-  cancelled: 'A janela da Meta foi fechada antes do fim. Nada foi conectado.',
-  meta_error: 'A Meta mostrou um erro na janela. Nada foi conectado.',
-  other_flow:
-    'A Meta terminou outro tipo de conexão. Na janela, escolha usar o número que já está no app WhatsApp Business.',
-  no_account: 'A Meta não disse qual conta do WhatsApp foi compartilhada. Conecte de novo.',
-  no_code: 'A Meta não devolveu o código da conexão. Conecte de novo.',
-};
 
 const DAY_MS = 86_400_000;
 
@@ -92,12 +80,42 @@ function canRetry(number: WaNumber, now = Date.now()) {
   );
 }
 
+/** The next step after Meta's window finished and the API saved the number. */
 function stepsText({ steps }: ConnectAnswer): string {
   if (steps.webhooks === 'failed')
-    return 'Número salvo, mas a Meta recusou mandar os avisos dele para o sistema. Contatos e histórico não foram pedidos: use "Tentar de novo" (os avisos a qualquer hora; contatos e histórico só nas 24 horas).';
+    return 'Mas a Meta recusou mandar os avisos dele para o sistema, então contatos e histórico não foram pedidos. Próximo passo: use "Tentar de novo" na linha do número (os avisos a qualquer hora; contatos e histórico só nas 24 horas).';
   if (steps.contacts === 'requested' && steps.history === 'requested')
-    return 'Número conectado. Contatos e histórico pedidos à Meta: deixe o WhatsApp Business aberto no celular até o histórico chegar a 100%.';
-  return `Número conectado. Contatos: ${stepLabel(steps.contacts)}. Histórico: ${stepLabel(steps.history)}.`;
+    return 'Sincronização do histórico em andamento: deixe o WhatsApp Business aberto no celular até a coluna Histórico chegar a 100%.';
+  return `Contatos: ${stepLabel(steps.contacts)}. Histórico: ${stepLabel(steps.history)}. Próximo passo: se algum não foi pedido, use "Tentar de novo" nas primeiras 24 horas.`;
+}
+
+interface Connected {
+  label: string;
+  next: string;
+  ok: boolean;
+}
+
+/** "Número conectado", where it is seen: at the top of the page and focused, until closed. */
+function ConnectedNotice({ notice, onClose }: { notice: Connected; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => ref.current?.focus(), [notice]);
+  return (
+    <div
+      ref={ref}
+      tabIndex={-1}
+      role="status"
+      className={`crm-panel ${notice.ok ? 'crm-ok' : 'crm-error'}`}
+      style={{ display: 'flex', gap: 12, alignItems: 'start' }}
+    >
+      <div style={{ flex: 1 }}>
+        <b>Número conectado: {notice.label}</b>
+        <div>{notice.next}</div>
+      </div>
+      <button type="button" className="crm-btn is-small" onClick={onClose}>
+        Fechar
+      </button>
+    </div>
+  );
 }
 
 const stepLabel = (step: ConnectAnswer['steps']['contacts']) =>
@@ -116,6 +134,7 @@ export function WhatsAppNumbersPage() {
   const numbers = view.data?.numbers ?? [];
   const signup = view.data?.signup ?? null;
   const [editing, setEditing] = useState<WaNumber | null>(null);
+  const [connected, setConnected] = useState<Connected | null>(null);
   const [sdk, setSdk] = useState<Sdk | 'failed' | null>(null);
   useEffect(() => {
     if (!signup) return;
@@ -142,6 +161,7 @@ export function WhatsAppNumbersPage() {
         </span>
       </header>
       <div className="crm-page-scroll crm-stack" style={{ alignContent: 'start' }}>
+        {connected && <ConnectedNotice notice={connected} onClose={() => setConnected(null)} />}
         {view.isLoading && <p className="crm-sub">Carregando…</p>}
         {view.isError && (
           <LoadFailure what="os números" error={view.error} onRetry={() => void view.refetch()} />
@@ -184,6 +204,7 @@ export function WhatsAppNumbersPage() {
                 signup={signup}
                 sdk={sdk === 'failed' ? null : sdk}
                 onEdit={setEditing}
+                onConnected={setConnected}
               />
             )}
           </section>
@@ -400,11 +421,13 @@ function NumbersTable({
   signup,
   sdk,
   onEdit,
+  onConnected,
 }: {
   numbers: WaNumber[];
   signup: WaSignupConfig | null;
   sdk: Sdk | null;
   onEdit: (number: WaNumber) => void;
+  onConnected: (notice: Connected) => void;
 }) {
   return (
     <div style={{ overflowX: 'auto' }}>
@@ -433,6 +456,7 @@ function NumbersTable({
               signup={signup}
               sdk={sdk}
               onEdit={() => onEdit(number)}
+              onConnected={onConnected}
             />
           ))}
         </tbody>
@@ -448,11 +472,13 @@ function NumberRow({
   signup,
   sdk,
   onEdit,
+  onConnected,
 }: {
   number: WaNumber;
   signup: WaSignupConfig | null;
   sdk: Sdk | null;
   onEdit: () => void;
+  onConnected: (notice: Connected) => void;
 }) {
   const retry = useRetryWhatsAppNumber();
   const renew = useRenewWhatsAppNumber();
@@ -477,7 +503,7 @@ function NumberRow({
     void runEmbeddedSignup(sdk, signup.configId).then(async (outcome) => {
       if (!outcome.ok) {
         setPhase('idle');
-        setResult({ ok: false, text: SIGNUP_FAILURES[outcome.reason] });
+        setResult({ ok: false, text: signupFailureText(outcome) });
         return;
       }
       setPhase('saving');
@@ -488,9 +514,14 @@ function NumberRow({
           ...(outcome.phoneNumberId ? { phoneNumberId: outcome.phoneNumberId } : {}),
           numberId: number.id,
         });
-        setResult({ ok: answer.steps.webhooks === 'ok', text: stepsText(answer) });
+        // The list refreshes on its own (the hook invalidates it): no reload.
+        onConnected({
+          label: answer.number.label ?? phoneOf(answer.number),
+          next: stepsText(answer),
+          ok: answer.steps.webhooks === 'ok',
+        });
       } catch (error) {
-        setResult({ ok: false, text: reasonOf(error) });
+        setResult({ ok: false, text: connectFailureText(error) });
       } finally {
         setPhase('idle');
       }
