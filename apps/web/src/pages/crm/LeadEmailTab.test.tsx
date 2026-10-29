@@ -9,6 +9,7 @@ const state = {
   emails: {
     to: 'paula@exemplo.com.br',
     hidden: false,
+    blocked: null,
     mode: 'gmail',
     from: 'daniele@wingscompany.com.br',
     templates: [{ id: 't1', name: 'Boas-vindas' }],
@@ -36,6 +37,19 @@ describe('LeadEmailTab', () => {
     expect(screen.getByText('daniele@wingscompany.com.br')).toBeTruthy();
     expect(screen.getByText(/a sua conta Google/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Enviar e-mail' })).toBeTruthy();
+  });
+
+  it('a "não me contate" by e-mail disables the send and says why', () => {
+    const before = state.emails;
+    state.emails = {
+      ...before,
+      blocked: 'Pediu para não ser contatado (e-mail; registrado no CRM).',
+    };
+    render(<LeadEmailTab leadId="l1" />);
+    const button = screen.getByRole<HTMLButtonElement>('button', { name: 'Enviar e-mail' });
+    expect(button.disabled).toBe(true);
+    expect(screen.getByText(/Não me contate: Pediu para não ser contatado \(e-mail/)).toBeTruthy();
+    state.emails = before;
   });
 
   it('shows the brand rule instead of the form on an Expansão deal with a brand', () => {

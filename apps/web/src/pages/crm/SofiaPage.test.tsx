@@ -132,6 +132,8 @@ const thread: DealWhatsApp = {
   phone: '5521999990001',
   window: { open: true, expiresAt: new Date(Date.now() + 3_600_000).toISOString() },
   optedOut: false,
+  contactBlock: { blocked: false, reason: null, origin: null },
+  callBlock: { blocked: false, reason: null, origin: null },
   callPermission: { status: null, expiresAt: null, requestedAt: null },
   attendance: 'waiting_seller',
   speaksFor: 'Casa do Churros',

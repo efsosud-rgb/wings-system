@@ -1,4 +1,8 @@
 import {
+  CONTACT_CHANNEL_LABELS,
+  CONTACT_OPT_OUT_ORIGIN_LABELS,
+  normalizeContactKey,
+  type ContactOptOutEntry,
   excludedName,
   grantedScope,
   icpScore,
@@ -42,10 +46,11 @@ import {
   roles,
 } from '../../db/schema/index.js';
 import type { AgentLlm } from '../agent/llm.js';
+import { optOutsAmong, recordContactOptOut } from '../leads/contact-block.js';
 import { leadVisibleTo } from '../leads/access.js';
 import { addNote, changeLead, createTask, type Executor } from '../leads/crm.js';
 import { ForeignLeadError, upsertLead } from '../leads/service.js';
-import type { PlacesClient } from './places-client.js';
+import { PlacesError, type PlacesClient } from './places-client.js';
 
 /**
  * Prospecção (docs/crm/prospeccao.md). Google's answer is joined in memory with
@@ -215,15 +220,20 @@ export interface GoogleAnswer {
   results: PlaceResult[];
   repeated: number;
   nextPageToken: string | null;
+  /** The places of a sweep that failed, with Google's error: the others' results still go. */
+  failed: { place: string; error: PlacesError }[];
 }
 
-/** One call per place (the calls were reserved before); a place twice in a sweep counts once. */
+/**
+ * One call per place (the calls were reserved before); a place twice in a sweep counts once.
+ * A place that fails leaves the others standing; only when every place failed does it throw.
+ */
 export async function searchGoogle(
   places: PlacesClient,
   input: ProspectSearchInput,
 ): Promise<GoogleAnswer> {
   const sweep = input.places.length > 1;
-  const pages = await Promise.all(
+  const settled = await Promise.allSettled(
     input.places.map((place) =>
       places.searchText({
         textQuery: `${input.segment} em ${place}`,
@@ -232,6 +242,16 @@ export async function searchGoogle(
       }),
     ),
   );
+  const pages: Awaited<ReturnType<PlacesClient['searchText']>>[] = [];
+  const failed: GoogleAnswer['failed'] = [];
+  for (const [index, outcome] of settled.entries()) {
+    if (outcome.status === 'fulfilled') pages.push(outcome.value);
+    // Anything but Google's own error is a bug here: it fails the whole search, as before.
+    else if (outcome.reason instanceof PlacesError)
+      failed.push({ place: input.places[index]!, error: outcome.reason });
+    else throw outcome.reason;
+  }
+  if (pages.length === 0) throw failed[0]!.error;
   const seen = new Set<string>();
   const results: PlaceResult[] = [];
   let repeated = 0;
@@ -244,7 +264,7 @@ export async function searchGoogle(
   }
   const nextPageToken =
     !sweep && input.page < PROSPECT_SEARCH_MAX_PAGES ? (pages[0]?.nextPageToken ?? null) : null;
-  return { results, repeated, nextPageToken };
+  return { results, repeated, nextPageToken, failed };
 }
 
 function failsFilters(place: PlaceResult, input: ProspectSearchInput): boolean {
@@ -271,6 +291,14 @@ function statusTag(status: ProspectStatus, ownerName: string | null, mine: boole
       return { kind: 'status', text: PROSPECT_STATUS_LABELS[status] };
   }
 }
+
+/** "não me contate: WhatsApp, desde 29/10/2026 (pediu para sair pelo WhatsApp)". */
+const optOutTagText = (entry: ContactOptOutEntry) =>
+  `não me contate: ${CONTACT_CHANNEL_LABELS[entry.channel]}, desde ${new Date(
+    entry.since,
+  ).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' })} (${
+    CONTACT_OPT_OUT_ORIGIN_LABELS[entry.origin]
+  })`;
 
 /** Clients' phones and WhatsApps, normalised, among these (stored in any format). */
 async function clientPhonesAmong(db: Database, phones: string[]): Promise<Set<string>> {
@@ -365,6 +393,7 @@ export async function assembleSearch(
         .orderBy(asc(leads.createdAt))
     : [];
   const clientPhones = await clientPhonesAmong(db, phones);
+  const optOuts = await optOutsAmong(db, { placeIds: ids, phones });
   const leadDomains = await leadDomainsAmong(
     db,
     kept.map((place) => siteDomain(place.website)).filter((d): d is string => d !== null),
@@ -410,6 +439,11 @@ export async function assembleSearch(
       tags.push(
         statusTag(prospect.row.status as ProspectStatus, prospect.ownerName, Boolean(mine)),
       );
+    const optOut =
+      optOuts.get(`place_id:${place.placeId}`) ??
+      (phone ? optOuts.get(`phone:${normalizeContactKey('phone', phone)}`) : undefined);
+    if (optOut && prospect?.row.status !== 'nao_contatar')
+      tags.push({ kind: 'do_not_contact', text: optOutTagText(optOut) });
     if (multiUnit) tags.push({ kind: 'multi_unit', text: 'várias unidades' });
     if (phone && (phoneCount.get(phone) ?? 0) > 1)
       tags.push({ kind: 'possible_duplicate', text: 'possível duplicidade: mesmo telefone' });
@@ -628,6 +662,17 @@ export async function updateProspect(
     .where(sameHolding(row))
     .returning();
   if (!updated) return CHANGED;
+  // "Pediu para não ser contatado" goes to the one register, every channel, by place_id and by
+  // the linked lead's keys (docs/crm/nao-me-contate.md).
+  if (updated.status === 'nao_contatar' && row.status !== 'nao_contatar')
+    await recordContactOptOut(db, {
+      placeId: updated.placeId,
+      leadId: updated.leadId,
+      channels: ['all'],
+      origin: 'prospeccao',
+      reason: updated.reason ?? 'Pediu para não ser contatado (prospecção)',
+      createdBy: actor.employeeId,
+    });
   return { ok: true, prospect: await prospectView(db, updated, actor), previous: row };
 }
 
@@ -643,7 +688,7 @@ export async function prospectingOwners(db: Database): Promise<{ id: string; nam
 
 // --- Criar lead ---------------------------------------------------------------------------
 
-const dayOf = (at: Date) =>
+export const dayOf = (at: Date) =>
   new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo' }).format(at);
 
 /**

@@ -21,6 +21,7 @@ import type { Database } from '../../db/client.js';
 import {
   auditLog,
   clients,
+  contactOptOuts,
   crmContacts,
   employees,
   leadContacts,
@@ -543,6 +544,32 @@ describe('reserve, discard, scope', () => {
       status: 'contatado',
       notes: 'Ligar de novo na terça',
     });
+  });
+
+  it('"pediu para não ser contatado" goes to the one register, every channel, once', async () => {
+    const placeId = 'ChIJoptOutTestPlace01';
+    const reserved = (
+      await call(sellerA, 'POST', '/prospecting/prospects', { placeId, action: 'reserve' })
+    ).json<Prospect>();
+    for (let i = 0; i < 2; i++)
+      expect(
+        (
+          await call(sellerA, 'PATCH', `/prospecting/prospects/${reserved.id}`, {
+            status: 'nao_contatar',
+            reason: 'Pediu na ligação',
+          })
+        ).statusCode,
+      ).toBe(200);
+    const rows = await db.select().from(contactOptOuts).where(eq(contactOptOuts.keyValue, placeId));
+    expect(rows).toMatchObject([
+      {
+        channel: 'all',
+        keyKind: 'place_id',
+        origin: 'prospeccao',
+        reason: 'Pediu na ligação',
+        createdBy: sellerA.id,
+      },
+    ]);
   });
 
   it('a change from a row read before another seller took the place over lands on nothing', async () => {

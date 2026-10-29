@@ -30,6 +30,7 @@ import {
   type WaTemplate,
   type WaCallPermission,
   type WaCallPermissionLive,
+  CONTACT_BLOCKED_ERROR,
 } from '@wings/shared';
 import { and, asc, eq, isNotNull, isNull, max, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
@@ -61,6 +62,7 @@ import { leadInScope, leadOwnerFilter } from '../leads/access.js';
 import { dealRouteAccessOf } from '../drive/access.js';
 import { DriveError, fileFor } from '../drive/service.js';
 import { leadHasFile } from '../leads/files.js';
+import { contactBlock, noteContactBlocked } from '../leads/contact-block.js';
 import { storageOf } from '../../lib/storage/index.js';
 import {
   ART_MEDIA_GONE_CODES,
@@ -884,6 +886,29 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       artFileId: string | null;
     } | null = null;
     let sentFile: { fileId: string; kind: WaSendKind; mediaId: string } | null = null;
+    // A template or a call request starts a contact: the "não me contate" register decides first,
+    // on any of our numbers. A typed reply or a file inside the window keeps the rules above.
+    if (outgoing.kind === 'template' || outgoing.kind === 'call_permission') {
+      const block = await contactBlock(db, 'whatsapp', {
+        leadId: target.leadId,
+        phone: target.contact?.phone ?? target.phone,
+      });
+      // A SAIR keeps its own answer below (`opted_out`), as before.
+      if (block.blocked && !(outgoing.kind === 'template' && target.contact?.optOutAt)) {
+        if (target.leadId)
+          await noteContactBlocked(
+            db,
+            target.leadId,
+            {
+              channel: 'whatsapp',
+              path: outgoing.kind === 'template' ? 'modelo' : 'pedido_ligacao',
+              origin: block.origin,
+            },
+            request.session.actor.employeeId,
+          );
+        return reply.status(409).send({ error: CONTACT_BLOCKED_ERROR, message: block.reason });
+      }
+    }
     if (outgoing.kind === 'call_permission') {
       if (!window.open)
         return reply.status(409).send({

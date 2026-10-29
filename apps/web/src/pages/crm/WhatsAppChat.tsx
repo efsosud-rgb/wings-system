@@ -141,6 +141,7 @@ export function WhatsAppChat({
             key={composerKey}
             thread={thread}
             optedOut={data.optedOut}
+            blocked={data.contactBlock.blocked ? data.contactBlock.reason : null}
             windowOpen={data.window.open}
             numberId={data.number?.id ?? null}
             onText={() => setUseTemplate(false)}
@@ -765,12 +766,15 @@ export function sendModeText(preview: WaTemplatePreview): string {
 function TemplateCompose({
   thread,
   optedOut,
+  blocked,
   windowOpen,
   numberId,
   onText,
 }: {
   thread: WhatsAppThread;
   optedOut: boolean;
+  /** Why a "não me contate" stops templates here, or null. */
+  blocked: string | null;
   windowOpen: boolean;
   /** A work number's chat: that number's own templates (its WABA), never the official ones. */
   numberId: string | null;
@@ -831,11 +835,12 @@ function TemplateCompose({
     preview.fields.every((field, i) => (field.locked ? true : (values[i] ?? '').trim() !== ''));
   const syncError = refresh.data?.syncError ?? templates.data?.syncError;
 
-  if (optedOut)
+  if (optedOut || blocked)
     return (
       <div className="crm-wa-compose is-template">
         <p className="crm-wa-off">
-          Modelos pausados: a pessoa pediu para não receber mensagens.{' '}
+          Modelos pausados:{' '}
+          {optedOut ? 'a pessoa pediu para não receber mensagens.' : `não me contate. ${blocked}`}{' '}
           {windowOpen ? 'Responda escrevendo livre.' : 'Só dá para responder quando ela escrever.'}
         </p>
         {windowOpen && (

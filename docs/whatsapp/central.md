@@ -2,7 +2,7 @@
 
 Pedido do Eric de 26/10/2026: uma central onde a equipe atende pelo número oficial e pelos números de trabalho da
 empresa, no caminho **oficial da Meta** (Cloud API com coexistência, Embedded Signup do app Wings CRM Vendas). Nada
-de Z-API nem de biblioteca não oficial. Migração **0099** (`0099_wa_central`). Conexão de número: veja também
+de Z-API nem de biblioteca não oficial. Migração **0100** (`0100_wa_central`). Conexão de número: veja também
 `conectar-numero.md`; regras do número oficial: `cloud-api.md`; modelos: `modelos.md`.
 
 **Nesta fase ninguém conecta número.** O Admin Master cadastra e confere; a conexão fica pronta para quando a Meta
@@ -101,7 +101,7 @@ liberar o app (Tech Provider e App Review, ainda não pedidos).
   `numberId`), `whatsapp.conversation_linked`, `whatsapp.webhook_event_retried`.
 - `wa_numbers`, `wa_conversations`, `wa_messages` e `wa_webhook_events` continuam sem GRANT ao `wings_ro`.
 
-### Atendimento: quem responde cada conversa (fase 2, migração 0100)
+### Atendimento: quem responde cada conversa (fase 2, migração 0101)
 
 - **Quem está com a conversa:** a pessoa atribuída; sem atribuição, o dono da negociação (número oficial) ou o dono
   do número (número de trabalho); sem nenhum, ela espera na **fila** do departamento (`wa_conversations.queue`) ou
@@ -206,9 +206,9 @@ Por número:
 
 ## Ordem de merge e rollback
 
-- Integrada sobre a `develop` em 29/10 (depois da `0097_prospecting`): #9 (0098) → #10 → #12 → #41 (0099) →
-  #38 (0100) → #39 (0101), migrations geradas de novo com `when` crescente (`journal.test.ts`). Quem entrar
-  depois gera a sua de novo sobre a 0101.
+- Integrada sobre a `develop` em 29/10, depois da `0098_contact_opt_outs` (#56): #9 (0099) → #10 → #12 → #41
+  (0100) → #38 (0101) → #39 (0102), migrations geradas de novo com `when` crescente (`journal.test.ts`). Quem
+  entrar depois gera a sua de novo sobre a 0102.
 - **Rollback do código:** reverter o merge. **Rollback do banco** (só se nenhum número tiver sido conectado; com
   conversas de número, apague antes as mensagens e conversas com `number_id`):
 
@@ -230,7 +230,7 @@ CREATE UNIQUE INDEX "wa_conversations_contact_lead_uq" ON "wa_conversations" ("c
   WHERE "lead_id" IS NOT NULL;
 CREATE UNIQUE INDEX "wa_conversations_contact_unmatched_uq" ON "wa_conversations" ("contact_id")
   WHERE "lead_id" IS NULL;
-DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1793283275489;
+DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1793292674799;
 ```
 
 ## Fases 2 e 3
@@ -240,9 +240,9 @@ DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1793283275489;
   renovação do acesso de 60 dias, modelos incompletos recusados, lista da Sofia paginada, modelos por número.
 - Fase 3: indicadores (o DW do #25), tela de configuração completa.
 
-## Migração 0100 (fase 2a) e rollback
+## Migração 0101 (fase 2a) e rollback
 
-`0100_wa_attendance` (depois da 0099 da fase 1, `when` crescente). Acrescenta em
+`0101_wa_attendance` (depois da 0100 da fase 1, `when` crescente). Acrescenta em
 `wa_conversations` `assignee_employee_id`, `queue`, `version`, `replying_employee_id`, `replying_until` e
 `sofia_paused`; a tabela `wa_conversation_events`; e `whatsapp_settings.assignment_mode` (padrão `manual`). Nada
 existente muda de valor. Sem GRANT ao `wings_ro`. Rollback do banco:
@@ -254,18 +254,18 @@ ALTER TABLE "wa_conversations" DROP COLUMN "assignee_employee_id", DROP COLUMN "
   DROP COLUMN "version", DROP COLUMN "replying_employee_id", DROP COLUMN "replying_until",
   DROP COLUMN "sofia_paused";
 ALTER TABLE "whatsapp_settings" DROP COLUMN "assignment_mode";
-DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1793283315180;
+DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1793292678396;
 ```
 
-## Migração 0101 (fase 2b) e rollback
+## Migração 0102 (fase 2b) e rollback
 
-`0101_wa_reliability` (depois da 0100): `wa_numbers.connecting_until`,
+`0102_wa_reliability` (depois da 0101): `wa_numbers.connecting_until`,
 `token_renew_tried_at` e `token_renew_error`; a tabela `wa_number_templates` (modelos de cada número, apagados com
-o número). Nada existente muda de valor. Sem GRANT ao `wings_ro`. Rollback do banco (antes do da 0100):
+o número). Nada existente muda de valor. Sem GRANT ao `wings_ro`. Rollback do banco (antes do da 0101):
 
 ```sql
 DROP TABLE "wa_number_templates";
 ALTER TABLE "wa_numbers" DROP COLUMN "connecting_until", DROP COLUMN "token_renew_tried_at",
   DROP COLUMN "token_renew_error";
-DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1793283336947;
+DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1793292681812;
 ```

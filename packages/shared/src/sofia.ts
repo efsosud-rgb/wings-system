@@ -61,6 +61,7 @@ export const SOFIA_HANDOFF_REASONS = [
   'outro_assunto',
   'sofia_pausada',
   'envio_recusado',
+  'nao_me_contate',
 ] as const;
 export type SofiaHandoffReason = (typeof SOFIA_HANDOFF_REASONS)[number];
 
@@ -78,6 +79,7 @@ export const SOFIA_HANDOFF_LABELS: Record<SofiaHandoffReason, string> = {
   outro_assunto: 'Outro assunto',
   sofia_pausada: 'Sofia pausada nesta conversa',
   envio_recusado: 'A Meta recusou as perguntas da Sofia duas vezes',
+  nao_me_contate: 'Pediu para não ser contatado e escreveu de novo',
 };
 
 /** Why a conversation ended without a deal (the only cases Sofia closes alone). */

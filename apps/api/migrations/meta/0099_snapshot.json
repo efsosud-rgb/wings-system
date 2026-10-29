@@ -1,6 +1,6 @@
 {
-  "id": "710ba04c-1e7f-4a30-b36b-f02243f0422c",
-  "prevId": "e7cd4afe-b636-4057-a441-0c76e38faf49",
+  "id": "1aca9d53-73dd-49fd-badb-46e58690d411",
+  "prevId": "9dfbfd29-f0c6-403a-9908-0582bd190dd0",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -13246,6 +13246,182 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.contact_opt_outs": {
+      "name": "contact_opt_outs",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'00000000-0000-0000-0000-000000000001'"
+        },
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "channel": {
+          "name": "channel",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "key_kind": {
+          "name": "key_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "key_value": {
+          "name": "key_value",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "origin": {
+          "name": "origin",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "revoked_by": {
+          "name": "revoked_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "revoked_reason": {
+          "name": "revoked_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "contact_opt_outs_active_uq": {
+          "name": "contact_opt_outs_active_uq",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "channel",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "key_kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "key_value",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"contact_opt_outs\".\"revoked_at\" is null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "contact_opt_outs_tenant_id_tenants_id_fk": {
+          "name": "contact_opt_outs_tenant_id_tenants_id_fk",
+          "tableFrom": "contact_opt_outs",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "contact_opt_outs_created_by_employees_id_fk": {
+          "name": "contact_opt_outs_created_by_employees_id_fk",
+          "tableFrom": "contact_opt_outs",
+          "tableTo": "employees",
+          "columnsFrom": [
+            "created_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "contact_opt_outs_revoked_by_employees_id_fk": {
+          "name": "contact_opt_outs_revoked_by_employees_id_fk",
+          "tableFrom": "contact_opt_outs",
+          "tableTo": "employees",
+          "columnsFrom": [
+            "revoked_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "contact_opt_outs_channel_check": {
+          "name": "contact_opt_outs_channel_check",
+          "value": "\"contact_opt_outs\".\"channel\" in ('all', 'whatsapp', 'phone', 'email', 'instagram')"
+        },
+        "contact_opt_outs_key_kind_check": {
+          "name": "contact_opt_outs_key_kind_check",
+          "value": "\"contact_opt_outs\".\"key_kind\" in ('lead', 'phone', 'email', 'instagram_user', 'place_id', 'cnpj')"
+        },
+        "contact_opt_outs_origin_check": {
+          "name": "contact_opt_outs_origin_check",
+          "value": "\"contact_opt_outs\".\"origin\" in ('crm', 'whatsapp_palavra', 'prospeccao', 'instagram', 'importacao')"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.lead_enrichment_ledger": {
       "name": "lead_enrichment_ledger",
       "schema": "",
@@ -18618,18 +18794,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "number_id": {
-          "name": "number_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "phone_contact_name": {
-          "name": "phone_contact_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "status": {
           "name": "status",
           "type": "text",
@@ -18781,7 +18945,7 @@
             }
           ],
           "isUnique": true,
-          "where": "\"wa_conversations\".\"lead_id\" is not null and \"wa_conversations\".\"number_id\" is null",
+          "where": "\"wa_conversations\".\"lead_id\" is not null",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -18797,29 +18961,7 @@
             }
           ],
           "isUnique": true,
-          "where": "\"wa_conversations\".\"lead_id\" is null and \"wa_conversations\".\"number_id\" is null",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "wa_conversations_number_contact_uq": {
-          "name": "wa_conversations_number_contact_uq",
-          "columns": [
-            {
-              "expression": "number_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "contact_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"wa_conversations\".\"number_id\" is not null",
+          "where": "\"wa_conversations\".\"lead_id\" is null",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -18888,19 +19030,6 @@
           "tableTo": "leads",
           "columnsFrom": [
             "lead_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "wa_conversations_number_id_wa_numbers_id_fk": {
-          "name": "wa_conversations_number_id_wa_numbers_id_fk",
-          "tableFrom": "wa_conversations",
-          "tableTo": "wa_numbers",
-          "columnsFrom": [
-            "number_id"
           ],
           "columnsTo": [
             "id"
@@ -19787,55 +19916,17 @@
           "notNull": true,
           "default": "gen_random_uuid()"
         },
-        "phone": {
-          "name": "phone",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "label": {
-          "name": "label",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "sector": {
-          "name": "sector",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "eligibility": {
-          "name": "eligibility",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'a_confirmar'"
-        },
-        "eligibility_notes": {
-          "name": "eligibility_notes",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "checks": {
-          "name": "checks",
-          "type": "text[]",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'{}'::text[]"
-        },
         "phone_number_id": {
           "name": "phone_number_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "waba_id": {
           "name": "waba_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "business_id": {
           "name": "business_id",
@@ -19865,20 +19956,14 @@
           "name": "token_enc",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
-        },
-        "token_expires_at": {
-          "name": "token_expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "status": {
           "name": "status",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'registered'"
+          "default": "'connected'"
         },
         "connected_by": {
           "name": "connected_by",
@@ -19890,7 +19975,7 @@
           "name": "connected_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "disconnect_reason": {
           "name": "disconnect_reason",
@@ -19941,19 +20026,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "created_by": {
-          "name": "created_by",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
         "updated_at": {
           "name": "updated_at",
           "type": "timestamp with time zone",
@@ -19980,28 +20052,6 @@
             }
           ],
           "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "wa_numbers_phone_uq": {
-          "name": "wa_numbers_phone_uq",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "phone",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"wa_numbers\".\"phone\" is not null",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -20055,19 +20105,6 @@
           "tableTo": "employees",
           "columnsFrom": [
             "connected_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "wa_numbers_created_by_employees_id_fk": {
-          "name": "wa_numbers_created_by_employees_id_fk",
-          "tableFrom": "wa_numbers",
-          "tableTo": "employees",
-          "columnsFrom": [
-            "created_by"
           ],
           "columnsTo": [
             "id"
@@ -20257,13 +20294,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "next_attempt_at": {
-          "name": "next_attempt_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
         },
         "processed_at": {
           "name": "processed_at",

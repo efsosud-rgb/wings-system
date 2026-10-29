@@ -3,6 +3,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { crmEmailOutbox, crmEmailTemplates, employees } from '../../db/schema/index.js';
+import { contactBlock } from './contact-block.js';
 import { writeAudit } from '../../lib/audit.js';
 import { leadInScope, type LeadPermission } from './access.js';
 import { renderForLead, sendTemplateToLead } from './automations.js';
@@ -24,6 +25,7 @@ const SEND_ERRORS = {
     409,
     'Expansão com marca: o lead não recebe e-mail da Wings. Fale por WhatsApp em nome da marca.',
   ],
+  contact_blocked: [409, 'Pediu para não ser contatado por e-mail. Nada foi enviado.'],
   send_failed: [502, 'Não foi possível enviar o e-mail. Nada foi enviado.'],
 } as const;
 
@@ -91,6 +93,8 @@ export const leadEmailRoutes: FastifyPluginAsync = async (app) => {
       to: lead.email,
       // Expansão with a brand: the lead must not see the Wings, so no e-mail leaves (brand rule).
       hidden: leadHidesWings(lead),
+      // A "não me contate" by e-mail: why nothing can be sent, or null.
+      blocked: (await contactBlock(db, 'email', { leadId: lead.id })).reason,
       mode: transport.mode,
       // Where a message sent now by this person would leave from (their Gmail, or the company's).
       from: await transport.senderOf(request.session.actor.employeeId),
@@ -145,7 +149,9 @@ export const leadEmailRoutes: FastifyPluginAsync = async (app) => {
     });
     if (!outcome.ok) {
       const [status, message] = SEND_ERRORS[outcome.reason];
-      return reply.status(status).send({ error: outcome.reason, message });
+      return reply
+        .status(status)
+        .send({ error: outcome.reason, message: outcome.message ?? message });
     }
     return reply.status(201).send({ outboxId: outcome.outboxId, mode: outcome.mode });
   });

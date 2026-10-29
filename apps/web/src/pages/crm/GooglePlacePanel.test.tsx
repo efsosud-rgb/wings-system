@@ -60,7 +60,11 @@ describe('Dados do Google (ao vivo)', () => {
     expect(screen.getByRole('link', { name: 'Abrir no Google Maps' }).getAttribute('href')).toBe(
       'https://maps.google.com/?cid=1',
     );
-    expect(screen.getByText(/Dados: Google Maps/)).toBeTruthy();
+    // Google's own logo, not a text look-alike: the official file, labelled and 18 px high.
+    const logo = screen.getByRole('img', { name: 'Google Maps' });
+    expect(logo.getAttribute('src')).toBe('/google/GoogleMaps_Logo_Gray.svg');
+    expect(logo.getAttribute('height')).toBe('18');
+    expect(logo.getAttribute('translate')).toBe('no');
   });
 
   it('says "—" and the reason without the key, and when Google no longer has the place', async () => {

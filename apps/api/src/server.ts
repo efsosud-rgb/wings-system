@@ -12,6 +12,7 @@ import { onLeadArrivedKick } from './modules/leads/crm-alerts.js';
 import { createCrmMailTransport } from './modules/leads/crm-mail.js';
 import { sendPendingNoticeMails } from './modules/leads/crm-notice-mail.js';
 import { startMetaLeadgenIntake } from './modules/leads/meta-intake.js';
+import { startProspectingRetentionScheduler } from './modules/prospecting/retention.js';
 import { startSofia } from './modules/sofia/engine.js';
 import { whatsappConfigOf } from './modules/whatsapp/graph.js';
 import { startWhatsAppIntake } from './modules/whatsapp/intake.js';
@@ -201,6 +202,16 @@ async function main() {
       onLeadArrivedKick(null);
       stop();
     });
+  }
+
+  // Prospecção: expired reservations back to free, old enrichment cleared, every
+  // 6 hours (docs/crm/prospeccao.md). Our own data only: no call to Google.
+  {
+    const stop = startProspectingRetentionScheduler({
+      db,
+      log: (facts) => app.log.info(facts),
+    });
+    app.addHook('onClose', async () => stop());
   }
 
   // YouTube channel (public data, docs/integracoes/youtube-data-api.md): one

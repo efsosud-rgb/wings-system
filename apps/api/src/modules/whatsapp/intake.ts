@@ -42,6 +42,7 @@ import { callingOn } from './calling.js';
 import { callPermissionPayload, type WhatsAppConfig } from './graph.js';
 import { officialNumberLive } from './official-number.js';
 import { deliverWhatsApp, type Contact } from './outbox.js';
+import { contactBlock, noteContactBlocked, recordContactOptOut } from '../leads/contact-block.js';
 import { reasonOf } from './templates.js';
 import { brandOf, callPermissionText, permissionOf } from './thread.js';
 import {
@@ -404,6 +405,15 @@ async function applyInbound(deps: WhatsAppIntakeDeps, message: WaInboundMessage,
       },
     })
     .returning();
+  // A SAIR also goes to the one register, by phone: every deal of this number, until a manager revokes.
+  if (optOut)
+    await recordContactOptOut(db, {
+      phone,
+      channels: ['whatsapp'],
+      origin: 'whatsapp_palavra',
+      reason: 'Pediu para sair pelo WhatsApp',
+      createdBy: null,
+    });
 
   const permission = message.content.callPermission as
     { response?: string | null; isPermanent?: boolean; expiresAt?: string | null } | undefined;
@@ -653,6 +663,14 @@ async function answerCallRequest(
     !(await callingOn(send.fetch, send.config))
   )
     return;
+  // The system asks on its own: a "não me contate" (or the Prospecção opt-in rule) stops it.
+  const block = await contactBlock(db, 'whatsapp', { leadId, phone: contact.phone });
+  if (block.blocked)
+    return noteContactBlocked(db, leadId, {
+      channel: 'whatsapp',
+      path: 'pedido_ligacao_automatico',
+      origin: block.origin,
+    });
   const shown = callPermissionText(await brandOf(db, leadId, target.conversationId));
   const delivered = await deliverWhatsApp(db, send.fetch, send.config, {
     contact,

@@ -51,6 +51,8 @@ export const EVENT_LABELS: Record<string, string> = {
   'rd.deal_linked': 'Ligada ao negócio do RD CRM',
   'rd.deal_created': 'Cópia criada no RD CRM',
   'lead.email_sent': 'E-mail ao lead',
+  'lead.contact_opt_out': 'Não me contate registrado',
+  'lead.contact_blocked': 'Contato não iniciado: não me contate',
   'research.queued': 'Pesquisa pedida',
   'research.done': 'Pesquisa concluída',
   'research.failed': 'Pesquisa não concluída',

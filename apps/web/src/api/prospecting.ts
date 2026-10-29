@@ -8,6 +8,7 @@ import type {
   ProspectingIcp,
   ProspectingMetrics,
   ProspectingQuota,
+  ProspectingRetention,
   ProspectingSettings,
   ProspectingUsage,
   ProspectLeadInput,
@@ -72,6 +73,8 @@ function useSaveSettings<T>(path: string) {
 
 export const useSaveIcp = () => useSaveSettings<ProspectingIcp>('/prospecting/settings/icp');
 export const useSaveQuota = () => useSaveSettings<ProspectingQuota>('/prospecting/settings/quota');
+export const useSaveRetention = () =>
+  useSaveSettings<ProspectingRetention>('/prospecting/settings/retention');
 
 /** The seller's sentence turned into search parameters; it fills the form only on a click. */
 export function useParseProspectQuery() {

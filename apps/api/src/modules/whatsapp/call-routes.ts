@@ -4,6 +4,7 @@ import {
   WHATSAPP_OPT_IN_MISSING_TEXT,
   whatsappOptInMissing,
   type WaCall,
+  CONTACT_BLOCKED_ERROR,
 } from '@wings/shared';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
@@ -11,6 +12,7 @@ import { z } from 'zod';
 import { waCalls, waContacts } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { leadInScope, leadOwnerFilter } from '../leads/access.js';
+import { contactBlock, noteContactBlocked } from '../leads/contact-block.js';
 import { notifyCallsChanged } from './call-signal.js';
 import { callingOn } from './calling.js';
 import { startWhatsAppCall, whatsappCallAction, whatsappConfigOf } from './graph.js';
@@ -68,6 +70,17 @@ export const whatsappCallRoutes: FastifyPluginAsync = async (app) => {
       return refuse(reply, 403, 'whatsapp_soon', SELLER_SOON_MESSAGE);
     if (whatsappOptInMissing(lead))
       return refuse(reply, 403, 'whatsapp_no_opt_in', WHATSAPP_OPT_IN_MISSING_TEXT);
+    // A call reaches the person's phone: a "não me contate" on WhatsApp or on the phone stops it.
+    const block = await contactBlock(db, ['whatsapp', 'phone'], { leadId: lead.id });
+    if (block.blocked) {
+      await noteContactBlocked(
+        db,
+        lead.id,
+        { channel: 'whatsapp', path: 'ligacao', origin: block.origin },
+        actor.employeeId,
+      );
+      return refuse(reply, 409, CONTACT_BLOCKED_ERROR, block.reason ?? '');
+    }
     const body = waCallSdpSchema.safeParse(request.body);
     if (!body.success)
       return refuse(reply, 400, 'invalid', body.error.issues[0]?.message ?? 'Pedido inválido.');

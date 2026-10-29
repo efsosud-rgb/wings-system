@@ -29,7 +29,8 @@ export const PERMISSIONS = {
   'crm.manage': 'Configurar as etapas do funil e a distribuição de leads',
   'prospecting.use':
     'Prospectar empresas no Google Maps: buscar, reservar, descartar, enriquecer e criar o lead',
-  'prospecting.configure': 'Editar os pesos da nota ICP e a lista de exclusão da prospecção',
+  'prospecting.configure':
+    'Editar os pesos da nota ICP, a lista de exclusão e os prazos (reserva e dados do site) da prospecção',
   'prospecting.quota': 'Mudar a cota de chamadas ao Google da prospecção',
   'prospecting.export':
     'Exportar em planilha os prospects (só os dados da Wings, nunca os do Google; registrado em auditoria)',

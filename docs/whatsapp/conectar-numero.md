@@ -2,7 +2,7 @@
 
 Ordem do Eric de 20/10/2026 (opção 1, "espelho"): os números de WhatsApp Business de trabalho continuam no celular de
 cada dono e o sistema espelha as conversas. Bloco **a1** (0095, `wa_numbers`): a tela que conecta e guarda a
-conexão. Desde a fase 1 da Central (26/10, migração **0098**, `docs/whatsapp/central.md`): o número é **cadastrado
+conexão. Desde a fase 1 da Central (26/10, migração **0100**, `docs/whatsapp/central.md`): o número é **cadastrado
 antes** (dono, departamento, se pode conectar, checagem do celular), só um número **confirmado** no cadastro é
 conectado, o número oficial é recusado, o vencimento do acesso aparece na tela, e as mensagens, os ecos do celular,
 o histórico e os contatos entram no CRM como conversa do número.
