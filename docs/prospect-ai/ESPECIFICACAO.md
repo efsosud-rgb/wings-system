@@ -135,7 +135,7 @@ Disparo: evento `messages` (inclusive a resposta à resposta privada).
 
 1. **Ler** com Zod: `sender.id`, `recipient.id`, `timestamp`, `message.mid`, `message.text`, `message.is_echo`, `message.referral` e anexos (só o tipo). `is_echo = true` → é a Wings respondendo: marca `responded_at` na oportunidade aberta da pessoa, se ainda vazio, e `status = 'done'`. Sem texto (só figurinha, áudio ou foto) → atualiza a pessoa e a janela, sem classificar.
 2. **Pessoa e janela:** upsert em `ig_people`; `last_inbound_at = timestamp`. Isso abre a janela de 24 h da Meta, e o `respond_by` de qualquer oportunidade aberta dela passa a `min(respond_by, last_inbound_at + deadlines.janelaDirectHoras)`.
-3. **Pedido para parar, sem IA:** o mesmo padrão de `isOptOut` (`api/modules/whatsapp/webhook-parse.ts:342-343`: sair, parar, pare, stop, cancelar, descadastrar) → grava "não me contate" no canal `instagram`, chave `instagram_user` = IGSID, origem `instagram`, pela função de gravação do PR da trava; fecha as oportunidades abertas dela como `rejeitada` (`decision_reason = 'pediu_para_parar'`); nada é classificado.
+3. **Pedido para parar, sem IA:** o mesmo padrão de `isOptOut` (`api/modules/whatsapp/webhook-parse.ts:342-343`: sair, parar, pare, stop, cancelar, descadastrar) → grava "não me contate" no canal `instagram`, origem `instagram`, com o @ da pessoa e o lead ligado, por `recordContactOptOut` do PR da trava (§3.8); fecha as oportunidades abertas dela como `rejeitada` (`decision_reason = 'pediu_para_parar'`); nada é classificado.
 4. **Classificar:** regras simples primeiro (anexo 2, §4.2); se não decidirem e `PROSPECT_AI_CLASSIFIER_ENABLED` estiver ligada, a IA, com cache e teto (anexo 2). Sem IA ou teto do dia atingido → categoria `nao_identificada`, confiança 0, `needs_review_reason = 'sem_ia'` ou `'teto_ia'`.
 5. **Oportunidade ou lead:**
    - se a pessoa **tem oportunidade aberta de comentário** (respondeu à resposta privada): a nova mensagem vira evidência `instagram_dm` ligada à mesma pessoa, a classificação é atualizada se a da mensagem tiver confiança maior, e **vira lead** (passo 6) se a categoria for de um serviço vendido. Se a categoria for `nao_identificada`, de serviço não vendido ou de revisão obrigatória, fica em `em_revisao`;
@@ -222,9 +222,10 @@ Recalculada a cada classificação nova e uma vez por hora pelo agendador de §3
 
 ### 3.8 "Não me contate" antes de qualquer resposta automática
 
-- A única resposta automática do módulo é a resposta privada (§3.1). Antes dela, `contactBlock(tenant, 'instagram', { leadId, instagramUserId })` do PR `feat/trava-unica-contato`. Bloqueado → não envia, grava `blocked` com `nao_contatar`, e a oportunidade mostra o selo.
-- **Contrato esperado da trava** (a confirmar no PR dela, sem redesenhar): canal `instagram` e chave `instagram_user` existem na tabela `contact_opt_outs`; `contactBlock` aceita o id do Instagram e devolve `{ bloqueado, motivo, origem }`. Se o nome ou a assinatura mudarem no merge, só o adaptador `api/modules/instagram/opt-out.ts` muda.
-- Aprovar uma oportunidade do radar e o botão "Registrar não me contate" da fila também gravam pela função de gravação da trava.
+- A única resposta automática do módulo é a resposta privada (§3.1). Antes dela, `contactBlock(db, 'instagram', { leadId, instagramUser })` do PR `feat/trava-unica-contato`. Bloqueado → não envia, grava `blocked` com `nao_contatar`, e a oportunidade mostra o selo com o `reason` devolvido.
+- **Contrato da trava, conferido no branch dela em 29/10 (ainda sem merge; as linhas podem mudar):** `contactBlock(db, channel, keys: ContactKeys)` devolve `{ blocked, reason, origin }` (`apps/api/src/modules/leads/contact-block.ts:28-36,187-197`); `recordContactOptOut(db, { ...keys, channels, origin, reason, createdBy })` grava (:221); canal `instagram` e origem `instagram` existem (`packages/shared/src/contact-opt-out.ts:10,31-37`); a chave `instagram_user` é o **@** normalizado (minúsculo, sem arroba, :63-64), e o lead entra pelo `leads.instagram`. A migration dela é a `0098_contact_opt_outs`.
+- **Encaixe:** o adaptador `api/modules/instagram/opt-out.ts` chama as duas funções com `instagramUser` = `ig_people.username` e `leadId` = `ig_people.lead_id`. Limite: o @ pode mudar; o IGSID não. O PR D5 acrescenta a chave `instagram_igsid` a `CONTACT_KEY_KINDS` (e ao CHECK da tabela da trava, numa migration curta), e o adaptador passa a gravar e consultar as duas. Até lá, o lead ligado cobre a troca de @ de quem já virou lead.
+- Aprovar uma oportunidade do radar e o botão "Registrar não me contate" da fila também gravam por `recordContactOptOut`.
 - A Sofia não entra neste módulo (já corrigida pelo PR da trava).
 
 ### 3.9 Diagnóstico pelo link
@@ -304,7 +305,7 @@ Cada PR é pequeno, entra no staging com o OK do Eric e não liga nada sozinho. 
 | D2 | Laço de processamento (comentário, menção, mensagem, eco, referral), com espera crescente; cria evidência e oportunidade; classificação por C3 | D1, C2, C3 | — |
 | D3 | Cliente Graph do Instagram (`api/modules/instagram/graph.ts`), resposta privada com portões e idempotência, limites da Graph; Central de fontes (tela) e alerta "fonte sem evento" | D2 | — |
 | D4 | Lead a partir da resposta no Direct e do diagnóstico (§3.2, §3.9); atribuição de anúncio (§3.3) | D2, C2 | — |
-| D5 | Exclusão a pedido (pessoa do Instagram) e "não me contate" pelo Direct | D2, trava | — |
+| D5 | Exclusão a pedido (pessoa do Instagram), "não me contate" pelo Direct e a chave `instagram_igsid` na trava (§3.8) | D2, trava | curta (CHECK da tabela da trava) |
 
 Com D1 a D5 no staging e as chaves ainda desligadas, o Eric segue o anexo 7 (Fase 2) e liga primeiro `INSTAGRAM_WEBHOOK_ENABLED` (só recebe), depois `INSTAGRAM_AUTO_REPLY_ENABLED` com as contas de teste, e grava o vídeo.
 
