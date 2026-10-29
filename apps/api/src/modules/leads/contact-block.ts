@@ -289,3 +289,70 @@ export async function noteContactBlocked(
     .insert(leadEvents)
     .values({ leadId, kind: 'lead.contact_blocked', actorEmployeeId, detail });
 }
+
+/**
+ * For a list of search results at once: the oldest active "não me contate" reaching each place_id
+ * or phone (the register and the WhatsApp SAIR), keyed `place_id:<id>` and `phone:<canonical>`.
+ */
+export async function optOutsAmong(
+  db: Executor,
+  given: { placeIds: string[]; phones: string[] },
+  tenantId = WINGS_TENANT_ID,
+): Promise<Map<string, ContactOptOutEntry>> {
+  const phones = [
+    ...new Set(given.phones.map((p) => normalizeContactKey('phone', p)).filter((p) => p !== null)),
+  ];
+  const keys = {
+    lead: [],
+    phone: phones,
+    email: [],
+    instagram_user: [],
+    place_id: given.placeIds,
+    cnpj: [],
+  };
+  const found = new Map<string, ContactOptOutEntry>();
+  const match = registerMatch(keys);
+  if (!match) return found;
+  const [register, waOptOuts] = await Promise.all([
+    db
+      .select()
+      .from(contactOptOuts)
+      .where(and(eq(contactOptOuts.tenantId, tenantId), isNull(contactOptOuts.revokedAt), match)),
+    phones.length
+      ? db
+          .select({ phone: waContacts.phone, since: waContacts.optOutAt })
+          .from(waContacts)
+          .where(
+            and(
+              eq(waContacts.tenantId, tenantId),
+              inArray(waContacts.phone, phones),
+              isNotNull(waContacts.optOutAt),
+            ),
+          )
+      : [],
+  ]);
+  const all = [
+    ...register.map((row) => ({
+      key: `${row.keyKind}:${row.keyValue}`,
+      entry: {
+        id: row.id,
+        channel: row.channel as ContactChannel,
+        origin: row.origin as ContactOptOutOrigin,
+        reason: row.reason,
+        since: row.createdAt.toISOString(),
+      },
+    })),
+    ...waOptOuts.map((row) => ({
+      key: `phone:${row.phone}`,
+      entry: {
+        id: null,
+        channel: 'whatsapp' as const,
+        origin: 'whatsapp_palavra' as const,
+        reason: null,
+        since: row.since!.toISOString(),
+      },
+    })),
+  ].sort((a, b) => a.entry.since.localeCompare(b.entry.since));
+  for (const { key, entry } of all) if (!found.has(key)) found.set(key, entry);
+  return found;
+}

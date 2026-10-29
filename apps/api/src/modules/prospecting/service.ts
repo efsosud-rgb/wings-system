@@ -1,4 +1,8 @@
 import {
+  CONTACT_CHANNEL_LABELS,
+  CONTACT_OPT_OUT_ORIGIN_LABELS,
+  normalizeContactKey,
+  type ContactOptOutEntry,
   excludedName,
   grantedScope,
   icpScore,
@@ -42,7 +46,7 @@ import {
   roles,
 } from '../../db/schema/index.js';
 import type { AgentLlm } from '../agent/llm.js';
-import { recordContactOptOut } from '../leads/contact-block.js';
+import { optOutsAmong, recordContactOptOut } from '../leads/contact-block.js';
 import { leadVisibleTo } from '../leads/access.js';
 import { addNote, changeLead, createTask, type Executor } from '../leads/crm.js';
 import { ForeignLeadError, upsertLead } from '../leads/service.js';
@@ -273,6 +277,14 @@ function statusTag(status: ProspectStatus, ownerName: string | null, mine: boole
   }
 }
 
+/** "não me contate: WhatsApp, desde 29/10/2026 (pediu para sair pelo WhatsApp)". */
+const optOutTagText = (entry: ContactOptOutEntry) =>
+  `não me contate: ${CONTACT_CHANNEL_LABELS[entry.channel]}, desde ${new Date(
+    entry.since,
+  ).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' })} (${
+    CONTACT_OPT_OUT_ORIGIN_LABELS[entry.origin]
+  })`;
+
 /** Clients' phones and WhatsApps, normalised, among these (stored in any format). */
 async function clientPhonesAmong(db: Database, phones: string[]): Promise<Set<string>> {
   if (phones.length === 0) return new Set();
@@ -366,6 +378,7 @@ export async function assembleSearch(
         .orderBy(asc(leads.createdAt))
     : [];
   const clientPhones = await clientPhonesAmong(db, phones);
+  const optOuts = await optOutsAmong(db, { placeIds: ids, phones });
   const leadDomains = await leadDomainsAmong(
     db,
     kept.map((place) => siteDomain(place.website)).filter((d): d is string => d !== null),
@@ -411,6 +424,11 @@ export async function assembleSearch(
       tags.push(
         statusTag(prospect.row.status as ProspectStatus, prospect.ownerName, Boolean(mine)),
       );
+    const optOut =
+      optOuts.get(`place_id:${place.placeId}`) ??
+      (phone ? optOuts.get(`phone:${normalizeContactKey('phone', phone)}`) : undefined);
+    if (optOut && prospect?.row.status !== 'nao_contatar')
+      tags.push({ kind: 'do_not_contact', text: optOutTagText(optOut) });
     if (multiUnit) tags.push({ kind: 'multi_unit', text: 'várias unidades' });
     if (phone && (phoneCount.get(phone) ?? 0) > 1)
       tags.push({ kind: 'possible_duplicate', text: 'possível duplicidade: mesmo telefone' });
