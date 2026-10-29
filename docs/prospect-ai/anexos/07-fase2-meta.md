@@ -6,7 +6,7 @@ Parte da [especificação do Wings Prospect AI](../ESPECIFICACAO.md), seção 10
 
 | App | Variáveis no código | O que faz hoje | Situação conhecida |
 |---|---|---|---|
-| **Wings Traffic Agent** | `META_APP_SECRET` (`apps/api/src/env.ts:519`), `META_LEADGEN_VERIFY_TOKEN` (:520-523), `META_WRITE_TOKEN`, `META_LEADS_ACCESS_TOKEN` (:556) | escreve campanhas e recebe o formulário de leads (`docs/leads/meta-lead-ads.md:51-58`) | portfólio 795770645342879; o passo "passar para Ativo" está escrito (:53), mas nenhum documento confirma que foi feito nem que a empresa desse portfólio é verificada |
+| **Wings Traffic Agent** | `META_APP_SECRET` (`apps/api/src/env.ts:519`), `META_LEADGEN_VERIFY_TOKEN` (:520-523), `META_WRITE_TOKEN`, `META_LEADS_ACCESS_TOKEN` (:556) | escreve campanhas e recebe o formulário de leads (`docs/leads/meta-lead-ads.md:51-58`) | portfólio citado em `docs/leads/meta-lead-ads.md:51`; o passo "passar para Ativo" está escrito (:53), mas nenhum documento confirma que foi feito nem que a empresa desse portfólio é verificada |
 | **Wings CRM Vendas** | `WHATSAPP_APP_ID` (:530), `WHATSAPP_APP_SECRET` (:544, comentário :543: "not META_APP_SECRET (another app)"), `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_ES_CONFIG_ID` (:547-554) | WhatsApp Cloud API e cadastro embutido | empresa "Wings Company 01" **verificada**, usuário do sistema "wings-crm" com token permanente (`docs/handoff/opus-crm-2026-09-30.md:34-44`); ainda não é Tech Provider (`docs/whatsapp/conectar-numero.md:87-93`) |
 | (desconhecido) | `INSTAGRAM_DISCOVERY_TOKEN` (:607) | conferência do @ do lead pela Business Discovery | o plano diz que esse token tem `instagram_basic` e `instagram_manage_insights`; o repositório não diz de qual app ele é |
 
