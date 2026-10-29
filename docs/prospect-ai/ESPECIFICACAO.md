@@ -127,6 +127,8 @@ Disparo: evento `comments` do webhook (anexo 3, §5.5), já gravado em `ig_webho
 8. **Oportunidade** (estado `nova`): evidência `instagram_comment` (ou `instagram_ad_comment` se houver `ad_id`), base legal `legitimate_interest`, `retention_until = occurred_at + retention.oportunidadeSemLeadDias`. Classificação `palavra_chave`: categoria = serviço da palavra, intenção `interesse_declarado`, confiança = `thresholds.confiancaPalavraChave` (60, abaixo do mínimo de 70, então a revisão humana é obrigatória e `needs_review_reason = 'confianca_baixa'`). `respond_by = occurred_at + 7 dias`. Dono: `routing.instagramDonoPadrao`, senão `nextInRotation` do funil da categoria, senão nenhum (só quem tem escopo `all` vê).
 9. **Não vira lead aqui.** Só vira lead quando a pessoa responde no Direct (§3.2, passo 5) ou preenche o diagnóstico (§3.9).
 
+**Menções** (`mentions`: alguém marcou @wings.companybr num post ou comentário dela): o texto passa pelo passo 5 (classificador); se abrir oportunidade, ela é `instagram_mention`, sempre `em_revisao` e **sem resposta automática** (a regra de resposta privada vale para comentários na mídia da Wings). Volume esperado baixo (plano).
+
 ### 3.2 Direct recebido → classificação → oportunidade → lead
 
 Disparo: evento `messages` (inclusive a resposta à resposta privada).
@@ -332,6 +334,7 @@ C1 → (C2, C3, C5, F1 em paralelo) → (C4, C6, C7, D1, E1, F2) → (D2, E3, F3
 
 - **Meta (API de Conversões):** evento `Lead` qualificado e `Purchase` (contrato) para leads com `fbclid` ou origem `meta_lead_ads`/`instagram_ad`, com e-mail e telefone em SHA-256 (só com base legal validada, `docs/ads/fechar-ciclo.md:242-262`); id do evento = id do lead + etapa, para não duplicar com o `fbq` do site (`web/lib/site-conversion.ts:85-90`).
 - **Google Ads (conversão offline):** `uploadClickConversions` com o `gclid`, `gbraid` ou `wbraid` já guardados no lead (`api/db/schema/leads.ts:146-149`), na mudança para "qualificado" e para "ganho".
+- **Não começar do zero:** o PR #37 (aberto, "Wings Ads Intelligence") já traz um cliente da API de Conversões desligado (`apps/api/src/modules/leads/meta-capi.ts`, job `meta-capi-lead` no worker, `docs/ads/conversions-api.md`). Se ele entrar, a Fase 5 só acrescenta os eventos das origens novas.
 - Ambos atrás de chave desligada, com fila própria e registro de envio. Pré-requisito: a política de privacidade publicada e o advogado de acordo.
 
 ---

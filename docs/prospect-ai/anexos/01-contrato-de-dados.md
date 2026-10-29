@@ -26,6 +26,8 @@ A `0098` é do PR `feat/trava-unica-contato` (`contact_opt_outs`). Os números a
 | 0104 | `0104_dw_funil_fonte.sql` (`--custom`) | F1 | `dw.dim_fonte`, `dw.dim_categoria_servico`, `dw.dim_campanha_resumo`, `dw.fato_funil_fonte_diario`, `dw.fato_custo_fonte_diario`, visões |
 | 0105 | `0105_grant_wings_ro_prospect_ai.sql` (`--custom`) | F1 | `GRANT SELECT` em todas as tabelas acima, menos `ig_webhook_events` |
 
+**Colisão de números já à vista** (PRs abertos em 29/10, nenhum na develop): a pilha da Central WhatsApp usa `0098_wa_central` (#41), `0099_wa_attendance` (#38) e `0100_wa_reliability` (#39), e o #37 (Ads Intelligence) usa `0103_ads_intelligence`. Os números acima são indicativos: cada PR do Prospect AI gera a sua migration com `db:generate` sobre a develop do dia e regera se outro entrar antes.
+
 Dependências entre tabelas: `prospect_opportunities` → `prospect_evidence`, `leads`, `employees`; `ig_private_replies` → `prospect_opportunities`; `competitor_posts` → `competitor_accounts`. Nada aponta para `contact_opt_outs`: a consulta é sempre pela função única do PR da trava.
 
 ## 2.2 `prospect_evidence` — a prova de cada oportunidade (C1)
