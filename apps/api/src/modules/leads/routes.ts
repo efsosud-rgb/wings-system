@@ -35,6 +35,7 @@ import {
   brandOfLink,
   enqueueResearch,
   ForeignLeadError,
+  NUMBER_IN_ATTENDANCE_REPLY,
   NumberInAttendanceError,
   funnelSummary,
   listLeads,
@@ -167,11 +168,7 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
         });
       } catch (error) {
         if (error instanceof NumberInAttendanceError)
-          return reply.status(409).send({
-            error: 'number_in_attendance',
-            message:
-              'Esta pessoa já está em atendimento (com a Sofia ou com a equipe) e ainda não tem negociação. Peça à Diretoria para passar a conversa a você.',
-          });
+          return reply.status(409).send(NUMBER_IN_ATTENDANCE_REPLY);
         if (error instanceof ForeignLeadError)
           return reply.status(409).send({
             error: 'duplicate',

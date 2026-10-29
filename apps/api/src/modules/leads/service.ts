@@ -531,6 +531,13 @@ export class ForeignLeadError extends Error {
 /** The phone is in a conversation Sofia or the team is attending, with no deal yet (WA-03). */
 export class NumberInAttendanceError extends ForeignLeadError {}
 
+/** The refusal of a seller's deal (or contact) on a number in attendance (WA-03). */
+export const NUMBER_IN_ATTENDANCE_REPLY = {
+  error: 'number_in_attendance',
+  message:
+    'Esta pessoa já está em atendimento (com a Sofia ou com a equipe) e ainda não tem negociação. Peça à Diretoria para passar a conversa a você.',
+} as const;
+
 export async function upsertLead(db: Database, given: IncomingLead): Promise<UpsertResult> {
   const incoming = withFormFields(given);
   const result = await upsertLeadTx(db, incoming);
