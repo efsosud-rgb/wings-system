@@ -1,4 +1,5 @@
 //   GET    /clients/:id/record                      -> ClientRecord            clients.read
+//   GET    /clients/:id/deals                       -> { deals }               clients.read + leads.read (in its scope)
 //   PUT    /clients/:id/company        (block 1)    -> ClientRecord            clients.edit
 //   POST   /clients/:id/partners       (block 2)    -> ClientRecord            clients.edit (+ clients.sensitive for CPF, estado civil, regime)
 //   PUT    /clients/:id/partners/:partnerId         -> ClientRecord            idem
@@ -26,6 +27,8 @@ import {
 } from '@wings/shared';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { leadOwnerFilter } from '../leads/access.js';
+import { leadsOfClient } from '../leads/contacts.js';
 import { createRegistryLookup } from './lookup.js';
 import {
   deletePartner,
@@ -113,6 +116,21 @@ export const clientRecordRoutes: FastifyPluginAsync = async (app) => {
       const clientId = clientIdOf(request, reply);
       if (!clientId) return reply;
       return sendRecord(request, reply, clientId);
+    },
+  );
+
+  /**
+   * The deals of the CRM companies linked to this client, in the caller's own `leads.read` scope:
+   * the record shows them, it never widens who sees a deal.
+   */
+  app.get(
+    '/clients/:id/deals',
+    { preHandler: [app.requirePermission('clients.read'), app.requirePermission('leads.read')] },
+    async (request, reply) => {
+      const clientId = clientIdOf(request, reply);
+      if (!clientId) return reply;
+      const owner = leadOwnerFilter(request.session.actor, 'leads.read');
+      return reply.send({ deals: await leadsOfClient(db, clientId, owner) });
     },
   );
 

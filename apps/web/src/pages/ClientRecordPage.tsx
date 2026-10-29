@@ -46,7 +46,9 @@ import {
 } from '@wings/shared';
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import { hasPermission, useSession } from '../api/auth.js';
 import { ApiError } from '../api/client.js';
+import { ClientDeals } from '../components/clients/ClientDeals.js';
 import { LoadFailure } from '../components/LoadFailure.js';
 import { WhatsAppArtPanel } from '../components/WhatsAppArtPanel.js';
 import {
@@ -1342,7 +1344,10 @@ function SignatureBlock({ record }: { record: ClientRecord }) {
 export function ClientRecordPage() {
   const { id = '' } = useParams<{ id: string }>();
   const query = useClientRecord(id);
-  const [tab, setTab] = useState<ClientRecordBlock>('empresa');
+  const session = useSession();
+  // The deals are CRM data: only for who already reads leads (the API re-checks, in its scope).
+  const canSeeDeals = hasPermission(session.data, 'leads.read');
+  const [tab, setTab] = useState<ClientRecordBlock | 'negociacoes'>('empresa');
   const [addingPartner, setAddingPartner] = useState<string | null>(null);
   const record = query.data;
 
@@ -1445,10 +1450,25 @@ export function ClientRecordPage() {
             </button>
           );
         })}
+        {canSeeDeals && (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'negociacoes'}
+            className={`tab-button ${tab === 'negociacoes' ? 'tab-button-active' : ''}`}
+            onClick={() => setTab('negociacoes')}
+          >
+            Negociações
+          </button>
+        )}
       </div>
 
       <div role="tabpanel">
-        <Missing record={record} block={tab} />
+        {tab === 'negociacoes' ? (
+          <ClientDeals clientId={record.client.id} />
+        ) : (
+          <Missing record={record} block={tab} />
+        )}
         {tab === 'empresa' && (
           <CompanyBlock
             record={record}
