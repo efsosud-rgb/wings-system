@@ -2416,22 +2416,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.crm-wa-row-side {
-  display: grid;
-  justify-items: end;
-  gap: 4px;
-}
 @media (max-width: 640px) {
-  .crm-wa-row {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .crm-wa-row .crm-wa-avatar {
-    display: none;
-  }
-  .crm-wa-row-side {
-    justify-items: start;
-    grid-auto-flow: column;
-  }
   .crm-wa-bubble {
     max-width: 92%;
   }
@@ -2696,7 +2681,7 @@
   color: var(--text-3);
 }
 .crm-wa-tick.is-read {
-  color: var(--accent);
+  color: var(--info);
 }
 .crm-wa-web-main {
   flex: 1;
@@ -2773,6 +2758,200 @@
   min-height: 0;
   border: 0;
   border-radius: 0;
+}
+
+/* The day a run of messages was sent, centred over it, in the deal's tab too. */
+.crm-wa-day {
+  align-self: stretch;
+  display: flex;
+  justify-content: center;
+  margin: var(--space-2) 0;
+}
+.crm-wa-day span {
+  padding: 4px var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: var(--text-xs);
+  box-shadow: var(--shadow-1);
+}
+
+/* As WhatsApp Desktop (20/10): one window the height of the screen, the list and the
+   conversation scrolling each on its own; flat rows with a divider after the picture;
+   the conversation on a quiet wallpaper with green and white balloons. */
+.crm-wa-web {
+  height: calc(100dvh - var(--topbar-h) - 2 * var(--space-5));
+  min-height: 480px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--surface);
+}
+.crm-wa-web .crm-wa-web-list {
+  overflow: hidden;
+  padding-bottom: 0;
+}
+.crm-wa-web .crm-tabs {
+  padding: 0;
+  border-bottom: 0;
+  gap: var(--space-2);
+}
+.crm-wa-web .crm-tab {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  padding: 4px var(--space-3);
+  font-size: var(--text-sm);
+}
+.crm-wa-web .crm-tab.is-active {
+  border-color: transparent;
+  background: var(--success-soft);
+  color: var(--success);
+}
+.crm-wa-web .crm-wa-web-rows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  align-content: start;
+  gap: 0;
+  margin: 0 calc(-1 * var(--space-4));
+}
+.crm-wa-web .crm-wa-row {
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: 0 0 0 var(--space-4);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.crm-wa-web .crm-wa-row:hover {
+  background: var(--surface-hover);
+}
+.crm-wa-web .crm-wa-row.is-active {
+  background: var(--surface-3);
+}
+.crm-wa-web .crm-wa-row:focus-visible {
+  outline: none;
+  box-shadow: inset var(--focus-ring);
+}
+.crm-wa-web .crm-wa-avatar {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+}
+.crm-wa-web .crm-wa-head .crm-wa-avatar {
+  width: 40px;
+  height: 40px;
+}
+/* A long name or phone line is cut, never drawn under "Abrir negociação". */
+.crm-wa-web .crm-wa-who > div {
+  min-width: 0;
+}
+.crm-wa-web .crm-wa-who .crm-sub {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.crm-wa-web .crm-wa-row-main {
+  gap: 2px;
+  padding: var(--space-3) var(--space-4) var(--space-3) 0;
+  border-bottom: 1px solid var(--line);
+}
+.crm-wa-row-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.crm-wa-row-line b {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--weight-semibold);
+}
+.crm-wa-web .crm-wa-row.is-unanswered b {
+  color: var(--text);
+}
+.crm-wa-row-time {
+  flex: none;
+  font-size: var(--text-xs);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.crm-wa-row.is-unanswered .crm-wa-row-time {
+  color: var(--success);
+  font-weight: var(--weight-semibold);
+}
+.crm-wa-row-preview {
+  flex: 1;
+  min-width: 0;
+}
+.crm-wa-row.is-unanswered .crm-wa-row-preview {
+  color: var(--text);
+}
+/* "Não enviada" inside a row is a word in red, not the boxed error of a form. */
+.crm-wa-row-preview .crm-error {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: inherit;
+}
+.crm-wa-row-preview mark {
+  background: var(--warning-soft);
+  color: inherit;
+  border-radius: 2px;
+}
+.crm-wa-web .crm-wa-row .crm-wa-badge {
+  flex: none;
+}
+.crm-wa-web .crm-wa-messages {
+  background-color: var(--surface-3);
+  background-image: radial-gradient(
+    color-mix(in srgb, var(--line-strong) 60%, transparent) 1px,
+    transparent 1px
+  );
+  background-size: 22px 22px;
+}
+.crm-wa-web .crm-wa-messages.has-messages {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  padding: var(--space-4) clamp(var(--space-4), 6%, 64px);
+}
+.crm-wa-web .crm-wa-list {
+  gap: var(--space-1);
+}
+.crm-wa-web .crm-wa-bubble {
+  max-width: min(560px, 75%);
+  padding: 6px 9px;
+  border-color: transparent;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 1px 0.5px color-mix(in srgb, var(--text) 14%, transparent);
+}
+.crm-wa-web .crm-wa-bubble.is-in {
+  border-top-left-radius: 0;
+}
+.crm-wa-web .crm-wa-bubble.is-out {
+  background: var(--success-soft);
+  border-top-right-radius: 0;
+}
+.crm-wa-web .crm-wa-bubble.is-sofia {
+  border-color: var(--line-strong);
+}
+.crm-wa-web .crm-wa-bubble.is-failed {
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+}
+@media (max-width: 760px) {
+  .crm-wa-web {
+    height: calc(100dvh - var(--topbar-h) - 2 * var(--space-4));
+  }
+  .crm-wa-web .crm-wa-bubble {
+    max-width: 88%;
+  }
 }
 
 /* ---------- aviso de lead novo (pop-up) ---------- */

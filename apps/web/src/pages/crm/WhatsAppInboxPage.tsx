@@ -17,15 +17,18 @@ import {
 } from '../../api/whatsapp.js';
 import { Icon } from '../../components/Icon.js';
 import { LoadFailure } from '../../components/LoadFailure.js';
-import { ago, formatPhone } from './format.js';
+import { formatDateTime, formatPhone } from './format.js';
 import { WhatsAppChat } from './WhatsAppChat.js';
 import { WhatsAppNewConversation } from './WhatsAppNewConversation.js';
+import { listTimeOf } from './whatsapp-time.js';
 
 /**
- * CRM Vendas → WhatsApp, as WhatsApp Web for each person (Eric, 07/10): the
- * conversations on the left (search, unread for this reader, the last
- * message's status), the open one on the right, and "Nova conversa" from the
- * company number. A seller sees the conversations of their own deals; Admin
+ * CRM Vendas → WhatsApp, as WhatsApp Web for each person (Eric, 07/10), laid
+ * out as WhatsApp Desktop (20/10): the conversations on the left (search by
+ * name, phone or a message's text, unread for this reader, the last message's
+ * status), the open one on the right, and "Nova conversa" from the company
+ * number. New messages show at once: the stream every screen keeps open makes
+ * the list and the open conversation fetch again (`api/whatsapp-inbox.ts`). A seller sees the conversations of their own deals; Admin
  * and Diretoria see every one, Sofia's included (writing in one takes it from
  * her). New conversations reach Sofia first (her own screen); when she hands
  * one over it shows up here for the deal's owner.
@@ -119,7 +122,7 @@ function WhatsAppWeb({ openId }: { openId?: string }) {
           className="crm-input"
           type="search"
           aria-label="Buscar conversa"
-          placeholder="Buscar por nome ou telefone"
+          placeholder="Buscar nome, telefone ou mensagem"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
         />
@@ -157,7 +160,7 @@ function WhatsAppWeb({ openId }: { openId?: string }) {
         <ul className="crm-wa-web-rows">
           {rows.map((row) => (
             <li key={row.conversationId}>
-              <ConversationRow row={row} active={row.conversationId === openId} />
+              <ConversationRow row={row} active={row.conversationId === openId} term={q} />
             </li>
           ))}
         </ul>
@@ -177,44 +180,102 @@ function WhatsAppWeb({ openId }: { openId?: string }) {
   );
 }
 
-function ConversationRow({ row, active }: { row: WaConversationItem; active: boolean }) {
+/** WhatsApp Desktop's round picture: the initials on one of the theme's tones, fixed per conversation. */
+function Avatar({ name, seed }: { name: string; seed: string }) {
+  const words = name.match(/\p{L}+/gu) ?? [];
+  // By code point: a profile name in a "fancy" alphabet (𝓜𝓪𝓻𝓲𝓪) is two units per letter.
+  const initialOf = (word: string | undefined) => (word ? [...word][0] : undefined);
+  const first = initialOf(words[0]);
+  const last = words.length > 1 ? initialOf(words.at(-1)) : undefined;
+  let hash = 0;
+  for (const char of seed) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  const tone = (hash % 8) + 1;
+  return (
+    <span
+      className="crm-wa-avatar"
+      aria-hidden="true"
+      style={{ background: `var(--stage-${tone})`, color: `var(--stage-${tone}-fg)` }}
+    >
+      {first ? `${first}${last ?? ''}`.toUpperCase() : <Icon name="user" size={16} />}
+    </span>
+  );
+}
+
+/** A found message with the searched term marked (the API cut it around the term). */
+function Marked({ text, term }: { text: string; term: string }) {
+  const wanted = term.replace(/\s+/g, ' ').trim();
+  const at = wanted
+    ? text.toLocaleLowerCase('pt-BR').indexOf(wanted.toLocaleLowerCase('pt-BR'))
+    : -1;
+  if (at < 0) return <>{text}</>;
+  return (
+    <>
+      {text.slice(0, at)}
+      <mark>{text.slice(at, at + wanted.length)}</mark>
+      {text.slice(at + wanted.length)}
+    </>
+  );
+}
+
+function ConversationRow({
+  row,
+  active,
+  term,
+}: {
+  row: WaConversationItem;
+  active: boolean;
+  term: string;
+}) {
   const tick = row.lastDirection === 'out' && row.lastStatus ? TICKS[row.lastStatus] : null;
   const withSofia = row.attendance === 'sofia' || row.attendance === 'waiting_human';
   const read = row.lastStatus === 'read' || row.lastStatus === 'played';
+  const name = nameOf(row);
+  // A search that found a message shows that message, as WhatsApp's search does.
+  const at = row.match?.at ?? row.lastAt;
   return (
     <Link
       className={`crm-wa-row${row.unreadCount > 0 ? ' is-unanswered' : ''}${active ? ' is-active' : ''}`}
       to={`/crm-vendas/whatsapp/${row.conversationId}`}
       aria-current={active ? 'true' : undefined}
     >
-      <span className="crm-wa-avatar" aria-hidden="true">
-        <Icon name="message" size={16} />
-      </span>
+      <Avatar name={name} seed={row.conversationId} />
       <span className="crm-wa-row-main">
-        <b>{nameOf(row)}</b>
-        <span className="crm-sub">
-          {tick && row.lastStatus && (
-            <span
-              className={`crm-wa-tick${read ? ' is-read' : ''}`}
-              title={WA_STATUS_LABELS[row.lastStatus]}
-              aria-label={WA_STATUS_LABELS[row.lastStatus]}
-            >
-              {tick}{' '}
+        <span className="crm-wa-row-line">
+          <b>{name}</b>
+          {at && (
+            <time className="crm-wa-row-time" dateTime={at} title={formatDateTime(at)}>
+              {listTimeOf(at)}
+            </time>
+          )}
+        </span>
+        <span className="crm-wa-row-line">
+          <span className="crm-sub crm-wa-row-preview">
+            {row.match ? (
+              <Marked text={row.match.text} term={term} />
+            ) : (
+              <>
+                {tick && row.lastStatus && (
+                  <span
+                    className={`crm-wa-tick${read ? ' is-read' : ''}`}
+                    title={WA_STATUS_LABELS[row.lastStatus]}
+                    aria-label={WA_STATUS_LABELS[row.lastStatus]}
+                  >
+                    {tick}{' '}
+                  </span>
+                )}
+                {row.lastStatus === 'failed' && <span className="crm-error">Não enviada · </span>}
+                {row.preview ?? '—'}
+              </>
+            )}
+          </span>
+          {withSofia && <span className="crm-wa-badge">{SOFIA_STATE_LABELS[row.attendance]}</span>}
+          {!row.leadId && !withSofia && <span className="crm-wa-badge">Sem negociação</span>}
+          {row.unreadCount > 0 && (
+            <span className="crm-wa-unread" aria-label={`${row.unreadCount} não lidas`}>
+              {row.unreadCount}
             </span>
           )}
-          {row.lastStatus === 'failed' && <span className="crm-error">Não enviada · </span>}
-          {row.preview ?? '—'}
         </span>
-      </span>
-      <span className="crm-wa-row-side">
-        <span className="crm-sub">{row.lastAt ? ago(row.lastAt) : ''}</span>
-        {row.unreadCount > 0 && (
-          <span className="crm-wa-unread" aria-label={`${row.unreadCount} não lidas`}>
-            {row.unreadCount}
-          </span>
-        )}
-        {withSofia && <span className="crm-wa-badge">{SOFIA_STATE_LABELS[row.attendance]}</span>}
-        {!row.leadId && !withSofia && <span className="crm-wa-badge">Sem negociação</span>}
       </span>
     </Link>
   );
@@ -263,9 +324,7 @@ function OpenConversation({ id, item }: { id: string; item: WaConversationItem |
           ‹ Conversas
         </Link>
         <div className="crm-wa-who">
-          <span className="crm-wa-avatar" aria-hidden="true">
-            <Icon name="message" size={18} />
-          </span>
+          <Avatar name={name} seed={id} />
           <div>
             <h1>{name}</h1>
             <span className="crm-sub">

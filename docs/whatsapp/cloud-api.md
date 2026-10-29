@@ -115,6 +115,34 @@ permissão. O que o Eric faz na Meta e o roteiro da troca do número ficam em `/
 - Webhooks repetidos e fora de ordem (o fim pode vir antes do começo) são aceitos.
 - A ligação é uma por navegador, e continua ao trocar de tela (fica num cartão no canto).
 
+## Caixa como o WhatsApp Desktop (b2, 20/10)
+
+- **Tela:** uma janela da altura da tela, a lista à esquerda e a conversa à direita, cada uma rolando por si.
+  Linhas lisas com as iniciais num tom fixo por conversa, hora de hoje pelo relógio e as outras por dia
+  ("Ontem", dia da semana, data; `pages/crm/whatsapp-time.ts`), e a marca do dia sobre a primeira mensagem
+  de cada dia (também na aba da negociação).
+- **Busca no texto:** `GET /whatsapp/conversations?q=` procura no nome, no telefone (4+ dígitos) e, a partir
+  de 3 letras (`WA_TEXT_SEARCH_MIN`), no texto das mensagens, nas mesmas conversas que a pessoa já alcança
+  (vendedor: as das suas negociações; sem negociação, só quem vê tudo). A linha traz a última mensagem achada,
+  cortada em volta do termo (`match`). Reação não conta; `%` e `_` valem como digitados. O log da requisição
+  corta a query string; mas, se o banco falhar no meio da busca, a mensagem de erro do drizzle leva o termo
+  para o log, como acontece em toda rota com consulta (pendência à parte: um tratador de erro que registre só o
+  nome e o código). Sem índice: `ILIKE` em `wa_messages.text` das conversas alcançadas; se ficar lento com
+  muitas conversas importadas, o próximo passo é um índice trigram (migração). O filtro "Não lidas" roda na
+  consulta, antes do limite de 200, para achar o que o menu conta.
+- **Não lidas no menu:** `GET /whatsapp/inbox/summary` (`modules/whatsapp/inbox.ts`) diz quantas conversas
+  do alcance de quem lê têm mensagem da pessoa ainda não aberta (a mesma regra da lista, `unreadMessageOf`) e
+  um carimbo que muda quando uma delas recebe mensagem, troca de mãos ou é lida. O item WhatsApp do menu mostra
+  o número (99+ acima de 99); vendedor vê "em breve" até o número oficial ligar.
+- **Mensagem nova na hora:** o mesmo stream das ligações (`GET /whatsapp/calls/stream`) manda também
+  `event: inbox` com esse resumo, na conexão e quando muda. O webhook com mensagem ou status, todo envio
+  (`outbox.ts`, equipe e Sofia) e a abertura de uma conversa avisam os streams (`inbox-signal.ts`, só no
+  processo da API, sem dado da mensagem); a batida de 15 s cobre o resto (troca de dono, a Sofia passando a
+  conversa). Quando o carimbo muda, a tela busca de novo a lista e a conversa aberta
+  (`api/whatsapp-inbox.ts`). Com o stream fora, o resumo é perguntado a cada 30 s e as telas seguem com as
+  próprias atualizações (conversa 5 s, lista 10 s). Status de entrega sozinho não move o carimbo: os vistos
+  aparecem pela atualização da própria tela.
+
 ## Acesso
 
 Uma permissão, `leads.whatsapp` (ver, enviar e ligar), pela regra única `leadInScope`
@@ -135,7 +163,8 @@ cadastrados na Meta. Os outros níveis não mudam.
 | `GET /leads/:id/whatsapp`                                                 | Conversa da negociação, janela, opt-out, `configured`   |
 | `POST /leads/:id/whatsapp/text`                                           | Texto livre (só dentro das 24 h)                        |
 | `POST /leads/:id/whatsapp/template`                                       | Modelo aprovado com os campos `{{n}}`                   |
-| `GET /whatsapp/conversations[?unanswered=1]`                              | Lista no escopo de quem lê                              |
+| `GET /whatsapp/conversations[?filter=&q=]`                                | Lista no escopo de quem lê, com busca no texto          |
+| `GET /whatsapp/inbox/summary`                                             | Conversas não lidas (menu) e o carimbo da caixa         |
 | `GET /whatsapp/conversations/:id` e `POST …/text`, `…/template`           | Conversa sem negociação (escopo total)                  |
 | `GET /whatsapp/templates[?refresh=1]`                                     | Modelos aprovados                                       |
 | `GET`, `POST /whatsapp/templates/manage`, `PUT …/:id`, `PUT …/:id/fields` | Tela de modelos (`modelos.md`)                          |
@@ -144,9 +173,9 @@ cadastrados na Meta. Os outros níveis não mudam.
 | `POST /leads/:id/whatsapp/imports[/preview]`, `GET`, `DELETE …/:batchId`  | Conversa exportada do celular (`importar-conversa.md`)  |
 | `GET /leads/:id/whatsapp/messages?before=<id>`                            | Mensagens anteriores às 500 da tela, uma página por vez |
 
-A tela da conversa se atualiza a cada 5 s e a lista a cada 15 s, com o cabeçalho `x-wings-passive: 1`: o
-servidor responde sem contar como atividade da pessoa, para uma tela aberta não segurar uma sessão ociosa nem
-mexer na hora de saída do ponto.
+A tela da conversa se atualiza a cada 5 s e a lista a cada 10 s (e na hora, pelo stream, quando chega
+mensagem), com o cabeçalho `x-wings-passive: 1`: o servidor responde sem contar como atividade da pessoa, para
+uma tela aberta não segurar uma sessão ociosa nem mexer na hora de saída do ponto.
 
 ## Dados
 
@@ -201,6 +230,9 @@ A cópia dos arquivos para o R2 só rodou contra a Meta simulada e o armazenamen
 a fila aparece no log como `whatsapp_media` (só contagens) e na visão `wa_message_files_analysis`.
 Resposta citada, reação (em especial a tirada, que a Meta manda sem emoji), cartão de contato e localização
 seguem só o formato publicado.
+A caixa como o WhatsApp Desktop foi vista num navegador de verdade só com a API simulada; o aviso de mensagem
+nova pelo stream e a velocidade da busca no texto com as conversas reais (importações do celular incluídas)
+ficam para o staging.
 
 ## Custos (página de preços da Meta, 30/09/2026)
 

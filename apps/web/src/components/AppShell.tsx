@@ -10,6 +10,7 @@ import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useSession } from '../api/auth.js';
 import { useOfficialNumber } from '../api/whatsapp.js';
+import { useInboxSummary } from '../api/whatsapp-inbox.js';
 import { SidebarLogo } from '../brand/SidebarLogo.js';
 import { Icon } from './Icon.js';
 import { NewLeadAlerts } from './NewLeadAlerts.js';
@@ -126,7 +127,7 @@ export function AppShell() {
       {/* Marked, not hidden: the structure stays visible and nobody mistakes
           it for a screen that failed to load. */}
       {submodule.status === 'coming_soon' && <span className="soon-badge">em breve</span>}
-      {submodule.path === '/crm-vendas/whatsapp' && whatsappSeller && <WhatsAppSoonBadge />}
+      {submodule.path === '/crm-vendas/whatsapp' && <WhatsAppMenuBadge seller={whatsappSeller} />}
     </NavLink>
   );
 
@@ -246,8 +247,21 @@ export function AppShell() {
   );
 }
 
-/** Eric, 14/10: a seller's WhatsApp says "em breve" until the official number is live. */
-function WhatsAppSoonBadge() {
-  const official = useOfficialNumber();
-  return official.data?.live === true ? null : <span className="soon-badge">em breve</span>;
+/**
+ * Eric, 14/10: a seller's WhatsApp says "em breve" until the official number is live. Otherwise,
+ * as WhatsApp Desktop (20/10), how many conversations hold a message not opened yet; nothing
+ * while that is zero or not known.
+ */
+function WhatsAppMenuBadge({ seller }: { seller: boolean }) {
+  const official = useOfficialNumber(seller);
+  const inbox = useInboxSummary();
+  if (seller && official.data?.live !== true) return <span className="soon-badge">em breve</span>;
+  const unread = inbox.data?.unread ?? 0;
+  if (unread === 0) return null;
+  return (
+    <span className="menu-badge">
+      {unread > 99 ? '99+' : unread}
+      <span className="sr-only"> {unread === 1 ? 'conversa não lida' : 'conversas não lidas'}</span>
+    </span>
+  );
 }

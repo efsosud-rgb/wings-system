@@ -4,16 +4,22 @@ import { onSessionsEnded } from '../../lib/session-events.js';
 import { PASSIVE_HEADER } from '../../plugins/auth.js';
 import { resolveSession } from '../auth/service.js';
 import { onCallsChanged } from './call-signal.js';
+import { inboxSummaryOf } from './inbox.js';
+import { onInboxChanged } from './inbox-signal.js';
 import { RING_MS, ringingFor } from './ringing.js';
 
 /**
- * The ringing calls, pushed. `GET /whatsapp/calls/stream` is a `text/event-stream`
- * the call center keeps open instead of asking `GET /whatsapp/calls/ringing`
- * every few seconds:
+ * The ringing calls and the inbox, pushed. `GET /whatsapp/calls/stream` is a
+ * `text/event-stream` every screen keeps open instead of asking
+ * `GET /whatsapp/calls/ringing` and `GET /whatsapp/inbox/summary` every few seconds:
  *
  * - `event: ringing` carries the whole answer (what the poll route returns) once on
  *   connect and again only when it changed. Whole, never a delta, so a missed
  *   event costs nothing and the screen has no state to get out of step.
+ * - `event: inbox` does the same with the reader's inbox summary (`inbox.ts`): the
+ *   menu's unread count and the stamp that tells the screens to fetch their lists
+ *   and the open conversation again. It looks again on every message signal
+ *   (`inbox-signal.ts`) and at each beat.
  * - `event: session_ended` says the session behind the stream is gone (idle,
  *   12 hours, logout, deactivation, a changed role) and the reply closes. The
  *   screen treats it as a 401.
@@ -107,9 +113,6 @@ export const whatsappRingingStreamRoutes: FastifyPluginAsync = async (app) => {
       socket?.setKeepAlive?.(true, 30_000);
 
       let closed = false;
-      let last: string | null = null;
-      let busy = false;
-      let again = false;
       let beat: NodeJS.Timeout | undefined;
       let expiry: NodeJS.Timeout | undefined;
       perPerson.set(employeeId, (perPerson.get(employeeId) ?? 0) + 1);
@@ -128,6 +131,7 @@ export const whatsappRingingStreamRoutes: FastifyPluginAsync = async (app) => {
         clearTimeout(beat);
         clearTimeout(expiry);
         offCalls();
+        offInbox();
         offEnded();
         open.delete(end);
         const left = (perPerson.get(employeeId) ?? 1) - 1;
@@ -140,37 +144,52 @@ export const whatsappRingingStreamRoutes: FastifyPluginAsync = async (app) => {
       };
       open.add(end);
 
-      /** Looks at the calls and sends the answer when it differs from the last one sent. */
-      const look = async () => {
-        if (closed) return;
-        if (busy) {
-          again = true;
-          return;
-        }
-        busy = true;
-        try {
-          do {
-            again = false;
-            const snapshot = await ringingFor(db, env, fetchImpl(), actor, now());
-            if (closed) return;
-            const text = JSON.stringify(snapshot);
-            if (text !== last) {
-              last = text;
-              write(`event: ringing\ndata: ${text}\n\n`);
-            }
-            if (closed) return;
-            watchRingEnd(snapshot);
-          } while (again && !closed);
-        } catch (error) {
-          // The calls and their people never reach the log; the screen keeps its last answer.
-          request.log.error(
-            { err: error instanceof Error ? error.name : 'unknown' },
-            'ringing look',
-          );
-        } finally {
-          busy = false;
-        }
+      /**
+       * Looks at one answer and sends it as `event` when it differs from the last one sent.
+       * A look asked for while one runs makes one more after it, never two side by side.
+       */
+      const looker = <T>(event: string, answer: () => Promise<T>, then?: (value: T) => void) => {
+        let last: string | null = null;
+        let busy = false;
+        let again = false;
+        return async () => {
+          if (closed) return;
+          if (busy) {
+            again = true;
+            return;
+          }
+          busy = true;
+          try {
+            do {
+              again = false;
+              const value = await answer();
+              if (closed) return;
+              const text = JSON.stringify(value);
+              if (text !== last) {
+                last = text;
+                write(`event: ${event}\ndata: ${text}\n\n`);
+              }
+              if (closed) return;
+              then?.(value);
+            } while (again && !closed);
+          } catch (error) {
+            // The calls, messages and their people never reach the log; the screen keeps its last answer.
+            request.log.error(
+              { err: error instanceof Error ? error.name : 'unknown' },
+              `${event} look`,
+            );
+          } finally {
+            busy = false;
+          }
+        };
       };
+
+      const look = looker(
+        'ringing',
+        () => ringingFor(db, env, fetchImpl(), actor, now()),
+        (snapshot) => watchRingEnd(snapshot),
+      );
+      const lookInbox = looker('inbox', () => inboxSummaryOf(db, actor));
 
       /** A ring that runs out changes the answer with nobody writing anything: look then. */
       const watchRingEnd = (snapshot: WaRingingSnapshot) => {
@@ -198,9 +217,11 @@ export const whatsappRingingStreamRoutes: FastifyPluginAsync = async (app) => {
         // delay the next ping, or the screen cuts a stream that is only slow.
         if (!closed) beat = setTimeout(() => void heartbeat(), tickMs);
         await look();
+        await lookInbox();
       };
 
       const offCalls = onCallsChanged(() => void look());
+      const offInbox = onInboxChanged(() => void lookInbox());
       const offEnded = onSessionsEnded((ended) => {
         if (
           ('sessionId' in ended && ended.sessionId === sessionId) ||
@@ -214,6 +235,7 @@ export const whatsappRingingStreamRoutes: FastifyPluginAsync = async (app) => {
       write(': stream\n\n');
       beat = setTimeout(() => void heartbeat(), tickMs);
       await look();
+      await lookInbox();
     },
   );
 };

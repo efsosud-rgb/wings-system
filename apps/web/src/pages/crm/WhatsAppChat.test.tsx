@@ -376,3 +376,46 @@ describe('locations', () => {
     ).toBeTruthy();
   });
 });
+
+describe('the day marks', () => {
+  it('puts the day over the first message of each day, across an older page too', async () => {
+    const day = (d: number, h: number) => new Date(2026, 8, d, h, 0).toISOString();
+    const shown = [
+      ...run('new', WA_MESSAGES_PAGE - 1, Date.parse(day(10, 10))),
+      message({ id: 'late', text: 'outro dia', at: day(11, 9) }),
+    ];
+    const older = [message({ id: 'old', text: 'bem antes', at: day(9, 8) })];
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ messages: older }), { status: 200 }));
+    show(shown);
+    const marks = () => screen.getAllByRole('separator').map((li) => li.textContent);
+    expect(marks()).toEqual(['10/09/2026', '11/09/2026']);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Mostrar mensagens anteriores' }));
+    await screen.findByText('bem antes');
+    expect(marks()).toEqual(['09/09/2026', '10/09/2026', '11/09/2026']);
+    // A mark is not a message: the balloons are counted as before.
+    expect(
+      screen.getAllByRole('listitem').filter((li) => li.className.includes('crm-wa-bubble')),
+    ).toHaveLength(WA_MESSAGES_PAGE + 1);
+  });
+});
+
+describe('a message stored late', () => {
+  it('brings its day back where it sits, with no key repeated', () => {
+    const day = (d: number, h: number) => new Date(2025, 9, d, h, 0).toISOString();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    show([
+      message({ id: 'a', text: 'segunda', at: day(19, 9) }),
+      // Meta delivered it late (the server was down): stored after, sent the day before.
+      message({ id: 'b', text: 'domingo', at: day(18, 22) }),
+      message({ id: 'c', text: 'segunda de novo', at: day(19, 10) }),
+    ]);
+    expect(screen.getAllByRole('separator').map((li) => li.textContent)).toEqual([
+      '19/10/2025',
+      '18/10/2025',
+      '19/10/2025',
+    ]);
+    expect(errors.mock.calls.some((call) => String(call[0]).includes('same key'))).toBe(false);
+    errors.mockRestore();
+  });
+});

@@ -103,6 +103,22 @@ describe('reading the stream', () => {
     expect(handlers.onLive).toHaveBeenCalledTimes(1);
   });
 
+  it('hands over the inbox summary, which also says the connection is live', async () => {
+    const onInbox = vi.fn();
+    close = openRingingStream({ ...handlers, onInbox });
+    await settle(10);
+    connections[0]!.stream!.push(
+      'event: inbox\ndata: {"unread":1}\n\nevent: inbox\ndata: {"unread":2,"stamp":"s"}\n\n',
+    );
+    await settle(10);
+    expect(onInbox.mock.calls).toEqual([[{ unread: 2, stamp: 's' }]]);
+    expect(handlers.onLive).toHaveBeenCalledWith(true);
+    expect(handlers.onSnapshot).not.toHaveBeenCalled();
+    connections[0]!.stream!.end();
+    await settle(10);
+    expect(handlers.onLive).toHaveBeenLastCalledWith(false);
+  });
+
   it('ignores pings, events it does not know and answers that are not one', async () => {
     open();
     await settle(10);

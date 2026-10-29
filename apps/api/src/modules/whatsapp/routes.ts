@@ -8,6 +8,7 @@ import {
   waTemplateSendSchema,
   waSendTextSchema,
   WA_ART_SUFFIX,
+  WA_TEXT_SEARCH_MIN,
   type WaArtLink,
   type WaConversationItem,
   type WaNewTarget,
@@ -58,6 +59,8 @@ import {
   buildThread,
   conversationItemOf,
   conversationListSql,
+  likeOf,
+  unreadMessageOf,
   markConversationRead,
   type ConversationListRow,
   contactOfPhone,
@@ -69,6 +72,8 @@ import {
 import { takeConversation } from '../sofia/state.js';
 import { adoptUnmatched, conversationFor } from './intake.js';
 import { syncTemplates } from './templates.js';
+import { inboxSummaryOf } from './inbox.js';
+import { notifyInboxChanged } from './inbox-signal.js';
 import {
   payloadOf,
   planTemplateFor,
@@ -182,29 +187,47 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     if (!query.success)
       return reply.status(400).send({ error: 'invalid', message: 'Filtro inválido.' });
     const filter = query.data.filter ?? (query.data.unanswered === '1' ? 'unanswered' : 'all');
-    const q = query.data.q;
+    const q = query.data.q || undefined;
     const digits = q?.replace(/\D/g, '') ?? '';
+    const like = q ? likeOf(q) : '';
+    // Inside the messages too (Eric, 20/10), from a few letters on. The request log drops the
+    // query string; a database error's message would carry it, as on every route (docs).
+    const textLike = q && q.length >= WA_TEXT_SEARCH_MIN ? like : undefined;
+    const readerId = request.session.actor.employeeId;
     const rows = await db.execute<ConversationListRow>(
       conversationListSql({
         owner: leadOwnerFilter(request.session.actor, 'leads.whatsapp'),
-        readerId: request.session.actor.employeeId,
+        readerId,
         limit: 200,
+        textLike,
         where: sql`
           ${filter === 'unanswered' ? sql`and m.direction = 'in'` : sql``}
           ${
+            // In the query, so the 200 are 200 unread ones: the menu counts them all (inbox.ts).
+            filter === 'unread'
+              ? sql`and exists (select 1 from wa_messages u where ${unreadMessageOf(readerId)})`
+              : sql``
+          }
+          ${
             q
-              ? sql`and (k.profile_name ilike ${`%${q}%`} or l.name ilike ${`%${q}%`}
-                    ${digits.length >= 4 ? sql`or k.phone like ${`%${digits}%`}` : sql``})`
+              ? sql`and (k.profile_name ilike ${like} or l.name ilike ${like}
+                    ${digits.length >= 4 ? sql`or k.phone like ${`%${digits}%`}` : sql``}
+                    ${textLike ? sql`or f.text is not null` : sql``})`
               : sql``
           }`,
       }),
     );
     const at = now();
-    const items: WaConversationItem[] = rows.rows
-      .map((row) => conversationItemOf(row, at))
-      .filter((item) => filter !== 'unread' || item.unreadCount > 0);
+    const items: WaConversationItem[] = rows.rows.map((row) =>
+      conversationItemOf(row, at, textLike ? q : undefined),
+    );
     return reply.send({ conversations: items });
   });
+
+  /** The menu's count of unread conversations and the stamp the screens watch (`inbox.ts`). */
+  app.get('/whatsapp/inbox/summary', use, async (request, reply) =>
+    reply.send(await inboxSummaryOf(db, request.session.actor)),
+  );
 
   /** The reader opened the conversation: its messages so far are read, for them only. */
   app.post('/whatsapp/conversations/:id/read', use, async (request, reply) => {
@@ -212,6 +235,8 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     const found = params.success ? await visibleConversation(request, params.data.id) : null;
     if (!found) return notFound(reply);
     await markConversationRead(db, found.conversation.id, request.session.actor.employeeId);
+    // The reader's other tabs (and the menu of this one) count it read at once.
+    notifyInboxChanged();
     return reply.status(204).send();
   });
 

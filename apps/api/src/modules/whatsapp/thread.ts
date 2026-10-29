@@ -330,19 +330,41 @@ export interface ConversationListRow extends Record<string, unknown> {
   text: string | null;
   status: string | null;
   unread: number;
+  /** With `textLike`: the latest message whose text matched (`f` in the query). */
+  match_text?: string | null;
+  match_at?: Date | string | null;
 }
+
+/**
+ * A message `u` of the conversation `c` that the reader has not opened: the
+ * person's, after the reader's last opening, or after our last reply when they
+ * never opened it. One rule for the list's counts and the inbox total.
+ */
+export const unreadMessageOf = (readerId: string) => sql`
+  u.conversation_id = c.id and u.direction = 'in' and u.import_batch_id is null
+  and u.created_at > coalesce(
+    (select r.read_at from wa_conversation_reads r
+      where r.conversation_id = c.id and r.employee_id = ${readerId}),
+    (select max(o.created_at) from wa_messages o
+      where o.conversation_id = c.id and o.direction = 'out' and o.author <> 'system'),
+    '-infinity'::timestamptz)`;
+
+/** An ILIKE pattern that finds `term` as typed: `%`, `_` and `\` in it are plain characters. */
+export const likeOf = (term: string) => `%${term.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
 /**
  * The conversations a reader may see (`owner` = their id when they see only
  * their own deals' ones), newest first, with the last message and how many
- * of the person's messages this reader has not opened (after their last
- * opening, or after our last reply when they never opened it).
+ * of the person's messages this reader has not opened (`unreadMessageOf`).
+ * With `textLike`, each row also brings its latest message whose text matches
+ * (`f`), for `where` to filter on: the same conversations, so the same reach.
  */
 export function conversationListSql(input: {
   owner: string | undefined;
   readerId: string;
   where: SQL;
   limit: number;
+  textLike?: string;
 }) {
   return sql`
     select c.id, c.lead_id, l.name as lead_name, l.pipeline as lead_pipeline,
@@ -350,13 +372,8 @@ export function conversationListSql(input: {
            c.last_message_at, c.attendance, c.segment, c.state_changed_at, c.reason,
            b.name as brand_name, m.direction, m.kind, m.text, m.status,
            (select count(*)::int from wa_messages u
-             where u.conversation_id = c.id and u.direction = 'in' and u.import_batch_id is null
-               and u.created_at > coalesce(
-                 (select r.read_at from wa_conversation_reads r
-                   where r.conversation_id = c.id and r.employee_id = ${input.readerId}),
-                 (select max(o.created_at) from wa_messages o
-                   where o.conversation_id = c.id and o.direction = 'out' and o.author <> 'system'),
-                 '-infinity'::timestamptz)) as unread
+             where ${unreadMessageOf(input.readerId)}) as unread
+           ${input.textLike ? sql`, f.text as match_text, f.at as match_at` : sql``}
     from wa_conversations c
     join wa_contacts k on k.id = c.contact_id
     left join leads l on l.id = c.lead_id
@@ -367,6 +384,16 @@ export function conversationListSql(input: {
       -- The system's own call-permission request is not an answer: the conversation stays waiting.
       where conversation_id = c.id and author <> 'system' order by created_at desc limit 1
     ) m on true
+    ${
+      input.textLike
+        ? sql`left join lateral (
+            select s.text, coalesce(s.wa_timestamp, s.created_at) as at from wa_messages s
+            where s.conversation_id = c.id and s.kind <> 'reaction'
+              and s.text ilike ${input.textLike}
+            order by s.created_at desc limit 1
+          ) f on true`
+        : sql``
+    }
     where c.last_message_at is not null
       ${input.owner === undefined ? sql`` : sql`and l.owner_employee_id = ${input.owner}`}
       ${input.where}
@@ -374,7 +401,22 @@ export function conversationListSql(input: {
     limit ${input.limit}`;
 }
 
-export function conversationItemOf(row: ConversationListRow, now: Date): WaConversationItem {
+/** About `size` characters of a found message around the first place `term` is. */
+export function snippetOf(text: string, term: string, size = 80): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  if (flat.length <= size) return flat;
+  const at = flat
+    .toLocaleLowerCase('pt-BR')
+    .indexOf(term.replace(/\s+/g, ' ').trim().toLocaleLowerCase('pt-BR'));
+  const start = Math.max(0, Math.min(at - 20, flat.length - size));
+  return `${start > 0 ? '…' : ''}${flat.slice(start, start + size)}${start + size < flat.length ? '…' : ''}`;
+}
+
+export function conversationItemOf(
+  row: ConversationListRow,
+  now: Date,
+  term?: string,
+): WaConversationItem {
   const lastInbound = row.last_inbound_at ? new Date(row.last_inbound_at) : null;
   const kind = (row.kind ?? 'text') as WaMessageKind;
   return {
@@ -393,6 +435,12 @@ export function conversationItemOf(row: ConversationListRow, now: Date): WaConve
     lastStatus: row.direction === 'out' ? ((row.status ?? 'pending') as WaMessageStatus) : null,
     attendance: row.attendance as SofiaState,
     ownerName: row.owner_name,
+    ...(term !== undefined && {
+      match:
+        row.match_text && row.match_at
+          ? { text: snippetOf(row.match_text, term), at: new Date(row.match_at).toISOString() }
+          : null,
+    }),
   };
 }
 
