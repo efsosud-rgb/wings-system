@@ -10,10 +10,10 @@ Tela: `/crm-vendas/prospeccao` (menu CRM Vendas → Prospecção). Código: `app
 
 - **Só o `place_id` é guardado.** Nome, endereço, telefone, site, nota, avaliações, horário, tipos e link do Maps vêm ao vivo em cada resposta e não entram em tabela, log, auditoria nem linha do tempo do lead. As tabelas novas não têm coluna com esses nomes, e um teste (`prospecting.test.ts`) falha se uma aparecer; outro teste busca, reserva, abre a ficha, cria o lead e confere que nada do Google ficou no banco.
 - **Ao vivo.** A busca e a ficha chamam o Google a cada clique; a tela guarda o resultado só na memória da página (nada no navegador). "Meus prospects" mostra só os nossos dados (status, dono, motivo, observações, o que o site mostrou); o nome e os contatos aparecem ao abrir a ficha.
-- **Atribuição.** A lista mostra "Resultados do Google Maps" e cada empresa tem "Abrir no Google Maps" (o `googleMapsUri` da resposta). Nenhum outro mapa.
+- **Atribuição** (corrigida em 29/10). Dados do Places sem um mapa do Google pedem o **logo oficial "Google Maps"** ([política do Places API (New)](https://developers.google.com/maps/documentation/places/web-service/policies)): 16 a 19 px de altura, 10 px livres dos lados e em cima e 5 embaixo, a versão sem contorno em fundo liso, rótulo de acessibilidade "Google Maps", sem nenhuma alteração. O arquivo é o do próprio Google, sem mudança: `apps/web/public/google/GoogleMaps_Logo_Gray.svg`, tirado de `Google_Maps_Attribution_Assets.zip` (link "Download the Google Maps attribution assets" dessa página). `GoogleMapsLogo` (em `GooglePlacePanel.tsx`) mostra o logo com 18 px no topo do bloco de resultados ("Dados: [logo] consultados agora e não guardados.") e na ficha (cartão do lead e cartão do prospect). A lista continua com o título "Resultados do Google Maps" e cada empresa com "Abrir no Google Maps" (o `googleMapsUri` da resposta). O texto "Google Maps" só vale onde o logo não couber (hoje, nenhum lugar). Nenhum outro mapa.
 - **Nada do Google vai para IA.** A IA só transforma a frase do vendedor ("hamburguerias em Icaraí com nota 4,5+") em parâmetros (segmento, locais, nota mínima, avaliações mínimas, só com site). Ela nunca busca: o vendedor clica em "Usar no formulário" e depois em Buscar. Teto: 60 frases por pessoa por dia (**429** `parse_quota`), contadas no log de auditoria `prospect.query_parsed`, gravado antes da chamada e sem o texto.
 - **Chave só no servidor.** `GOOGLE_PLACES_API_KEY` vai no cabeçalho `X-Goog-Api-Key`, nunca numa URL, num log ou numa resposta. Sem ela, toda rota que chama o Google responde **503** `places_not_configured` ("Chave do Google não configurada.") e a tela mostra "— Chave do Google não configurada." antes de qualquer busca (`GET /prospecting/status`).
-- Erro do Google: o log leva só o código e o status HTTP; a tela recebe 502 com "O Google não respondeu agora…" ou "O Google recusou a chave…". Nenhuma chamada é repetida (pode ter sido cobrada).
+- Erro do Google: o log leva só o código e o status HTTP; a tela recebe 502 com "O Google não respondeu agora…" ou "O Google recusou a chave…". Nenhuma chamada é repetida (pode ter sido cobrada). Numa varredura, um bairro que falha não derruba os outros (desde 29/10): a resposta traz os resultados dos bairros que responderam e `failedPlaces` (bairro e código do erro), e a tela mostra "X de Y locais não responderam: Ingá (o Google demorou demais). As chamadas contaram na cota." Só quando todos falham é o 502 de antes. A cota conta todas as chamadas feitas, as que falharam também.
 
 ## Quem vê o quê
 
@@ -28,6 +28,13 @@ Tela: `/crm-vendas/prospeccao` (menu CRM Vendas → Prospecção). Código: `app
 `prospecting.export` (planilha): Gerente Comercial e Admin Master. Histórico e Números seguem o `prospecting.use`: o vendedor vê os seus, o gerente, a Diretoria e o Admin veem todos.
 
 Um prospect fora do alcance responde 404. "Segurar" é estar `reservado` ou `contatado`: o vendedor não vê na busca a empresa que outro segura (conta em "ocultos"); o gerente vê com "reservado por X".
+
+## Prazos: reserva que expira e dados do site (29/10)
+
+- **Reserva que expira.** Um prospect `reservado` sem atualização há **30 dias** (padrão) e um `contatado` sem atualização há **90 dias** voltam a ficar livres: viram `descartado` com o motivo "Reserva expirada em DD/MM/AAAA". A linha, o dono e as observações ficam; outro vendedor passa a ver a empresa na busca e pode reservá-la (`descartado` não segura, `PROSPECT_HOLDING_STATUSES`). Cada expiração grava `prospect.reservation_expired` (id, status anterior, prazo). "Atualização" é qualquer mudança no prospect (status, motivo, observações, dono, enriquecimento). O cartão em "Meus prospects" mostra "a reserva expira em X dias".
+- **Dados do site.** O `enrichment` (e-mail e links achados no site da empresa) de um prospect que **não virou lead** e ficou **180 dias** sem atualização é apagado (vira `{}`); a linha e o resto ficam. A auditoria guarda só a contagem (`prospecting.enrichment_cleared`, `{ count, days }`). **O padrão de 180 dias está a validar com o advogado.**
+- **Onde mudar.** Ajustes → Prazos (`PUT /prospecting/settings/retention`, `prospecting.configure`, como os pesos ICP), auditado como `prospecting.retention_changed` com o antes e o depois. Faixas: reserva e contatado de 7 a 365 dias, dados do site de 30 a 730. Ficam em `prospecting_settings.settings.retention`, sem migração.
+- **Quando roda.** Na própria API (`apps/api/src/modules/prospecting/retention.ts`), ao subir e a cada 6 horas, sob uma trava (`pg_try_advisory_xact_lock`): com duas réplicas, uma só faz o trabalho. Não chama o Google.
 
 ## Cota de chamadas
 
@@ -104,9 +111,10 @@ No card do lead, "Dados do Google (ao vivo)" carrega a ficha no clique (gasta 1 
 | `GET /prospecting/status`                   | `{ configured, aiConfigured }`, nunca a chave                               |
 | `GET /prospecting/usage`                    | uso do dia e do mês                                                         |
 | `GET /prospecting/owners`                   | quem pode receber um prospect (o vendedor vê só a si)                       |
-| `GET /prospecting/settings`                 | pesos ICP, lista de exclusão, cota                                          |
+| `GET /prospecting/settings`                 | pesos ICP, lista de exclusão, cota, prazos                                  |
 | `PUT /prospecting/settings/icp`             | `prospecting.configure`                                                     |
 | `PUT /prospecting/settings/quota`           | `prospecting.quota`                                                         |
+| `PUT /prospecting/settings/retention`       | prazos de reserva e dos dados do site; `prospecting.configure`              |
 | `POST /prospecting/parse`                   | frase → parâmetros (Haiku 4.5, OpenRouter, sem coleta de dados); 503 sem IA |
 | `POST /prospecting/search`                  | busca ou varredura (503 sem chave, 429 cota, 502 Google)                    |
 | `GET /prospecting/prospects?status=&owner=` | os prospects (só os nossos dados)                                           |
@@ -122,13 +130,13 @@ No card do lead, "Dados do Google (ao vivo)" carrega a ficha no clique (gasta 1 
 | `GET /prospecting/prospects/export.csv`     | planilha só com dados da Wings; `prospecting.export`                        |
 | `POST /prospecting/prospects/:id/approach`  | sugestão de abordagem da IA; nada é enviado                                 |
 
-Auditoria (só ids, status e contagens): `prospect.reserved`, `prospect.discarded`, `prospect.status_changed`, `prospect.transferred`, `prospect.not_found`, `prospect.enriched`, `prospect.converted`, `prospecting.icp_changed`, `prospecting.quota_changed`, `prospecting.exported`, `prospect.approach_suggested`, `prospect.query_parsed`; `prospect.reserved` leva `batch: true` quando veio do lote e `prospect.converted` leva `followUp`.
+Auditoria (só ids, status e contagens): `prospect.reserved`, `prospect.discarded`, `prospect.status_changed`, `prospect.transferred`, `prospect.not_found`, `prospect.enriched`, `prospect.converted`, `prospecting.icp_changed`, `prospecting.quota_changed`, `prospecting.retention_changed`, `prospect.reservation_expired`, `prospecting.enrichment_cleared` (só a contagem), `prospecting.exported`, `prospect.approach_suggested`, `prospect.query_parsed`; `prospect.reserved` leva `batch: true` quando veio do lote e `prospect.converted` leva `followUp`.
 
 ## Dados
 
 - `prospects`: `place_id` (único por tenant), status, dono, motivo, observações, `enrichment`, `lead_id`, quem criou, datas.
 - `prospect_calls`: uma linha por reserva de chamadas (quem, tipo `search`/`details`, segmento e locais que o vendedor digitou, quantas), só inserção.
-- `prospecting_settings`: uma linha por tenant com `{ icp, quota }`; sem linha, os padrões.
+- `prospecting_settings`: uma linha por tenant com `{ icp, quota, retention }`; sem linha (ou parte), os padrões.
 - `leads.google_place_id`.
 - Sem GRANT para `wings_ro` por enquanto (não precisa para a tela); fazer por migração se um dia o painel ou o `wings-staging-sql` precisarem.
 
@@ -144,6 +152,7 @@ Enquanto a chave não existe, a tela mostra "— Conexão com o Google pendente:
 
 - O custo: a tela diz "Custo estimado: R$ 0 enquanto o mês ficar dentro da cota", porque a cota trava em 1.000 por tipo e a documentação do Google dá 1.000 grátis por mês nos SKUs Enterprise (os campos telefone, site e nota). Conferir no faturamento do Google Cloud no primeiro mês.
 - A sugestão de abordagem e a reserva em lote só rodaram com IA e Google simulados.
+- O logo foi conferido contra o texto da política do Google, não por uma revisão do Google; a falha de um bairro só rodou com o Google simulado (tempo esgotado).
 
 - Nenhuma resposta real da Places API foi chamada daqui: os formatos (campos, `nextPageToken`, erros `NOT_FOUND`, `RESOURCE_EXHAUSTED`, `API_KEY_INVALID`) seguem a documentação do Google, e os testes usam respostas inventadas com esse formato (`fake-places-api.ts`). Na primeira busca real no staging, conferir nome, endereço, telefone, nota, página 2 e o link do Maps.
 - O leitor de site real (`requestPage`) não roda nos testes (a rede é bloqueada); os testes passam por um transporte simulado.

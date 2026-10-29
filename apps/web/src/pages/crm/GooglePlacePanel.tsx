@@ -38,6 +38,24 @@ export function MapsLink({ uri }: { uri: string | null }) {
   ) : null;
 }
 
+/**
+ * Google's own "Google Maps" logo, unchanged, from the attribution assets of the Places API
+ * policies (developers.google.com): 18 px high (16 to 19), 10 px clear on the sides and top and
+ * 5 below, the plain variant on a plain background, labelled "Google Maps" and never translated.
+ */
+export function GoogleMapsLogo() {
+  return (
+    <img
+      src="/google/GoogleMaps_Logo_Gray.svg"
+      alt="Google Maps"
+      width={98}
+      height={18}
+      translate="no"
+      style={{ display: 'inline-block', margin: '10px 10px 5px', verticalAlign: 'middle' }}
+    />
+  );
+}
+
 export function PlaceFacts({ place }: { place: PlaceResult }) {
   const site = webUrl(place.website);
   return (
@@ -71,7 +89,7 @@ export function PlaceFacts({ place }: { place: PlaceResult }) {
         </dd>
       </dl>
       <p className="crm-sub">
-        <MapsLink uri={place.mapsUri} /> · Dados: Google Maps
+        <MapsLink uri={place.mapsUri} /> · Dados: <GoogleMapsLogo />
       </p>
     </>
   );

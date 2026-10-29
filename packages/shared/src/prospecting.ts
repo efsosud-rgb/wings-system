@@ -335,9 +335,50 @@ export interface ProspectingUsage {
   month: { searches: number; searchLimit: number; details: number; detailsLimit: number };
 }
 
+// --- retention ----------------------------------------------------------------
+
+/**
+ * How long our own data is kept without an update: a reservation (and a contact) then goes back
+ * to free as `descartado`, and what the company's site showed is cleared from a prospect that
+ * did not become a lead. The enrichment's 180 days are a default still to be checked with the
+ * lawyer (docs/crm/prospeccao.md).
+ */
+export const DEFAULT_PROSPECTING_RETENTION = {
+  reservedDays: 30,
+  contactedDays: 90,
+  enrichmentDays: 180,
+} as const;
+
+const days = (min: number, max: number) =>
+  z.number().int().min(min, `De ${min} a ${max} dias`).max(max, `De ${min} a ${max} dias`);
+
+export const prospectingRetentionSchema = z.object({
+  reservedDays: days(7, 365),
+  contactedDays: days(7, 365),
+  enrichmentDays: days(30, 730),
+});
+export type ProspectingRetention = z.infer<typeof prospectingRetentionSchema>;
+
+const DAY_MS = 86_400_000;
+
+/** When a held prospect goes back to free if nobody touches it; null for a status that holds nothing. */
+export function reservationExpiresAt(
+  prospect: { status: ProspectStatus; updatedAt: string },
+  retention: ProspectingRetention,
+): Date | null {
+  const holdDays =
+    prospect.status === 'reservado'
+      ? retention.reservedDays
+      : prospect.status === 'contatado'
+        ? retention.contactedDays
+        : null;
+  return holdDays === null ? null : new Date(Date.parse(prospect.updatedAt) + holdDays * DAY_MS);
+}
+
 export interface ProspectingSettings {
   icp: ProspectingIcp;
   quota: ProspectingQuota;
+  retention: ProspectingRetention;
   updatedAt: string | null;
 }
 
@@ -457,8 +498,23 @@ export interface ProspectSearchResponse {
   callsSpent: number;
   /** Results left out, so the list never reads as all Google had. */
   hidden: { excluded: number; filtered: number; heldByOthers: number; repeated: number };
+  /** In a sweep, the places Google did not answer (their calls still count): the list is partial. */
+  failedPlaces: { place: string; code: PlacesErrorCode }[];
   usage: ProspectingUsage;
 }
+
+export type PlacesErrorCode =
+  'timeout' | 'unavailable' | 'key_invalid' | 'quota_exceeded' | 'bad_request' | 'not_found';
+
+/** Why a place did not answer, as the screen says it. */
+export const PLACES_ERROR_LABELS: Record<PlacesErrorCode, string> = {
+  timeout: 'o Google demorou demais',
+  unavailable: 'o Google não respondeu',
+  key_invalid: 'o Google recusou a chave',
+  quota_exceeded: 'limite de uso do Google',
+  bad_request: 'pedido recusado pelo Google',
+  not_found: 'não encontrado no Google',
+};
 
 export interface ProspectEnrichedValue {
   value: string;

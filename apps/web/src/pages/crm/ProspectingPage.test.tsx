@@ -22,7 +22,8 @@ vi.mock('../../api/client.js', async (original) => ({
   },
 }));
 
-const { ProspectingPage, hiddenLine, placesOf } = await import('./ProspectingPage.js');
+const { ProspectingPage, expiryLine, failedPlacesLine, hiddenLine, placesOf } =
+  await import('./ProspectingPage.js');
 
 const user = (role: SessionUser['role'], permissions: SessionUser['permissions']): SessionUser => ({
   employeeId: 'e1',
@@ -82,6 +83,7 @@ const answer = (over: Partial<ProspectSearchResponse> = {}): ProspectSearchRespo
   page: 1,
   callsSpent: 1,
   hidden: { excluded: 5, filtered: 4, heldByOthers: 3, repeated: 0 },
+  failedPlaces: [],
   usage,
   ...over,
 });
@@ -102,6 +104,7 @@ beforeEach(() => {
       return {
         icp: { weights: {}, excludedNames: [] },
         quota: { perUserDaily: 40, monthlySearches: 950, monthlyDetails: 950 },
+        retention: { reservedDays: 30, contactedDays: 90, enrichmentDays: 180 },
         updatedAt: null,
       };
     if (path === '/prospecting/prospects') return prospects;
@@ -665,5 +668,107 @@ describe('helpers', () => {
     expect(hiddenLine({ excluded: 0, filtered: 0, heldByOthers: 0, repeated: 2 })).toBe(
       '2 ocultos: 2 repetidos entre os locais',
     );
+  });
+});
+
+describe('correções de 29/10: atribuição, falha parcial, prazos', () => {
+  const RETENTION = { reservedDays: 30, contactedDays: 90, enrichmentDays: 180 };
+
+  it('says which places of a sweep did not answer, and why', () => {
+    expect(failedPlacesLine([], 3)).toBeNull();
+    expect(
+      failedPlacesLine(
+        [
+          { place: 'Ingá', code: 'timeout' },
+          { place: 'Centro', code: 'unavailable' },
+        ],
+        5,
+      ),
+    ).toBe(
+      '2 de 5 locais não responderam: Ingá (o Google demorou demais), Centro (o Google não respondeu). As chamadas contaram na cota.',
+    );
+  });
+
+  it('counts the days left on a reservation, from the deadline of its status', () => {
+    const now = new Date('2026-10-29T12:00:00Z');
+    const at = (daysAgo: number) => new Date(now.getTime() - daysAgo * 86_400_000).toISOString();
+    expect(expiryLine({ status: 'reservado', updatedAt: at(5) }, RETENTION, now)).toBe(
+      'a reserva expira em 25 dias',
+    );
+    expect(expiryLine({ status: 'contatado', updatedAt: at(89) }, RETENTION, now)).toBe(
+      'a reserva expira em 1 dia',
+    );
+    expect(expiryLine({ status: 'reservado', updatedAt: at(31) }, RETENTION, now)).toBe(
+      'a reserva expira hoje',
+    );
+    expect(expiryLine({ status: 'descartado', updatedAt: at(1) }, RETENTION, now)).toBeNull();
+    expect(expiryLine({ status: 'virou_lead', updatedAt: at(1) }, RETENTION, now)).toBeNull();
+  });
+
+  it("shows Google's logo in the results and the places that failed", async () => {
+    post.mockResolvedValue(
+      answer({ callsSpent: 2, failedPlaces: [{ place: 'Ingá', code: 'timeout' }] }),
+    );
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderPage();
+    await waitFor(() =>
+      expect((screen.getByRole('button', { name: 'Buscar' }) as HTMLButtonElement).disabled).toBe(
+        false,
+      ),
+    );
+    fill('Segmento ou nome da empresa', 'hamburgueria');
+    fill('Cidade ou bairros', 'Icaraí, Ingá');
+    fireEvent.click(screen.getByRole('button', { name: 'Buscar' }));
+    const results = await screen.findByRole('region', { name: 'Resultados' });
+    const logo = within(results).getByRole('img', { name: 'Google Maps' });
+    expect(logo.getAttribute('src')).toBe('/google/GoogleMaps_Logo_Gray.svg');
+    expect(logo.getAttribute('height')).toBe('18');
+    expect(within(results).getByRole('alert').textContent).toBe(
+      '— 1 de 2 locais não responderam: Ingá (o Google demorou demais). As chamadas contaram na cota.',
+    );
+    // The results of the place that answered are still there.
+    expect(within(results).getAllByRole('link', { name: 'Abrir no Google Maps' })).toHaveLength(2);
+  });
+
+  it('no failure line when every place answered', async () => {
+    post.mockResolvedValue(answer());
+    renderPage();
+    await waitFor(() =>
+      expect((screen.getByRole('button', { name: 'Buscar' }) as HTMLButtonElement).disabled).toBe(
+        false,
+      ),
+    );
+    fill('Segmento ou nome da empresa', 'hamburgueria');
+    fill('Cidade ou bairros', 'Niterói');
+    fireEvent.click(screen.getByRole('button', { name: 'Buscar' }));
+    const results = await screen.findByRole('region', { name: 'Resultados' });
+    expect(within(results).queryByText(/locais não responderam/)).toBeNull();
+  });
+
+  it('the card of a reserved prospect says when the reservation expires', async () => {
+    prospects = [
+      { ...savedProspect, updatedAt: new Date(Date.now() - 10 * 86_400_000).toISOString() },
+    ];
+    renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Meus prospects' }));
+    expect(await screen.findByText(/a reserva expira em 20 dias/)).toBeTruthy();
+  });
+
+  it('Ajustes has the deadlines for whoever configures, the 180 days marked for the lawyer', async () => {
+    session = MANAGER;
+    renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Ajustes' }));
+    const form = await screen.findByRole('form', { name: 'Prazos' });
+    expect(
+      (within(form).getByLabelText('Reserva sem atualização (dias)') as HTMLInputElement).value,
+    ).toBe('30');
+    expect(
+      (
+        within(form).getByLabelText(
+          'Dados do site guardados sem atualização (dias)',
+        ) as HTMLInputElement
+      ).value,
+    ).toBe('180');
+    expect(within(form).getByText(/a validar com o advogado/)).toBeTruthy();
   });
 });

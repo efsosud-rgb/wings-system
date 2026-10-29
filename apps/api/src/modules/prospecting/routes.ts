@@ -9,6 +9,7 @@ import {
   prospectEnrichSchema,
   prospectingIcpSchema,
   prospectingQuotaSchema,
+  prospectingRetentionSchema,
   prospectLeadSchema,
   prospectParseSchema,
   prospectSearchSchema,
@@ -230,6 +231,23 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
     return reply.send(await loadProspectingSettings(db));
   });
 
+  // Prazos de reserva e de retenção: the same gate as the ICP (the module's rules), audited as the quota.
+  app.put('/prospecting/settings/retention', configure, async (request, reply) => {
+    const body = prospectingRetentionSchema.safeParse(request.body);
+    if (!body.success) return invalid(reply, body.error);
+    const before = await loadProspectingSettings(db);
+    const actor = request.session.actor.employeeId;
+    await saveProspectingPart(db, 'retention', body.data, actor, now());
+    await writeAudit(db, {
+      actorEmployeeId: actor,
+      action: 'prospecting.retention_changed',
+      entity: 'prospecting_settings',
+      ip: request.ip,
+      metadata: { from: before.retention, to: body.data },
+    });
+    return reply.send(await loadProspectingSettings(db));
+  });
+
   // --- the AI and the search -------------------------------------------------------------
 
   app.post('/prospecting/parse', use, async (request, reply) => {
@@ -303,6 +321,11 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
     } catch (error) {
       return googleFailed(request, reply, error);
     }
+    for (const { error } of answer.failed)
+      request.log.warn(
+        { code: error.code, status: error.status },
+        'prospecting: one place of a sweep failed',
+      );
     const settings = await loadProspectingSettings(db);
     let assembled: Awaited<ReturnType<typeof assembleSearch>>;
     try {
@@ -325,6 +348,7 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
       page: input.page,
       callsSpent: calls,
       hidden,
+      failedPlaces: answer.failed.map(({ place, error }) => ({ place, code: error.code })),
       usage: await usageOf(db, actor.employeeId, at),
     } satisfies ProspectSearchResponse);
   });

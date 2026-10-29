@@ -1,4 +1,4 @@
-import { PROSPECT_PAGE_SIZE, type PlaceResult } from '@wings/shared';
+import { PROSPECT_PAGE_SIZE, type PlaceResult, type PlacesErrorCode } from '@wings/shared';
 
 /**
  * Google Places API (New), read only, for Prospecção (docs/crm/prospeccao.md).
@@ -18,9 +18,6 @@ export const SEARCH_FIELD_MASK =
   'places.id,places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.websiteUri,places.rating,places.userRatingCount,places.businessStatus,places.googleMapsUri,places.types,nextPageToken';
 export const DETAILS_FIELD_MASK =
   'id,displayName,formattedAddress,nationalPhoneNumber,websiteUri,rating,userRatingCount,businessStatus,googleMapsUri,types';
-
-export type PlacesErrorCode =
-  'timeout' | 'unavailable' | 'key_invalid' | 'quota_exceeded' | 'bad_request' | 'not_found';
 
 export class PlacesError extends Error {
   constructor(
