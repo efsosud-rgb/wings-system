@@ -33,7 +33,7 @@ import {
   type RefObject,
 } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { hasPermission, useSession } from '../../api/auth.js';
+import { hasPermission, permissionScope, useSession } from '../../api/auth.js';
 import { CompanyLink } from '../../components/CompanyLink.js';
 import { ApiError } from '../../api/client.js';
 import { useWhatsAppSoon, WHATSAPP_SOON_TEXT } from '../../api/whatsapp.js';
@@ -59,6 +59,7 @@ import {
   type LoadedLead,
 } from '../../api/leads.js';
 import { Icon, type IconName } from '../../components/Icon.js';
+import { ContactOptOutStrip } from './ContactOptOutStrip.js';
 import { LoadFailure } from '../../components/LoadFailure.js';
 import { failureReason } from '../../lib/failure.js';
 import { CallPanel } from './CallPanel.js';
@@ -212,6 +213,11 @@ export function DealPage() {
           </div>
           <div className="crm-stack is-center">
             <SuspectStrip lead={data.lead} canWrite={canWrite} />
+            <ContactOptOutStrip
+              leadId={data.lead.id}
+              canWrite={canWrite}
+              canRevoke={permissionScope(session.data, 'leads.assign') === 'all'}
+            />
             <FirstContactStrip data={data} canWrite={canWrite} onAct={act} />
             <DealSummary lead={data.lead} canWrite={canWrite} />
             <NextPanel data={data} canWrite={canWrite} onAct={act} />

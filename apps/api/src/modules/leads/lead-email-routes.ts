@@ -3,6 +3,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { crmEmailOutbox, crmEmailTemplates, employees } from '../../db/schema/index.js';
+import { contactBlock } from './contact-block.js';
 import { writeAudit } from '../../lib/audit.js';
 import { leadInScope, type LeadPermission } from './access.js';
 import { renderForLead, sendTemplateToLead } from './automations.js';
@@ -92,6 +93,8 @@ export const leadEmailRoutes: FastifyPluginAsync = async (app) => {
       to: lead.email,
       // Expansão with a brand: the lead must not see the Wings, so no e-mail leaves (brand rule).
       hidden: leadHidesWings(lead),
+      // A "não me contate" by e-mail: why nothing can be sent, or null.
+      blocked: (await contactBlock(db, 'email', { leadId: lead.id })).reason,
       mode: transport.mode,
       // Where a message sent now by this person would leave from (their Gmail, or the company's).
       from: await transport.senderOf(request.session.actor.employeeId),

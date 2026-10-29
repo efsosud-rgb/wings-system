@@ -129,6 +129,13 @@ vi.mock('../../api/auth.js', async () => {
   };
 });
 
+// The "Não me contate" strip has its own tests (ContactOptOutStrip.test.tsx).
+vi.mock('../../api/contact-opt-outs.js', () => ({
+  useContactOptOuts: () => ({ data: undefined, isError: false }),
+  useRecordContactOptOut: () => ({ mutate: vi.fn(), isPending: false }),
+  useRevokeContactOptOut: () => ({ mutate: vi.fn(), isPending: false }),
+}));
+
 // Not a seller before the official number is live (the lock has its own tests).
 vi.mock('../../api/whatsapp.js', async () => {
   const actual =

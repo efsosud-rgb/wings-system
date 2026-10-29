@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ContactBlock } from './contact-opt-out.js';
 import type { SofiaState } from './sofia.js';
 
 /**
@@ -133,6 +134,10 @@ export interface DealWhatsApp {
   /** Meta's 24-hour window for free text, from the person's last message. */
   window: { open: boolean; expiresAt: string | null };
   optedOut: boolean;
+  /** A "não me contate" (or the Prospecção opt-in rule): no template and no call request start here. */
+  contactBlock: ContactBlock;
+  /** The same for a call: WhatsApp or the phone. */
+  callBlock: ContactBlock;
   /** Whether the person lets the business call them, as last known. */
   callPermission: WaCallPermissionState;
   /** Who has the conversation now (Sofia, a seller, ...); null before any message. */
