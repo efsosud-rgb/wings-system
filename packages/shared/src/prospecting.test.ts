@@ -8,7 +8,9 @@ import {
   prospectApproachSchema,
   prospectBatchSchema,
   prospectClaimSchema,
+  prospectingRetentionSchema,
   prospectLeadSchema,
+  reservationExpiresAt,
   prospectSearchSchema,
   siteDomain,
   whatsappOptInMissing,
@@ -178,5 +180,46 @@ describe('Maps Prospecting additions', () => {
   it('never suggests WhatsApp as the approach', () => {
     expect(prospectApproachSchema.safeParse({ channel: 'ligacao' }).success).toBe(true);
     expect(prospectApproachSchema.safeParse({ channel: 'whatsapp' }).success).toBe(false);
+  });
+});
+
+describe('retention', () => {
+  const ok = { reservedDays: 30, contactedDays: 90, enrichmentDays: 180 };
+
+  it('takes 7 to 365 days for a reservation and 30 to 730 for the enrichment, whole days', () => {
+    expect(prospectingRetentionSchema.safeParse(ok).success).toBe(true);
+    for (const days of [7, 365]) {
+      expect(prospectingRetentionSchema.safeParse({ ...ok, reservedDays: days }).success).toBe(
+        true,
+      );
+      expect(prospectingRetentionSchema.safeParse({ ...ok, contactedDays: days }).success).toBe(
+        true,
+      );
+    }
+    for (const bad of [
+      { ...ok, reservedDays: 6 },
+      { ...ok, reservedDays: 366 },
+      { ...ok, contactedDays: 6 },
+      { ...ok, enrichmentDays: 29 },
+      { ...ok, enrichmentDays: 731 },
+      { ...ok, reservedDays: 30.5 },
+      { reservedDays: 30, contactedDays: 90 },
+    ])
+      expect(prospectingRetentionSchema.safeParse(bad).success).toBe(false);
+    expect(
+      prospectingRetentionSchema.safeParse({ ...ok, reservedDays: 6 }).error?.issues[0]?.message,
+    ).toBe('De 7 a 365 dias');
+  });
+
+  it('a reservation expires from its last update; a status that holds nothing never does', () => {
+    const updatedAt = '2026-10-01T12:00:00.000Z';
+    expect(reservationExpiresAt({ status: 'reservado', updatedAt }, ok)?.toISOString()).toBe(
+      '2026-10-31T12:00:00.000Z',
+    );
+    expect(reservationExpiresAt({ status: 'contatado', updatedAt }, ok)?.toISOString()).toBe(
+      '2026-12-30T12:00:00.000Z',
+    );
+    for (const status of ['descartado', 'virou_lead', 'nao_contatar'] as const)
+      expect(reservationExpiresAt({ status, updatedAt }, ok)).toBeNull();
   });
 });
