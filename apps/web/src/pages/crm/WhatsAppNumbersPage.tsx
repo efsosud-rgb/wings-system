@@ -95,7 +95,7 @@ interface Connected {
   ok: boolean;
 }
 
-/** "Número conectado", where it is seen: at the top of the page and focused, until closed. */
+/** "Número conectado", where it is seen: at the top and focused, until closed or a new try. */
 function ConnectedNotice({ notice, onClose }: { notice: Connected; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => ref.current?.focus(), [notice]);
@@ -427,7 +427,7 @@ function NumbersTable({
   signup: WaSignupConfig | null;
   sdk: Sdk | null;
   onEdit: (number: WaNumber) => void;
-  onConnected: (notice: Connected) => void;
+  onConnected: (notice: Connected | null) => void;
 }) {
   return (
     <div style={{ overflowX: 'auto' }}>
@@ -478,7 +478,7 @@ function NumberRow({
   signup: WaSignupConfig | null;
   sdk: Sdk | null;
   onEdit: () => void;
-  onConnected: (notice: Connected) => void;
+  onConnected: (notice: Connected | null) => void;
 }) {
   const retry = useRetryWhatsAppNumber();
   const renew = useRenewWhatsAppNumber();
@@ -499,6 +499,7 @@ function NumberRow({
   const start = () => {
     if (!signup || !sdk) return;
     setResult(null);
+    onConnected(null);
     setPhase('meta');
     void runEmbeddedSignup(sdk, signup.configId).then(async (outcome) => {
       if (!outcome.ok) {

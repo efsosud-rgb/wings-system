@@ -271,6 +271,27 @@ describe('Números de WhatsApp', () => {
     expect(screen.getByRole('button', { name: 'Conectar pela Meta' })).toBeTruthy();
   });
 
+  it('a new try clears the last "Número conectado"', async () => {
+    view = { signup, missing: [], people, numbers: [registered()] };
+    runEmbeddedSignup.mockResolvedValueOnce({
+      ok: true,
+      code: 'c',
+      wabaId: '31',
+      phoneNumberId: null,
+    });
+    connect.mockResolvedValue({
+      number: number(),
+      steps: { webhooks: 'ok', contacts: 'requested', history: 'requested' },
+    });
+    render(<WhatsAppNumbersPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Conectar pela Meta' }));
+    expect(await screen.findByText('Número conectado: Comercial Teste')).toBeTruthy();
+    runEmbeddedSignup.mockResolvedValueOnce({ ok: false, reason: 'cancelled', detail: null });
+    fireEvent.click(await screen.findByRole('button', { name: 'Conectar pela Meta' }));
+    expect(await screen.findByText(/fechada antes do fim/)).toBeTruthy();
+    expect(screen.queryByText('Número conectado: Comercial Teste')).toBeNull();
+  });
+
   it('"Editar" fills the form; the connected number itself cannot change', async () => {
     view = { signup, missing: [], people, numbers: [number()] };
     update.mockResolvedValue({ number: number() });
