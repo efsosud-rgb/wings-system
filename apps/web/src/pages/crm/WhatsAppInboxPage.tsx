@@ -1,23 +1,31 @@
 import {
+  SECTOR_SLUGS,
   SECTORS,
   SOFIA_STATE_LABELS,
   SOFIA_STATES,
+  WA_ASSIGNMENT_MODE_LABELS,
+  WA_ASSIGNMENT_MODES,
   WA_INBOX_FILTER_LABELS,
   WA_INBOX_FILTERS,
   WA_STATUS_LABELS,
+  isSectorSlug,
   type DealWhatsApp,
-  type SectorSlug,
+  type WaAssignmentMode,
   type WaConversationItem,
   type WaMessageStatus,
 } from '@wings/shared';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom';
 import { hasPermission, permissionScope, useSession } from '../../api/auth.js';
 import { ApiError } from '../../api/client.js';
 import { useLead } from '../../api/leads.js';
 import {
+  useAssignmentMode,
   useChatNumbers,
+  useConversationAttendance,
   useConversationDeals,
+  useReplying,
+  useSetAssignmentMode,
   useLinkConversation,
   useMarkWhatsAppRead,
   useOfficialNumber,
@@ -31,6 +39,7 @@ import { LoadFailure } from '../../components/LoadFailure.js';
 import { DealSidePanel } from './DealSidePanel.js';
 import { formatDateTime, formatPhone } from './format.js';
 import { WhatsAppChat } from './WhatsAppChat.js';
+import { AttendanceBar, AttendanceHistory, heldByOf } from './WhatsAppAttendance.js';
 import { NewNumber, WhatsAppNewConversation } from './WhatsAppNewConversation.js';
 import { listTimeOf } from './whatsapp-time.js';
 
@@ -139,9 +148,6 @@ function WhatsAppWeb({ openId }: { openId?: string }) {
   const open = rows.find((row) => row.conversationId === openId) ?? null;
   const location = useLocation();
   const narrowed = Object.values(narrow).filter(Boolean).length;
-  const sectors = [
-    ...new Set((numbers.data?.numbers ?? []).flatMap((n) => (n.sector ? [n.sector] : []))),
-  ] as SectorSlug[];
   return (
     <div className={`crm-page crm-wa-web${openId ? ' has-open' : ''}`}>
       <aside className="crm-wa-web-list" aria-label="Conversas">
@@ -168,6 +174,7 @@ function WhatsAppWeb({ openId }: { openId?: string }) {
             depois da troca do número. Até lá, use o WhatsApp do celular.
           </p>
         )}
+        {hasPermission(session.data, 'crm.manage') && <AssignmentModeSwitch />}
         {hasPermission(session.data, 'integrations.manage') && (
           <>
             <OfficialNumberSwitch live={official.data?.live} />
@@ -226,7 +233,7 @@ function WhatsAppWeb({ openId }: { openId?: string }) {
                 onChange={(e) => write('sector', e.target.value)}
               >
                 <option value="">Todos</option>
-                {sectors.map((slug) => (
+                {SECTOR_SLUGS.map((slug) => (
                   <option key={slug} value={slug}>
                     {SECTORS[slug].name}
                   </option>
@@ -393,7 +400,8 @@ function ConversationRow({
   const withSofia = row.attendance === 'sofia' || row.attendance === 'waiting_human';
   const read = row.lastStatus === 'read' || row.lastStatus === 'played';
   const name = nameOf(row);
-  const responsible = row.ownerName ?? row.number?.ownerName ?? null;
+  const responsible = row.holderName;
+  const queue = row.queue && isSectorSlug(row.queue) ? SECTORS[row.queue].name : null;
   // A search that found a message shows that message, as WhatsApp's search does.
   const at = row.match?.at ?? row.lastAt;
   return (
@@ -444,7 +452,7 @@ function ConversationRow({
           <span>
             {formatPhone(row.phone)} · {numberNameOf(row.number)} ·{' '}
             {row.attendance === 'sofia' ? 'Sofia' : 'Pessoa'}
-            {responsible ? ` · ${responsible}` : ' · sem responsável'}
+            {responsible ? ` · ${responsible}` : queue ? ` · fila ${queue}` : ' · sem responsável'}
           </span>
         </span>
       </span>
@@ -457,6 +465,9 @@ function OpenConversation({ id, item }: { id: string; item: WaConversationItem |
   const canSend = hasPermission(session.data, 'leads.whatsapp');
   const mayOpenSofia = hasPermission(session.data, 'sofia.read');
   const thread = useWhatsAppConversation(id);
+  const attendance = useConversationAttendance(id);
+  const replying = useReplying(id);
+  const typedAt = useRef(0);
   const { mutate: markRead } = useMarkWhatsAppRead();
   const location = useLocation();
   const [showPanel, setShowPanel] = useState(false);
@@ -494,6 +505,14 @@ function OpenConversation({ id, item }: { id: string; item: WaConversationItem |
     ? nameOf(item)
     : (data.profileName ?? (data.phone ? formatPhone(data.phone) : 'Sem nome'));
   const back = `${location.pathname}${location.search}`;
+  const view = attendance.data;
+  const heldBy = heldByOf(view, session.data?.employeeId);
+  const onTyping = () => {
+    // "Está respondendo" lasts 45 s on the server: renewed at most every 20 s while typing.
+    if (Date.now() - typedAt.current < 20_000) return;
+    typedAt.current = Date.now();
+    replying.mutate();
+  };
   return (
     <div className="crm-wa-web-open">
       <header className="crm-wa-head">
@@ -509,7 +528,6 @@ function OpenConversation({ id, item }: { id: string; item: WaConversationItem |
             <h1>{name}</h1>
             <span className="crm-sub">
               {data.phone ? formatPhone(data.phone) : 'Sem telefone'} · {numberNameOf(data.number)}
-              {item?.ownerName ? ` · ${item.ownerName}` : ''}
             </span>
           </div>
         </div>
@@ -549,6 +567,20 @@ function OpenConversation({ id, item }: { id: string; item: WaConversationItem |
             : 'Esta conversa espera um atendente. Escreva para assumir.'}
         </p>
       )}
+      {view ? (
+        <AttendanceBar id={id} view={view} me={session.data?.employeeId ?? null} />
+      ) : attendance.isError ? (
+        <p className="crm-wa-window is-closed">
+          Quem atende: — não foi possível ler agora.{' '}
+          <button
+            type="button"
+            className="crm-btn is-small"
+            onClick={() => void attendance.refetch()}
+          >
+            Tentar de novo
+          </button>
+        </p>
+      ) : null}
       {/* What came before stays on screen while the refresh tries again. */}
       {thread.isError && (
         <p className="crm-wa-window is-closed">
@@ -561,6 +593,8 @@ function OpenConversation({ id, item }: { id: string; item: WaConversationItem |
           thread={{ conversationId: id }}
           data={data}
           canSend={canSend}
+          heldBy={heldBy}
+          onTyping={onTyping}
           notice={
             thread.isError ? (
               <LoadFailure
@@ -572,6 +606,7 @@ function OpenConversation({ id, item }: { id: string; item: WaConversationItem |
           }
         />
         <div className="crm-wa-web-panel" aria-label="Contato">
+          {view && <AttendanceHistory view={view} />}
           {leadId ? (
             <DealPanel leadId={leadId} back={back} />
           ) : (
@@ -580,6 +615,31 @@ function OpenConversation({ id, item }: { id: string; item: WaConversationItem |
         </div>
       </div>
     </div>
+  );
+}
+
+/** Who gets a conversation nobody holds (`crm.manage`, as the funnels' rotation). */
+function AssignmentModeSwitch() {
+  const mode = useAssignmentMode(true);
+  const set = useSetAssignmentMode();
+  if (!mode.data) return null;
+  return (
+    <label className="crm-field crm-wa-official">
+      <span>Conversa sem responsável</span>
+      <select
+        className="crm-select"
+        value={mode.data.mode}
+        disabled={set.isPending}
+        onChange={(event) => set.mutate(event.target.value as WaAssignmentMode)}
+      >
+        {WA_ASSIGNMENT_MODES.map((key) => (
+          <option key={key} value={key}>
+            {WA_ASSIGNMENT_MODE_LABELS[key]}
+          </option>
+        ))}
+      </select>
+      {set.isError && <span className="crm-error"> Não foi possível mudar agora.</span>}
+    </label>
   );
 }
 

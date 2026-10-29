@@ -421,3 +421,14 @@ describe('a message stored late', () => {
     errors.mockRestore();
   });
 });
+
+describe('the lock (docs/whatsapp/central.md, "Atendimento")', () => {
+  it('held by someone else: no field to write, the name and how to take it instead', () => {
+    const data = { ...thread([message()]), window: { open: true, expiresAt: null } };
+    render(<WhatsAppChat thread={{ conversationId: 'c1' }} data={data} canSend heldBy="Daniele" />);
+    expect(screen.queryByRole('textbox', { name: 'Mensagem' })).toBeNull();
+    expect(screen.getByText(/Esta conversa está com Daniele/).textContent).toContain(
+      'assuma a conversa',
+    );
+  });
+});

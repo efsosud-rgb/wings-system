@@ -297,6 +297,11 @@ export interface WaConversationItem {
   attendance: SofiaState;
   /** The deal's owner, when there is a deal. */
   ownerName: string | null;
+  /** Who answers it (WaAttendance): the one assigned, else the deal's or the number's owner. */
+  holderId: string | null;
+  holderName: string | null;
+  /** The department queue it waits in, when nobody holds it. */
+  queue: string | null;
   /** The work number the chat is on; null on the official number. */
   number: WaChatNumber | null;
   /** With a search: the latest message whose text has it, cut around the term. */
@@ -351,7 +356,7 @@ export const waInboxQuerySchema = z.object({
   q: z.string().trim().max(80).optional(),
   /** `official` or a work number's id. */
   number: z.union([z.literal('official'), z.uuid()]).optional(),
-  /** A work number's department (SectorSlug). */
+  /** The department (SectorSlug): the queue it waits in, else its work number's. */
   sector: z.string().trim().max(60).optional(),
   /** Who has the conversation (a SofiaState). */
   state: z.string().trim().max(30).optional(),

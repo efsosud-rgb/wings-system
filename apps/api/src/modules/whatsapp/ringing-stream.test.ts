@@ -432,8 +432,9 @@ describe('the inbox (Caixa como o WhatsApp Desktop)', () => {
       payload: { text: 'Olá! Já te mando.' },
     });
     expect(sent.statusCode).toBeLessThan(500);
-    await stream.until(() => stream.inbox().length === 2);
-    expect(stream.inbox()[1]!.stamp).not.toBe(stream.inbox()[0]!.stamp);
+    // Writing also made the conversation the Admin's (attendance.ts): one more push, maybe two.
+    await stream.until(() => stream.inbox().length >= 2);
+    expect(stream.inbox().at(-1)!.stamp).not.toBe(stream.inbox()[0]!.stamp);
   });
 });
 

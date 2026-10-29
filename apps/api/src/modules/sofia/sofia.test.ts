@@ -7,6 +7,7 @@ import {
   type RoleKey,
   type SofiaConversationDetail,
   type SofiaSettings,
+  type WaAttendanceView,
 } from '@wings/shared';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -27,6 +28,7 @@ import {
   sofiaAiRuns,
   waTemplates,
   waContacts,
+  waConversationEvents,
   waConversations,
   waMessages,
 } from '../../db/schema/index.js';
@@ -76,12 +78,24 @@ const sends: Record<string, unknown>[] = [];
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 let sent = 0;
+/** What Meta (simulated) does with the next sends: refuse with a code, or never answer. */
+let metaNext: (number | 'silence')[] = [];
 const whatsappFetch = (async (input: string | URL | Request, init?: RequestInit) => {
   const url = new URL(
     typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
   );
   if (url.pathname.endsWith(`/${PHONE_ID}/messages`)) {
     sends.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    const meanwhile = duringSend;
+    duringSend = null;
+    if (meanwhile) await meanwhile();
+    const next = metaNext.shift();
+    if (next === 'silence') throw new Error('timeout');
+    if (next !== undefined)
+      return json(
+        { error: { code: next, message: 'Recipient phone number not in allowed list' } },
+        400,
+      );
     return json({ messaging_product: 'whatsapp', messages: [{ id: `wamid.SOFIA${++sent}` }] });
   }
   if (url.pathname.endsWith(`/${PHONE_ID}/settings`))
@@ -92,9 +106,16 @@ const whatsappFetch = (async (input: string | URL | Request, init?: RequestInit)
 /** The model, scripted: each call takes the next answer (or throws). */
 const llmCalls: LlmRequest[] = [];
 let llmAnswers: (Record<string, unknown> | Error)[] = [];
+/** Runs while the model "thinks": a person acting in the middle of her turn. */
+let duringAi: (() => Promise<void>) | null = null;
+/** Runs while Meta takes her first message of a turn: a person acting between two of her sends. */
+let duringSend: (() => Promise<void>) | null = null;
 const llm: AgentLlm = {
   async complete(request) {
     llmCalls.push(request);
+    const meanwhile = duringAi;
+    duringAi = null;
+    if (meanwhile) await meanwhile();
     const next = llmAnswers.shift();
     if (!next) throw new Error('no scripted answer');
     if (next instanceof Error) throw next;
@@ -171,6 +192,9 @@ beforeEach(async () => {
   sends.length = 0;
   llmCalls.length = 0;
   llmAnswers = [];
+  metaNext = [];
+  duringAi = null;
+  duringSend = null;
   clock = NOW.getTime();
   await saveSofiaSettings(db, { ...SOFIA_DEFAULT_SETTINGS, enabled: true }, null, NOW);
   // A turn left waiting by an earlier test is not this test's.
@@ -1162,6 +1186,14 @@ describe('what the review found (each was a real path)', () => {
     await write(other, text('oi, sou o sócio'));
     const conversation = await conversationOf(other);
     expect(conversation.leadId).toBe(lead!.id);
+    // The deal is the seller's: the Admin takes the conversation before writing (attendance.ts).
+    const take = await app.inject({
+      method: 'POST',
+      url: `/whatsapp/conversations/${conversation.id}/assign`,
+      cookies: admin.cookies,
+      payload: { version: conversation.version, employeeId: admin.id },
+    });
+    expect(take.statusCode).toBe(204);
     const res = await app.inject({
       method: 'POST',
       url: `/whatsapp/conversations/${conversation.id}/text`,
@@ -1184,6 +1216,328 @@ describe('what the review found (each was a real path)', () => {
       payload: { ...SOFIA_DEFAULT_SETTINGS, formatacao },
     });
     expect(res.statusCode).toBe(400);
+  });
+});
+
+/** A delivery status of one of our messages, as Meta sends it later (made-up data). */
+function statusBody(wamid: string, status: 'sent' | 'delivered' | 'failed', code?: number) {
+  return JSON.stringify({
+    object: 'whatsapp_business_account',
+    entry: [
+      {
+        id: WABA,
+        changes: [
+          {
+            field: 'messages',
+            value: {
+              messaging_product: 'whatsapp',
+              metadata: { display_phone_number: '15556696643', phone_number_id: PHONE_ID },
+              statuses: [
+                {
+                  id: wamid,
+                  status,
+                  timestamp: unix(new Date(clock)),
+                  recipient_id: '5521900000000',
+                  ...(code ? { errors: [{ code, title: 'Message undeliverable' }] } : {}),
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  });
+}
+async function metaSays(payload: string) {
+  const res = await app.inject({
+    method: 'POST',
+    url: '/integrations/whatsapp/webhook',
+    headers: { 'content-type': 'application/json', 'x-hub-signature-256': sign(payload) },
+    payload,
+  });
+  expect(res.statusCode).toBe(200);
+  await processWhatsAppEvents({
+    db,
+    phoneNumberId: PHONE_ID,
+    log: () => {},
+    now: () => new Date(clock),
+  });
+}
+const answersOf = async (phone: string) =>
+  ((await conversationOf(phone)).sofiaFacts as { answers: Record<string, string> }).answers;
+const sofiaMessages = async (phone: string) => {
+  const conversation = await conversationOf(phone);
+  return db
+    .select({ text: waMessages.text, status: waMessages.status, wamid: waMessages.wamid })
+    .from(waMessages)
+    .where(and(eq(waMessages.conversationId, conversation.id), eq(waMessages.author, 'sofia')))
+    .orderBy(waMessages.createdAt);
+};
+
+/** The person starts, taps "Franquear negócio": the next question is the name. */
+async function upToTheName(phone: string) {
+  await write(phone, text('oi'));
+  llmAnswers = [said({ intent: 'indefinido' })];
+  await sofiaAnswers();
+  await write(phone, tap('sofia:formatacao', 'Franquear negócio'));
+}
+
+describe('her state moves only when Meta took the message (staging, 26/10)', () => {
+  it('the name question refused with 131030: the next "Teste" is not the name; she asks again', async () => {
+    const phone = newPhone();
+    await upToTheName(phone);
+    metaNext = [131030];
+    await sofiaAnswers();
+    expect(bodyOf(lastSent())).toBe('Para começar, qual é o seu nome?');
+    expect((await sofiaMessages(phone)).at(-1)).toMatchObject({ status: 'failed', wamid: null });
+
+    // The person never saw the question and writes something else.
+    sends.length = 0;
+    await write(phone, text('Teste'));
+    await sofiaAnswers();
+    expect(await answersOf(phone)).not.toHaveProperty('nome');
+    expect(sends).toHaveLength(1);
+    expect(bodyOf(lastSent())).toBe('Para começar, qual é o seu nome?');
+    expect(llmCalls).toHaveLength(1);
+    expect((await conversationOf(phone)).sofiaMisses).toBe(0);
+
+    // This time it went: the answer to it is the name.
+    await write(phone, text('Ana Paula'));
+    await sofiaAnswers();
+    expect((await answersOf(phone)).nome).toBe('Ana Paula');
+    expect(bodyOf(lastSent())).toBe('Qual é o nome da sua empresa?');
+  });
+
+  it('refused twice in a row: a person takes over, and nothing else is sent', async () => {
+    const phone = newPhone();
+    await upToTheName(phone);
+    metaNext = [131030, 131030];
+    await sofiaAnswers();
+    await write(phone, text('Teste'));
+    await sofiaAnswers();
+    sends.length = 0;
+    await write(phone, text('Oi?'));
+    await sofiaAnswers();
+    expect(sends).toHaveLength(0);
+    expect(await conversationOf(phone)).toMatchObject({
+      attendance: 'waiting_human',
+      reason: 'envio_recusado',
+    });
+    expect(await answersOf(phone)).not.toHaveProperty('nome');
+  });
+
+  it('a question Meta took and failed later (the status webhook) is asked again too', async () => {
+    const phone = newPhone();
+    await upToTheName(phone);
+    await sofiaAnswers();
+    const question = (await sofiaMessages(phone)).at(-1)!;
+    expect(question.status).toBe('sent');
+    await metaSays(statusBody(question.wamid!, 'failed', 131026));
+    sends.length = 0;
+    await write(phone, text('Teste'));
+    await sofiaAnswers();
+    expect(await answersOf(phone)).not.toHaveProperty('nome');
+    expect(bodyOf(lastSent())).toBe('Para começar, qual é o seu nome?');
+  });
+
+  it('with no answer from Meta, and her very first words lost, she introduces herself again', async () => {
+    const phone = newPhone();
+    await write(phone, text('oi'));
+    llmAnswers = [said({ intent: 'indefinido' })];
+    metaNext = ['silence'];
+    await sofiaAnswers();
+    expect((await sofiaMessages(phone)).at(-1)).toMatchObject({ status: 'pending', wamid: null });
+    sends.length = 0;
+    await write(phone, text('alô'));
+    await sofiaAnswers();
+    expect(llmCalls).toHaveLength(1);
+    expect(bodyOf(lastSent())).toContain('atendente virtual da Wings');
+    expect(lastSent().interactive.action.buttons.map((b) => b.reply.title)).toContain(
+      'Franquear negócio',
+    );
+  });
+});
+
+describe('Sofia per conversation, and a person in the middle of her turn', () => {
+  it("paused: she stops, never takes it again (even after it ends), until someone with Sofia's screen turns her on", async () => {
+    const admin = await sessionFor('admin_master');
+    const phone = newPhone();
+    await upToTheName(phone);
+    await sofiaAnswers();
+    let conversation = await conversationOf(phone);
+    const pause = await app.inject({
+      method: 'POST',
+      url: `/whatsapp/conversations/${conversation.id}/sofia`,
+      cookies: admin.cookies,
+      payload: { version: conversation.version, action: 'pause' },
+    });
+    expect(pause.statusCode).toBe(204);
+    expect(await conversationOf(phone)).toMatchObject({
+      attendance: 'waiting_human',
+      reason: 'sofia_pausada',
+      sofiaPaused: true,
+    });
+    sends.length = 0;
+    await write(phone, text('Ana Paula'));
+    expect(await sofiaAnswers()).toBe(0);
+    conversation = await conversationOf(phone);
+    await app.inject({
+      method: 'POST',
+      url: `/whatsapp/conversations/${conversation.id}/resolve`,
+      cookies: admin.cookies,
+      payload: { version: conversation.version },
+    });
+    await write(phone, text('Voltei'));
+    expect(await sofiaAnswers()).toBe(0);
+    expect(sends).toHaveLength(0);
+    expect(await conversationOf(phone)).toMatchObject({
+      attendance: 'waiting_human',
+      reason: 'sofia_pausada',
+    });
+
+    // A seller does not turn her on; the Admin does, and she answers the next message only.
+    conversation = await conversationOf(phone);
+    const seller = await sessionFor('vendedor_formatacao');
+    await db
+      .update(waConversations)
+      .set({ assigneeEmployeeId: seller.id })
+      .where(eq(waConversations.id, conversation.id));
+    const bySeller = await app.inject({
+      method: 'POST',
+      url: `/whatsapp/conversations/${conversation.id}/sofia`,
+      cookies: seller.cookies,
+      payload: { version: conversation.version, action: 'resume' },
+    });
+    expect(bySeller.statusCode).toBe(403);
+    const byAdmin = await app.inject({
+      method: 'POST',
+      url: `/whatsapp/conversations/${conversation.id}/sofia`,
+      cookies: admin.cookies,
+      payload: { version: conversation.version, action: 'resume' },
+    });
+    expect(byAdmin.statusCode).toBe(204);
+    expect(await conversationOf(phone)).toMatchObject({ attendance: 'sofia', sofiaPaused: false });
+    const events = await db
+      .select({ kind: waConversationEvents.kind })
+      .from(waConversationEvents)
+      .where(eq(waConversationEvents.conversationId, conversation.id));
+    expect(events.map((e) => e.kind)).toEqual(
+      expect.arrayContaining(['sofia_paused', 'sofia_resumed']),
+    );
+  });
+
+  it("a person's message stops her at once, and it is in the history", async () => {
+    const admin = await sessionFor('admin_master');
+    const phone = newPhone();
+    await upToTheName(phone);
+    const conversation = await conversationOf(phone);
+    expect(conversation.sofiaDueAt).not.toBeNull();
+    const res = await app.inject({
+      method: 'POST',
+      url: `/whatsapp/conversations/${conversation.id}/text`,
+      cookies: admin.cookies,
+      payload: { text: 'Oi! Aqui é uma pessoa do time.' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(await sofiaAnswers()).toBe(0);
+    expect(await conversationOf(phone)).toMatchObject({
+      attendance: 'with_person',
+      assigneeEmployeeId: admin.id,
+    });
+    const [event] = await db
+      .select({ kind: waConversationEvents.kind })
+      .from(waConversationEvents)
+      .where(eq(waConversationEvents.conversationId, conversation.id));
+    expect(event?.kind).toBe('sofia_suspended');
+  });
+
+  it('a person takes it and gives it back while she thinks: the version moved, her answer never goes', async () => {
+    const admin = await sessionFor('admin_master');
+    const phone = newPhone();
+    await write(phone, text('oi'));
+    const conversation = await conversationOf(phone);
+    duringAi = async () => {
+      for (const action of ['take', 'give_back'])
+        expect(
+          (
+            await app.inject({
+              method: 'POST',
+              url: `/sofia/conversations/${conversation.id}/attendance`,
+              cookies: admin.cookies,
+              payload: { action },
+            })
+          ).statusCode,
+        ).toBe(200);
+    };
+    llmAnswers = [said({ intent: 'indefinido' })];
+    sends.length = 0;
+    await sofiaAnswers();
+    expect(llmCalls).toHaveLength(1);
+    expect(sends).toHaveLength(0);
+    expect((await conversationOf(phone)).attendance).toBe('sofia');
+  });
+
+  it('a person who takes it between two of her messages of one turn stops the second one', async () => {
+    const admin = await sessionFor('admin_master');
+    // A long greeting and the values text: her first words go as their own text, then the buttons.
+    await saveSofiaSettings(
+      db,
+      {
+        ...SOFIA_DEFAULT_SETTINGS,
+        enabled: true,
+        texts: {
+          ...SOFIA_DEFAULT_SETTINGS.texts,
+          // Each {quem} becomes "da Wings Company": the greeting grows past Meta's 1,024 with the values.
+          greeting: `Olá! Sou a atendente virtual {quem}. ${'{quem} '.repeat(50)}`,
+          values: `Sobre valores: ${'quem passa os números é o time. '.repeat(8)}`,
+        },
+      },
+      null,
+      NOW,
+    );
+    const phone = newPhone();
+    await write(phone, text('oi, quanto custa?'));
+    const conversation = await conversationOf(phone);
+    duringSend = async () => {
+      const take = await app.inject({
+        method: 'POST',
+        url: `/sofia/conversations/${conversation.id}/attendance`,
+        cookies: admin.cookies,
+        payload: { action: 'take' },
+      });
+      expect(take.statusCode).toBe(200);
+    };
+    llmAnswers = [said({ intent: 'indefinido', asked_values: true })];
+    sends.length = 0;
+    await sofiaAnswers();
+    expect(sends).toHaveLength(1);
+    expect((sends[0] as unknown as Sent).type).toBe('text');
+    expect((await conversationOf(phone)).attendance).toBe('with_person');
+  });
+
+  it('her handover leaves its reason and what she found out on the Central panel', async () => {
+    const admin = await sessionFor('admin_master');
+    const phone = newPhone();
+    await upToTheName(phone);
+    await sofiaAnswers();
+    await write(phone, text('Ana Paula'));
+    await sofiaAnswers();
+    llmAnswers = [said({ intent: 'quer_pessoa' })];
+    await write(phone, text('quero falar com uma pessoa'));
+    await sofiaAnswers();
+    const conversation = await conversationOf(phone);
+    expect(conversation.attendance).toBe('waiting_human');
+    const res = await app.inject({
+      method: 'GET',
+      url: `/whatsapp/conversations/${conversation.id}/attendance`,
+      cookies: admin.cookies,
+    });
+    const view = res.json<WaAttendanceView>();
+    expect(view.attendance.sofia).toEqual({
+      reason: 'Pediu para falar com uma pessoa',
+      facts: [expect.objectContaining({ key: 'nome', answer: 'Ana Paula' })],
+    });
+    expect(view.events[0]).toMatchObject({ kind: 'sofia_handoff', actorName: null });
   });
 });
 

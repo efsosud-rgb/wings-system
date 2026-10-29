@@ -1,4 +1,9 @@
-import type { DealWhatsApp, WaConversationItem, WaNewTarget } from '@wings/shared';
+import type {
+  DealWhatsApp,
+  WaAttendanceView,
+  WaConversationItem,
+  WaNewTarget,
+} from '@wings/shared';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -38,6 +43,9 @@ const { state } = vi.hoisted(() => ({
     listQuery: {} as Record<string, unknown>,
     threadQuery: {} as Record<string, unknown>,
     targetsQuery: {} as Record<string, unknown>,
+    attendance: null as WaAttendanceView | null,
+    actions: [] as unknown[],
+    typed: 0,
   },
 }));
 
@@ -57,6 +65,9 @@ const rows: WaConversationItem[] = [
     lastStatus: null,
     attendance: 'waiting_seller',
     ownerName: 'Daniele',
+    holderId: 'e1',
+    holderName: 'Daniele',
+    queue: null,
     number: null,
   },
   {
@@ -74,6 +85,9 @@ const rows: WaConversationItem[] = [
     lastStatus: 'read',
     attendance: 'sofia',
     ownerName: null,
+    holderId: null,
+    holderName: null,
+    queue: null,
     number: null,
   },
 ];
@@ -113,7 +127,9 @@ const thread: DealWhatsApp = {
 };
 
 vi.mock('../../api/auth.js', () => ({
-  useSession: () => ({ data: { id: 'e1', role: 'admin_master', permissions: state.permissions } }),
+  useSession: () => ({
+    data: { id: 'e1', employeeId: 'e1', role: 'admin_master', permissions: state.permissions },
+  }),
   hasPermission: (session: { permissions: Record<string, string> } | undefined, key: string) =>
     Boolean(session?.permissions[key]),
   permissionScope: (session: { permissions: Record<string, string> } | undefined, key: string) =>
@@ -165,6 +181,15 @@ vi.mock('../../api/whatsapp.js', () => ({
     ...state.threadQuery,
   }),
   useMarkWhatsAppRead: () => ({ mutate: (id: string) => state.read.push(id) }),
+  useConversationAttendance: () => ({ isError: false, data: state.attendance ?? undefined }),
+  useAttendanceAction: () => ({
+    isPending: false,
+    isError: false,
+    mutate: (input: unknown) => state.actions.push(input),
+  }),
+  useReplying: () => ({ mutate: () => state.typed++ }),
+  useAssignmentMode: () => ({ data: { mode: 'manual' } }),
+  useSetAssignmentMode: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
   useWhatsAppTargets: (q: string) => ({
     isFetching: false,
     isError: false,
@@ -199,9 +224,19 @@ vi.mock('../../api/leads.js', () => ({
 }));
 
 vi.mock('./WhatsAppChat.js', () => ({
-  WhatsAppChat: ({ thread: t }: { thread: { leadId?: string; conversationId?: string } }) => (
+  WhatsAppChat: ({
+    thread: t,
+    heldBy,
+    onTyping,
+  }: {
+    thread: { leadId?: string; conversationId?: string };
+    heldBy?: string | null;
+    onTyping?: () => void;
+  }) => (
     <div data-testid="chat">
       {t.leadId ? `deal:${t.leadId}` : `conversation:${t.conversationId}`}
+      {heldBy ? ` (com ${heldBy})` : ''}
+      <input aria-label="Mensagem" onChange={() => onTyping?.()} />
     </div>
   ),
 }));
@@ -222,6 +257,9 @@ beforeEach(() => {
   state.listQuery = {};
   state.threadQuery = {};
   state.targetsQuery = {};
+  state.attendance = null;
+  state.actions = [];
+  state.typed = 0;
 });
 afterEach(cleanup);
 
@@ -513,6 +551,9 @@ describe('the Central (docs/whatsapp/central.md)', () => {
     leadName: null,
     profileName: 'Nome no Celular',
     ownerName: null,
+    // The API's holder of a work number's chat with nobody assigned: the number's owner.
+    holderId: 'e9',
+    holderName: 'Fernando',
     attendance: 'with_person',
     number: { id: 'n1', label: 'Comercial Teste', phone: '5521911110000', ownerName: 'Fernando' },
   };
@@ -643,3 +684,109 @@ function rows0Target(leadId: string, name: string): WaNewTarget {
     conversationId: null,
   };
 }
+
+const attendanceView = (over: Partial<WaAttendanceView['attendance']> = {}): WaAttendanceView => ({
+  attendance: {
+    conversationId: 'c1',
+    version: 7,
+    holderId: 'e2',
+    holderName: 'Daniele',
+    assigned: true,
+    queue: null,
+    replyingName: null,
+    sofiaPaused: false,
+    sofia: null,
+    can: {
+      take: true,
+      transfer: true,
+      resolve: true,
+      reopen: false,
+      pauseSofia: false,
+      resumeSofia: false,
+    },
+    ...over,
+  },
+  events: [
+    {
+      id: 'v1',
+      kind: 'sofia_handoff',
+      fromName: null,
+      toName: null,
+      queue: null,
+      reason: 'Pediu para falar com uma pessoa',
+      actorName: null,
+      at: new Date().toISOString(),
+    },
+    {
+      id: 'v2',
+      kind: 'transferred',
+      fromName: 'Luana',
+      toName: 'Daniele',
+      queue: null,
+      reason: null,
+      actorName: 'Luana',
+      at: new Date().toISOString(),
+    },
+  ],
+  people: [
+    { id: 'e1', name: 'Eu Mesmo' },
+    { id: 'e2', name: 'Daniele' },
+    { id: 'e3', name: 'Umberto' },
+  ],
+});
+
+describe('who answers the conversation (Atendimento)', () => {
+  it('held by someone else: the composer says so, and Assumir goes with the version on screen', () => {
+    state.attendance = attendanceView({ replyingName: 'Daniele' });
+    renderAt('/crm-vendas/whatsapp/c1');
+    expect(screen.getByTestId('chat').textContent).toContain('com Daniele');
+    expect(screen.getByRole('status').textContent).toBe('Daniele está respondendo…');
+    fireEvent.click(screen.getByRole('button', { name: 'Assumir' }));
+    expect(state.actions).toEqual([{ version: 7, action: { kind: 'assign', employeeId: 'e1' } }]);
+  });
+
+  it('passes it to a person or to a department queue', () => {
+    state.attendance = attendanceView();
+    renderAt('/crm-vendas/whatsapp/c1');
+    const to = screen.getByRole('combobox', { name: 'Passar para' });
+    // The one who holds it is not offered.
+    expect(within(to).queryByRole('option', { name: 'Daniele' })).toBeNull();
+    fireEvent.change(to, { target: { value: 'e3' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Passar' }));
+    fireEvent.change(to, { target: { value: 'fila:formatacao-financeiro' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Passar' }));
+    expect(state.actions).toEqual([
+      { version: 7, action: { kind: 'assign', employeeId: 'e3' } },
+      { version: 7, action: { kind: 'assign', employeeId: null, queue: 'formatacao-financeiro' } },
+    ]);
+  });
+
+  it('the panel shows what Sofia left and who had it; typing says "está respondendo" once in a while', () => {
+    state.attendance = attendanceView({
+      holderId: 'e1',
+      holderName: 'Eu Mesmo',
+      sofia: {
+        reason: 'Pediu para falar com uma pessoa',
+        facts: [{ key: 'nome', label: 'Nome', answer: 'Pessoa Fictícia' }],
+      },
+    });
+    renderAt('/crm-vendas/whatsapp/c1');
+    const history = screen.getByRole('region', { name: 'Histórico do atendimento' });
+    expect(history.textContent).toContain('Motivo: Pediu para falar com uma pessoa');
+    expect(history.textContent).toContain('Pessoa Fictícia');
+    expect(history.textContent).toContain('Sofia: A Sofia passou para uma pessoa');
+    expect(history.textContent).toContain('Luana: Transferiu a conversa para Daniele');
+    expect(screen.getByTestId('chat').textContent).not.toContain('com ');
+    const field = screen.getByRole('textbox', { name: 'Mensagem' });
+    fireEvent.change(field, { target: { value: 'O' } });
+    fireEvent.change(field, { target: { value: 'Ol' } });
+    expect(state.typed).toBe(1);
+  });
+
+  it('with nobody holding it, the row says the queue', () => {
+    rows[1] = { ...rows[1]!, holderId: null, holderName: null, queue: 'comercial' };
+    renderAt('/crm-vendas/whatsapp');
+    expect(screen.getByRole('link', { name: /Carlos/ }).textContent).toContain('fila Comercial');
+    rows[1] = { ...rows[1]!, queue: null };
+  });
+});

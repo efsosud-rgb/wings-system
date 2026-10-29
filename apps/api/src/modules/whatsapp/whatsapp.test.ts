@@ -155,6 +155,21 @@ async function sessionFor(role: RoleKey) {
   return { id: employee.id, cookies: { [SESSION_COOKIE]: token } };
 }
 
+/** "Assumir" (attendance.ts): someone who sees a conversation another person holds takes it. */
+async function takeOver(cookies: Record<string, string>, employeeId: string, leadId: string) {
+  const [conversation] = await db
+    .select({ id: waConversations.id, version: waConversations.version })
+    .from(waConversations)
+    .where(eq(waConversations.leadId, leadId));
+  const res = await app.inject({
+    method: 'POST',
+    url: `/whatsapp/conversations/${conversation!.id}/assign`,
+    cookies,
+    payload: { version: conversation!.version, employeeId },
+  });
+  expect(res.statusCode).toBe(204);
+}
+
 async function deal(
   phone: string | null,
   ownerId: string | null,
@@ -968,13 +983,19 @@ describe('who may see, send and open files', () => {
         .conversations.some((c) => c.leadId === leadId),
     ).toBe(false);
     nextSend = () => accepted('wamid.DIR1');
-    const dirSend = await app.inject({
-      method: 'POST',
-      url: `/leads/${leadId}/whatsapp/text`,
-      cookies: diretoria.cookies,
-      payload: { text: 'Aqui é da diretoria.' },
-    });
-    expect(dirSend.statusCode).toBe(201);
+    const dirSend = () =>
+      app.inject({
+        method: 'POST',
+        url: `/leads/${leadId}/whatsapp/text`,
+        cookies: diretoria.cookies,
+        payload: { text: 'Aqui é da diretoria.' },
+      });
+    // The seller holds the conversation: Diretoria takes it first (the seller is told), then writes.
+    const held = await dirSend();
+    expect(held.statusCode).toBe(409);
+    expect(held.json()).toMatchObject({ error: 'not_holder' });
+    await takeOver(diretoria.cookies, diretoria.id, leadId);
+    expect((await dirSend()).statusCode).toBe(201);
     const marketing = await sessionFor('marketing');
     expect(
       (
@@ -1254,6 +1275,7 @@ describe('the seller lock until the official number is live (Eric, 19/10)', () =
     for (const role of ['admin_master', 'diretoria', 'gerente_comercial'] as const) {
       const person = await sessionFor(role);
       sends.length = 0;
+      await takeOver(person.cookies, person.id, leadId);
       const byDeal = await post(person.cookies, `/leads/${leadId}/whatsapp/text`, {
         text: `Aqui é ${role}.`,
       });

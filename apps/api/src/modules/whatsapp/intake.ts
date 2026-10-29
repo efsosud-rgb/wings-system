@@ -18,6 +18,7 @@ import {
   sofiaAiRuns,
   waCalls,
   waContacts,
+  waConversationEvents,
   waConversations,
   waMessages,
   waTemplates,
@@ -33,6 +34,7 @@ import { formContextOf } from '../sofia/form-context.js';
 import { loadSofiaSettings } from '../sofia/settings.js';
 import { factsOf, routeInbound } from '../sofia/state.js';
 import { ART_MEDIA_GONE_CODES, invalidateArtMedia } from './art.js';
+import { distribute } from './attendance.js';
 import { notifyCallsChanged } from './call-signal.js';
 import { callingOn } from './calling.js';
 import { callPermissionPayload, type WhatsAppConfig } from './graph.js';
@@ -260,14 +262,23 @@ export async function adoptUnmatched(db: Database, contactId: string, leadId: st
         .set({ conversationId: existing.id })
         .where(eq(sofiaAiRuns.conversationId, waiting.id));
       await tx
+        .update(waConversationEvents)
+        .set({ conversationId: existing.id })
+        .where(eq(waConversationEvents.conversationId, waiting.id));
+      await tx
         .update(waConversations)
         .set({
           lastMessageAt: sql`greatest(${waConversations.lastMessageAt}, ${waiting.lastMessageAt?.toISOString() ?? null}::timestamptz)`,
           referral: sql`coalesce(${waConversations.referral}, ${waiting.referral === null ? null : JSON.stringify(waiting.referral)}::jsonb)`,
+          // Two rows became one: a screen holding either version looks again.
+          version: sql`greatest(${waConversations.version}, ${waiting.version}) + 1`,
           // A deal's conversation that had ended takes the live one's state.
           ...(existing.attendance === 'closed'
             ? {
                 attendance: waiting.attendance,
+                assigneeEmployeeId: waiting.assigneeEmployeeId,
+                queue: waiting.queue,
+                sofiaPaused: waiting.sofiaPaused,
                 stateChangedAt: waiting.stateChangedAt,
                 reason: waiting.reason,
                 segment: waiting.segment,
@@ -468,6 +479,7 @@ async function applyInbound(deps: WhatsAppIntakeDeps, message: WaInboundMessage,
   // restart or an error before the triage runs cannot leave the conversation unnoticed.
   let triageQueued = false;
   let storedNow = false;
+  let routed: string | null = null;
   // The message and who answers it are one step: a failure in between is
   // retried whole (a stored message is never left without its routing).
   await db.transaction(async (tx) => {
@@ -509,7 +521,7 @@ async function applyInbound(deps: WhatsAppIntakeDeps, message: WaInboundMessage,
           .from(leads)
           .where(eq(leads.id, leadId))
       : [];
-    await routeInbound(tx, {
+    routed = await routeInbound(tx, {
       conversation,
       created,
       messageId: stored.id,
@@ -546,8 +558,10 @@ async function applyInbound(deps: WhatsAppIntakeDeps, message: WaInboundMessage,
       }
     }
   });
-  // Otherwise the conversation just waits for an attendant.
+  // Otherwise the conversation just waits for an attendant, or the rotation gives it to one.
   if (triageQueued) scheduleLeadTriage({ conversationId: conversation.id });
+  else if (routed === 'waiting_human' || routed === 'waiting_seller')
+    await distribute(db, conversation.id, now);
   if (storedNow && talks && message.text?.trim().toLowerCase() === CALL_REQUEST)
     await answerCallRequest(deps, {
       contact: contact!,

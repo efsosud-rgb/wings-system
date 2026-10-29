@@ -16,6 +16,11 @@ import {
   WA_TEXT_SEARCH_MIN,
   waInboxQuerySchema,
   waNumberStartSchema,
+  waAssignSchema,
+  waAssignmentSettingsSchema,
+  waSofiaSwitchSchema,
+  waVersionSchema,
+  type SofiaSegment,
   type WaArtLink,
   type WaChatNumber,
   type WaConversationItem,
@@ -81,6 +86,7 @@ import {
   buildThread,
   conversationItemOf,
   conversationListSql,
+  holderSql,
   likeOf,
   unreadMessageOf,
   markConversationRead,
@@ -92,7 +98,25 @@ import {
   windowOf,
   callPermissionText,
 } from './thread.js';
-import { takeConversation } from '../sofia/state.js';
+import {
+  assignmentModeOf,
+  attendanceRefusal,
+  AttendanceError,
+  attendanceView,
+  heldByOther,
+  holdForSend,
+  reopen,
+  resolve,
+  sendToQueue,
+  setAssignmentMode,
+  startReplying,
+  switchSofia,
+  takeOver,
+  transfer,
+  type ActionInput,
+} from './attendance.js';
+import { loadSofiaSettings } from '../sofia/settings.js';
+import { factListOf } from '../sofia/state.js';
 import { adoptUnmatched, conversationFor, openConversation } from './intake.js';
 import { syncTemplates } from './templates.js';
 import { inboxSummaryOf } from './inbox.js';
@@ -271,8 +295,8 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     const cursor = before?.match(/^(.+)\|([0-9a-f-]{36})$/i);
     if (before && (!cursor || Number.isNaN(Date.parse(cursor[1]!))))
       return reply.status(400).send({ error: 'invalid', message: 'Página inválida.' });
-    // The responsible: the deal's owner, else the work number's.
-    const responsible = sql`coalesce(l.owner_employee_id, n.owner_employee_id)`;
+    // The responsible: who answers it (attendance.ts).
+    const responsible = holderSql;
     const rows = await db.execute<ConversationListRow>(
       conversationListSql({
         owner: leadOwnerFilter(request.session.actor, 'leads.whatsapp'),
@@ -298,7 +322,7 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
                 ? sql`and c.number_id = ${number}`
                 : sql``
           }
-          ${sector ? sql`and n.sector = ${sector}` : sql``}
+          ${sector ? sql`and coalesce(c.queue, n.sector) = ${sector}` : sql``}
           ${state ? sql`and c.attendance = ${state}` : sql``}
           ${from ? sql`and c.last_message_at >= (${from}::date::timestamp at time zone 'America/Sao_Paulo')` : sql``}
           ${to ? sql`and c.last_message_at < ((${to}::date + 1)::timestamp at time zone 'America/Sao_Paulo')` : sql``}
@@ -441,24 +465,28 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
 
   /**
    * Any conversation the reader may see: a deal's in its owner scope, one with no deal at full
-   * scope, a work number's chat by its number's owner or at full scope (docs/whatsapp/central.md).
+   * scope, a work number's chat by its number's owner or at full scope (docs/whatsapp/central.md),
+   * and any one assigned to the reader.
    */
   async function visibleConversation(request: FastifyRequest, id: string) {
     const conversation = await db.query.waConversations.findFirst({
       where: eq(waConversations.id, id),
     });
     if (!conversation) return null;
-    if (conversation.numberId) {
-      if ((await chatNumbersOf(request, conversation.numberId)).length === 0) return null;
-    } else if (conversation.leadId) {
-      const lead = await leadInScope(
-        db,
-        request.session.actor,
-        conversation.leadId,
-        'leads.whatsapp',
-      );
-      if (!lead) return null;
-    } else if (!fullScope(request)) return null;
+    // Given to the reader (attendance.ts): theirs to answer, whoever owns the deal or the number.
+    if (conversation.assigneeEmployeeId !== request.session.actor.employeeId) {
+      if (conversation.numberId) {
+        if ((await chatNumbersOf(request, conversation.numberId)).length === 0) return null;
+      } else if (conversation.leadId) {
+        const lead = await leadInScope(
+          db,
+          request.session.actor,
+          conversation.leadId,
+          'leads.whatsapp',
+        );
+        if (!lead) return null;
+      } else if (!fullScope(request)) return null;
+    }
     const contact = await db.query.waContacts.findFirst({
       where: eq(waContacts.id, conversation.contactId),
     });
@@ -558,6 +586,157 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     return reply.status(204).send();
   });
 
+  // --- who answers it (docs/whatsapp/central.md, "Atendimento") -------------------------
+
+  /** Runs one change of hands, answering a refusal in the screen's words. */
+  async function handsAction(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    action: (input: ActionInput) => Promise<void>,
+    audit: { action: string; metadata?: Record<string, unknown> },
+  ) {
+    const params = idParams.safeParse(request.params);
+    const found = params.success ? await visibleConversation(request, params.data.id) : null;
+    if (!found) return notFound(reply);
+    const body = waVersionSchema.safeParse(request.body);
+    if (!body.success)
+      return reply.status(400).send({ error: 'invalid', message: 'Dados inválidos.' });
+    const { conversation } = found;
+    try {
+      await action({
+        conversationId: conversation.id,
+        version: body.data.version,
+        actor: request.session.actor,
+        at: now(),
+      });
+    } catch (error) {
+      if (!(error instanceof AttendanceError)) throw error;
+      const refused = attendanceRefusal(error);
+      return reply.status(refused.status).send(refused.body);
+    }
+    await writeAudit(db, {
+      actorEmployeeId: request.session.actor.employeeId,
+      action: audit.action,
+      entity: conversation.leadId ? 'lead' : 'wa_conversation',
+      entityId: conversation.leadId ?? conversation.id,
+      ip: request.ip,
+      metadata: { conversationId: conversation.id, ...audit.metadata },
+    });
+    return reply.status(204).send();
+  }
+
+  /** Who holds it, what the reader may do, its history and Sofia's context. */
+  app.get('/whatsapp/conversations/:id/attendance', use, async (request, reply) => {
+    const params = idParams.safeParse(request.params);
+    const found = params.success ? await visibleConversation(request, params.data.id) : null;
+    if (!found) return notFound(reply);
+    const settings = await loadSofiaSettings(db);
+    const view = await attendanceView(
+      db,
+      {
+        conversationId: found.conversation.id,
+        actor: request.session.actor,
+        at: now(),
+        sofiaOn: settings.enabled,
+      },
+      (row) => factListOf(row, settings, row.segment as SofiaSegment | null),
+    );
+    return view ? reply.send(view) : notFound(reply);
+  });
+
+  /** Take it (`employeeId` = the reader), pass it on, or send it back to a department's queue. */
+  app.post('/whatsapp/conversations/:id/assign', use, async (request, reply) => {
+    const body = waAssignSchema.safeParse(request.body);
+    if (!body.success)
+      return reply.status(400).send({ error: 'invalid', message: 'Escolha uma pessoa ou fila.' });
+    const { employeeId, queue } = body.data;
+    const me = request.session.actor.employeeId;
+    if (employeeId === null && !queue)
+      return reply.status(400).send({ error: 'invalid', message: 'Escolha a fila.' });
+    return handsAction(
+      request,
+      reply,
+      (input) =>
+        employeeId === me
+          ? takeOver(db, input)
+          : employeeId
+            ? transfer(db, { ...input, to: employeeId })
+            : sendToQueue(db, { ...input, queue: queue! }),
+      {
+        action:
+          employeeId === me
+            ? 'whatsapp.conversation_taken'
+            : employeeId
+              ? 'whatsapp.conversation_transferred'
+              : 'whatsapp.conversation_queued',
+        metadata: employeeId ? { to: employeeId } : { queue },
+      },
+    );
+  });
+
+  app.post('/whatsapp/conversations/:id/resolve', use, (request, reply) =>
+    handsAction(request, reply, (input) => resolve(db, input), {
+      action: 'whatsapp.conversation_resolved',
+    }),
+  );
+
+  app.post('/whatsapp/conversations/:id/reopen', use, (request, reply) =>
+    handsAction(request, reply, (input) => reopen(db, input), {
+      action: 'whatsapp.conversation_reopened',
+    }),
+  );
+
+  /** Sofia in this conversation: pause (anyone who sees it) or turn on (`sofia.read`). */
+  app.post('/whatsapp/conversations/:id/sofia', use, async (request, reply) => {
+    const body = waSofiaSwitchSchema.safeParse(request.body);
+    if (!body.success)
+      return reply.status(400).send({ error: 'invalid', message: 'Ação inválida.' });
+    const { action } = body.data;
+    const sofiaOn = (await loadSofiaSettings(db)).enabled;
+    return handsAction(request, reply, (input) => switchSofia(db, { ...input, action, sofiaOn }), {
+      action: action === 'pause' ? 'sofia.paused' : 'sofia.resumed',
+    });
+  });
+
+  /** "Está respondendo": the composer renews it while the reader types; answers who else is. */
+  app.post('/whatsapp/conversations/:id/replying', use, async (request, reply) => {
+    const params = idParams.safeParse(request.params);
+    const found = params.success ? await visibleConversation(request, params.data.id) : null;
+    if (!found) return notFound(reply);
+    const other = await startReplying(
+      db,
+      found.conversation.id,
+      request.session.actor.employeeId,
+      now(),
+    );
+    return reply.send({ replyingName: other });
+  });
+
+  /** Who gets a conversation nobody holds: its queue, or the funnel's rotation (Eric, 26/10). */
+  app.get('/whatsapp/assignment', use, async (_request, reply) =>
+    reply.send({ mode: await assignmentModeOf(db) }),
+  );
+
+  app.put(
+    '/whatsapp/assignment',
+    { preHandler: app.requirePermission('crm.manage') },
+    async (request, reply) => {
+      const body = waAssignmentSettingsSchema.safeParse(request.body);
+      if (!body.success)
+        return reply.status(400).send({ error: 'invalid', message: 'Modo inválido.' });
+      await setAssignmentMode(db, body.data.mode, request.session.actor.employeeId);
+      await writeAudit(db, {
+        actorEmployeeId: request.session.actor.employeeId,
+        action: 'whatsapp.assignment_mode_changed',
+        entity: 'whatsapp_settings',
+        entityId: null,
+        ip: request.ip,
+        metadata: { mode: body.data.mode },
+      });
+      return reply.send({ mode: body.data.mode });
+    },
+  );
+
   /**
    * "Nova conversa" by a work number (Eric, 26/10): the number's chat with one of the deal's phones.
    * Nothing is sent here; the first message follows Meta's rule (free text only inside 24 h).
@@ -609,6 +788,11 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
 
   // --- sending ------------------------------------------------------------------------
 
+  const notHolder = (reply: FastifyReply, holderName: string | null) => {
+    const refused = attendanceRefusal(new AttendanceError('not_holder', holderName));
+    return reply.status(refused.status).send(refused.body);
+  };
+
   type Outgoing =
     | { kind: 'text'; text: string }
     | { kind: 'media'; fileId: string; caption: string }
@@ -643,6 +827,23 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       return reply
         .status(403)
         .send({ error: 'whatsapp_no_opt_in', message: WHATSAPP_OPT_IN_MISSING_TEXT });
+    // Someone else holds it: they answer, or this reader takes it first (attendance.ts).
+    const known =
+      target.conversationId ??
+      (target.contact && target.leadId
+        ? (
+            await db.query.waConversations.findFirst({
+              where: and(
+                eq(waConversations.contactId, target.contact.id),
+                eq(waConversations.leadId, target.leadId),
+                isNull(waConversations.numberId),
+              ),
+              columns: { id: true },
+            })
+          )?.id
+        : undefined);
+    const other = known ? await heldByOther(db, known, request.session.actor.employeeId) : null;
+    if (other) return notHolder(reply, other.holderName);
     if (numberId && (outgoing.kind === 'template' || outgoing.kind === 'call_permission'))
       return reply.status(409).send({
         error: 'number_templates_soon',
@@ -887,6 +1088,9 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
             originCode: null,
           });
     const actor = request.session.actor;
+    // The conversation becomes the writer's (and Sofia stops) before the message goes.
+    const held = await holdForSend(db, conversation.id, actor.employeeId, at);
+    if (!held.ok) return notHolder(reply, held.holderName);
     const delivered = await deliverWhatsApp(db, fetchImpl(), config, {
       numberId,
       contact,
@@ -938,8 +1142,6 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
           callPermissionRequestedAt: at,
         })
         .where(eq(waContacts.id, contact.id));
-    // A person writing takes the conversation: Sofia stops, the wait is over.
-    await takeConversation(db, conversation.id, at);
     await writeAudit(db, {
       actorEmployeeId: actor.employeeId,
       action: 'whatsapp.message_sent',

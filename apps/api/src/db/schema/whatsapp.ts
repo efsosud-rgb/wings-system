@@ -124,9 +124,24 @@ export const waConversations = pgTable(
     sofiaClaimedAt: timestamp('sofia_claimed_at', { withTimezone: true }),
     /** The person's messages up to here were already answered. */
     sofiaReadUntil: timestamp('sofia_read_until', { withTimezone: true }),
+    /** A person paused Sofia in this conversation: she never takes it until someone turns her on. */
+    sofiaPaused: boolean('sofia_paused').notNull().default(false),
+    /**
+     * Who answers it (docs/whatsapp/central.md, "Atendimento"). Null: the deal's owner holds it on
+     * the official number, the number's owner on a work number; with neither, it waits in its queue.
+     */
+    assigneeEmployeeId: uuid('assignee_employee_id').references(() => employees.id),
+    /** The department (a SectorSlug) whose queue it waits in; null: the number's, or none. */
+    queue: text('queue'),
+    /** Moves on every change of hands: an action made on an older one is refused (compare-and-set). */
+    version: integer('version').notNull().default(0),
+    /** "Outra pessoa está respondendo": who is typing and until when (renewed while they type). */
+    replyingEmployeeId: uuid('replying_employee_id').references(() => employees.id),
+    replyingUntil: timestamp('replying_until', { withTimezone: true }),
   },
   (table) => [
     index('wa_conversations_attendance_idx').on(table.attendance, table.lastMessageAt),
+    index('wa_conversations_assignee_idx').on(table.assigneeEmployeeId),
     index('wa_conversations_sofia_due_idx')
       .on(table.sofiaDueAt)
       .where(sql`${table.sofiaDueAt} is not null`),
@@ -141,6 +156,34 @@ export const waConversations = pgTable(
       .where(sql`${table.numberId} is not null`),
     index('wa_conversations_lead_idx').on(table.leadId),
     index('wa_conversations_last_idx').on(table.lastMessageAt),
+  ],
+);
+
+/**
+ * The history of who had a conversation (docs/whatsapp/central.md, "Atendimento"): every take,
+ * transfer, queue, resolve, reopen, and Sofia's pauses and handovers, with who did it (null: the
+ * system or Sofia). Append-only; ids and codes, never the person's data.
+ */
+export const waConversationEvents = pgTable(
+  'wa_conversation_events',
+  {
+    tenantId: tenantId(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => waConversations.id),
+    /** A WaConversationEventKind. */
+    kind: text('kind').notNull(),
+    fromEmployeeId: uuid('from_employee_id').references(() => employees.id),
+    toEmployeeId: uuid('to_employee_id').references(() => employees.id),
+    queue: text('queue'),
+    /** A code (a SofiaHandoffReason, `sofia_pausada`...), never free text. */
+    reason: text('reason'),
+    actorEmployeeId: uuid('actor_employee_id').references(() => employees.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('wa_conversation_events_conversation_idx').on(table.conversationId, table.createdAt),
   ],
 );
 
@@ -504,6 +547,11 @@ export const waMediaUploads = pgTable(
 export const whatsappSettings = pgTable('whatsapp_settings', {
   tenantId: tenantId().primaryKey(),
   officialNumberLive: boolean('official_number_live').notNull().default(false),
+  /**
+   * Who gets a conversation nobody holds (a WaAssignmentMode): `manual`, it waits in its queue for
+   * a person to take it; `rodizio`, the funnel's rotation (`crm_distribution_members`) picks.
+   */
+  assignmentMode: text('assignment_mode').notNull().default('manual'),
   updatedBy: uuid('updated_by').references(() => employees.id),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
