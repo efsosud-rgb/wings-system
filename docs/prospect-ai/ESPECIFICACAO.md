@@ -229,7 +229,7 @@ Recalculada a cada classificação nova e uma vez por hora pelo agendador de §3
 
 ### 3.9 Diagnóstico pelo link
 
-O link da resposta privada leva a um formulário do site já existente (rota pública `/public/site-forms/:slug`, `api/modules/site/site-forms.ts:306`), com `utm_content=op_<id>`. Quando o `upsertLead` do formulário cria ou junta o lead (`source = 'site_form'`), um gancho do PR D4 procura a oportunidade pelo `utm_content`, liga `lead_id` e passa para `aprovada`. A origem do lead continua `site_form` (primeiro toque, como manda `fillGaps`); a evidência do comentário aparece na aba "Origem e evidência". Qual formulário: **decisão do Eric** (sugestão: o diagnóstico de Formatação que já existe).
+O link da resposta privada leva a um formulário do site já existente (rota pública `/public/site-forms/:slug`, `api/modules/leads/site-forms.ts:277`), com `utm_content=op_<id>`. Quando o `upsertLead` do formulário cria ou junta o lead (`source = 'site_form'`), um gancho do PR D4 procura a oportunidade pelo `utm_content`, liga `lead_id` e passa para `aprovada`. A origem do lead continua `site_form` (primeiro toque, como manda `fillGaps`); a evidência do comentário aparece na aba "Origem e evidência". Qual formulário: **decisão do Eric** (sugestão: o diagnóstico de Formatação que já existe).
 
 ### 3.10 Agendadores do módulo
 
