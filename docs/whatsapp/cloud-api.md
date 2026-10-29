@@ -59,7 +59,7 @@ permissão. O que o Eric faz na Meta e o roteiro da troca do número ficam em `/
   para que a data cresça. O drizzle aplica pela data: uma migração com data menor que a última aplicada é
   pulada para sempre, sem erro (`journal.test.ts` confere a ordem). Rollback do banco (depois do das
   migrações da Central, `central.md`): `DROP VIEW "wa_message_files_analysis"; DROP TABLE "wa_message_files";
-  DROP INDEX "wa_messages_media_idx"; DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1793283195126;`
+DROP INDEX "wa_messages_media_idx"; DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1793283195126;`
 - **Números dos vendedores (próximo bloco):** a fila e a rota usam o token do número oficial. Antes de guardar
   mensagens dos números dos vendedores, a mensagem precisa dizer de qual número veio, e a cópia usar o token
   desse número (`wa_numbers`); senão a Meta recusa e o arquivo se perde nos 30 dias.
