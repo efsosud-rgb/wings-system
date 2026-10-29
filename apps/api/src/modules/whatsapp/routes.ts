@@ -103,9 +103,6 @@ import {
 } from './thread.js';
 import {
   assignmentModeOf,
-  attendanceRefusal,
-  AttendanceError,
-  attendanceView,
   heldByOther,
   holdForSend,
   reopen,
@@ -118,6 +115,8 @@ import {
   transfer,
   type ActionInput,
 } from './attendance.js';
+import { attendanceRefusal, AttendanceError } from './attendance-errors.js';
+import { attendanceView } from './attendance-view.js';
 import { loadSofiaSettings } from '../sofia/settings.js';
 import { factListOf } from '../sofia/state.js';
 import { adoptUnmatched, conversationFor, openConversation } from './intake.js';

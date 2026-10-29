@@ -32,13 +32,8 @@ import {
 } from '../whatsapp/thread.js';
 import { sofiaSpentToday } from './engine.js';
 import { loadSofiaSettings, saveSofiaSettings } from './settings.js';
-import {
-  AttendanceError,
-  attendanceRefusal,
-  resolve,
-  switchSofia,
-  takeOver,
-} from '../whatsapp/attendance.js';
+import { resolve, switchSofia, takeOver } from '../whatsapp/attendance.js';
+import { AttendanceError, attendanceRefusal } from '../whatsapp/attendance-errors.js';
 import { factListOf, SOFIA_GIVEN_BACK } from './state.js';
 
 /**
