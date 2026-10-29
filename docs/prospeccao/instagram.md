@@ -73,7 +73,7 @@ Toda tela que não conseguir carregar mostra "—" e o motivo (`components/LoadF
    - **"Abordei"**: registra a data (estado `abordada`);
    - **"Criar lead"**: quando a pessoa respondeu. Formulário igual ao "Criar lead" da busca do Google (`docs/crm/prospeccao.md`, "Criar lead"): telefone ou e-mail **que a pessoa passou na conversa**, digitados pela vendedora, e **"A pessoa pediu contato por WhatsApp?"** (obrigatório). O lead nasce no funil da categoria (spec PA, §3.6), dono = a vendedora, origem `instagram_colagem`;
    - **"Não contatar"**: grava o "não me contate" pelo @ (§8.3); **"Descartar"** com motivo.
-6. **Prazo:** prospect que não for abordado nem virar lead em 30 dias é apagado (§8.4).
+6. **Prazo:** prospect que não virar lead em 30 dias desde a última mudança (criação, "Abordei" ou transferência) é apagado (§8.4).
 
 ### 1.3 Parte 3 — empresas do perfil ideal pela Business Discovery (Fase B)
 
