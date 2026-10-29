@@ -303,6 +303,11 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
     } catch (error) {
       return googleFailed(request, reply, error);
     }
+    for (const { error } of answer.failed)
+      request.log.warn(
+        { code: error.code, status: error.status },
+        'prospecting: one place of a sweep failed',
+      );
     const settings = await loadProspectingSettings(db);
     let assembled: Awaited<ReturnType<typeof assembleSearch>>;
     try {
@@ -325,6 +330,7 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
       page: input.page,
       callsSpent: calls,
       hidden,
+      failedPlaces: answer.failed.map(({ place, error }) => ({ place, code: error.code })),
       usage: await usageOf(db, actor.employeeId, at),
     } satisfies ProspectSearchResponse);
   });

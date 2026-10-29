@@ -45,7 +45,7 @@ import type { AgentLlm } from '../agent/llm.js';
 import { leadVisibleTo } from '../leads/access.js';
 import { addNote, changeLead, createTask, type Executor } from '../leads/crm.js';
 import { ForeignLeadError, upsertLead } from '../leads/service.js';
-import type { PlacesClient } from './places-client.js';
+import { PlacesError, type PlacesClient } from './places-client.js';
 
 /**
  * Prospecção (docs/crm/prospeccao.md). Google's answer is joined in memory with
@@ -215,15 +215,20 @@ export interface GoogleAnswer {
   results: PlaceResult[];
   repeated: number;
   nextPageToken: string | null;
+  /** The places of a sweep that failed, with Google's error: the others' results still go. */
+  failed: { place: string; error: PlacesError }[];
 }
 
-/** One call per place (the calls were reserved before); a place twice in a sweep counts once. */
+/**
+ * One call per place (the calls were reserved before); a place twice in a sweep counts once.
+ * A place that fails leaves the others standing; only when every place failed does it throw.
+ */
 export async function searchGoogle(
   places: PlacesClient,
   input: ProspectSearchInput,
 ): Promise<GoogleAnswer> {
   const sweep = input.places.length > 1;
-  const pages = await Promise.all(
+  const settled = await Promise.allSettled(
     input.places.map((place) =>
       places.searchText({
         textQuery: `${input.segment} em ${place}`,
@@ -232,6 +237,16 @@ export async function searchGoogle(
       }),
     ),
   );
+  const pages: Awaited<ReturnType<PlacesClient['searchText']>>[] = [];
+  const failed: GoogleAnswer['failed'] = [];
+  for (const [index, outcome] of settled.entries()) {
+    if (outcome.status === 'fulfilled') pages.push(outcome.value);
+    // Anything but Google's own error is a bug here: it fails the whole search, as before.
+    else if (outcome.reason instanceof PlacesError)
+      failed.push({ place: input.places[index]!, error: outcome.reason });
+    else throw outcome.reason;
+  }
+  if (pages.length === 0) throw failed[0]!.error;
   const seen = new Set<string>();
   const results: PlaceResult[] = [];
   let repeated = 0;
@@ -244,7 +259,7 @@ export async function searchGoogle(
   }
   const nextPageToken =
     !sweep && input.page < PROSPECT_SEARCH_MAX_PAGES ? (pages[0]?.nextPageToken ?? null) : null;
-  return { results, repeated, nextPageToken };
+  return { results, repeated, nextPageToken, failed };
 }
 
 function failsFilters(place: PlaceResult, input: ProspectSearchInput): boolean {
