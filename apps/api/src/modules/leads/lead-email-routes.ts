@@ -24,6 +24,7 @@ const SEND_ERRORS = {
     409,
     'Expansão com marca: o lead não recebe e-mail da Wings. Fale por WhatsApp em nome da marca.',
   ],
+  contact_blocked: [409, 'Pediu para não ser contatado por e-mail. Nada foi enviado.'],
   send_failed: [502, 'Não foi possível enviar o e-mail. Nada foi enviado.'],
 } as const;
 
@@ -145,7 +146,9 @@ export const leadEmailRoutes: FastifyPluginAsync = async (app) => {
     });
     if (!outcome.ok) {
       const [status, message] = SEND_ERRORS[outcome.reason];
-      return reply.status(status).send({ error: outcome.reason, message });
+      return reply
+        .status(status)
+        .send({ error: outcome.reason, message: outcome.message ?? message });
     }
     return reply.status(201).send({ outboxId: outcome.outboxId, mode: outcome.mode });
   });

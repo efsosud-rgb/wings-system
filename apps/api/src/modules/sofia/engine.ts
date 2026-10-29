@@ -34,6 +34,7 @@ import {
 import { writeAudit } from '../../lib/audit.js';
 import type { AgentLlm, LlmUsage } from '../agent/llm.js';
 import { managersAndBoard } from '../leads/crm-alerts.js';
+import { contactBlock, recordContactOptOut } from '../leads/contact-block.js';
 import { changeLead } from '../leads/crm.js';
 import {
   buttonsPayload,
@@ -279,6 +280,13 @@ class Turn {
 
     // SAIR / PARAR: a fixed rule, no AI, no conversation.
     if (fresh.some((m) => isOptOut(m.text))) return this.close('nao_contatar', true);
+    // Who asked not to be contacted and writes again is answered by a person, never by Sofia
+    // alone (Eric, 29/10): the register, a SAIR or the Prospecção opt-in rule, as `contactBlock` reads.
+    const block = await contactBlock(db, 'whatsapp', {
+      leadId: this.conversation.leadId,
+      phone: contact.phone,
+    });
+    if (block.blocked) return this.toOwnerOptedOut();
 
     // --- what the person said ---------------------------------------------------------
     let progress = false;
@@ -740,6 +748,14 @@ class Turn {
         .update(waContacts)
         .set({ optOutAt: this.now, updatedAt: this.now })
         .where(and(eq(waContacts.id, this.contact.id), isNull(waContacts.optOutAt)));
+    if (reason === 'nao_contatar')
+      await recordContactOptOut(this.db, {
+        phone: this.contact.phone,
+        channels: ['whatsapp'],
+        origin: 'whatsapp_palavra',
+        reason: 'Pediu para não receber mensagens pelo WhatsApp',
+        createdBy: null,
+      });
     if (this.conversation.leadId) {
       const [lead] = await this.db
         .select({ owner: leads.ownerEmployeeId, won: leads.won })
@@ -763,6 +779,33 @@ class Turn {
       metadata: { reason, label: SOFIA_CLOSE_LABELS[reason] },
     });
     if (confirm) await this.send(this.text(this.settings.texts.optOut));
+  }
+
+  /** Nothing is sent: the deal's owner (or, with no owner, the managers) decides. */
+  private async toOwnerOptedOut() {
+    if (!(await this.isHers())) return;
+    if (!(await this.save({ attendance: 'waiting_human', reason: 'nao_me_contate' }))) return;
+    const [lead] = this.conversation.leadId
+      ? await this.db
+          .select({ owner: leads.ownerEmployeeId })
+          .from(leads)
+          .where(eq(leads.id, this.conversation.leadId))
+      : [];
+    const people = lead?.owner ? [lead.owner] : await managersAndBoard(this.db);
+    if (people.length === 0) return;
+    await this.db
+      .insert(crmNotifications)
+      .values(
+        people.map((person) => ({
+          recipientEmployeeId: person,
+          leadId: this.conversation.leadId,
+          kind: 'contact_opt_out_wrote',
+          message:
+            'Pediu para não ser contatado e escreveu de novo no WhatsApp. A Sofia não respondeu: veja a conversa e decida.',
+          dedupeKey: `contact_opt_out_wrote:${this.conversation.id}:${this.now.toISOString()}:${person}`,
+        })),
+      )
+      .onConflictDoNothing();
   }
 
   private async notifyTeam(reason: SofiaHandoffReason) {

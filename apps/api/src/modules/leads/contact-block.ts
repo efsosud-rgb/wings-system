@@ -13,7 +13,7 @@ import {
 } from '@wings/shared';
 import { and, eq, inArray, isNotNull, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { WINGS_TENANT_ID } from '../../db/schema/ads.js';
-import { contactOptOuts, leads, prospects, waContacts } from '../../db/schema/index.js';
+import { contactOptOuts, leadEvents, leads, prospects, waContacts } from '../../db/schema/index.js';
 import type { Executor } from './crm.js';
 
 /**
@@ -276,4 +276,16 @@ export async function revokeContactOptOuts(
     )
     .returning({ id: contactOptOuts.id });
   return revoked.length;
+}
+
+/** A contact that did not start, on the lead's timeline: the channel, the path, the origin; never a text. */
+export async function noteContactBlocked(
+  db: Executor,
+  leadId: string,
+  detail: { channel: ContactChannel; path: string; origin: ContactOptOutOrigin | null },
+  actorEmployeeId: string | null = null,
+) {
+  await db
+    .insert(leadEvents)
+    .values({ leadId, kind: 'lead.contact_blocked', actorEmployeeId, detail });
 }

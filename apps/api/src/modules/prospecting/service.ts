@@ -42,6 +42,7 @@ import {
   roles,
 } from '../../db/schema/index.js';
 import type { AgentLlm } from '../agent/llm.js';
+import { recordContactOptOut } from '../leads/contact-block.js';
 import { leadVisibleTo } from '../leads/access.js';
 import { addNote, changeLead, createTask, type Executor } from '../leads/crm.js';
 import { ForeignLeadError, upsertLead } from '../leads/service.js';
@@ -628,6 +629,17 @@ export async function updateProspect(
     .where(sameHolding(row))
     .returning();
   if (!updated) return CHANGED;
+  // "Pediu para não ser contatado" goes to the one register, every channel, by place_id and by
+  // the linked lead's keys (docs/crm/nao-me-contate.md).
+  if (updated.status === 'nao_contatar' && row.status !== 'nao_contatar')
+    await recordContactOptOut(db, {
+      placeId: updated.placeId,
+      leadId: updated.leadId,
+      channels: ['all'],
+      origin: 'prospeccao',
+      reason: updated.reason ?? 'Pediu para não ser contatado (prospecção)',
+      createdBy: actor.employeeId,
+    });
   return { ok: true, prospect: await prospectView(db, updated, actor), previous: row };
 }
 
