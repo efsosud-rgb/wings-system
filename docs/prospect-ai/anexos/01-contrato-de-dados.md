@@ -68,7 +68,7 @@ Uma linha por fato observado: um comentário, uma mensagem do Direct, um registr
 | `confidence` | smallint | CHECK 0–100 |
 | `justification` | text | a frase do texto que motivou a classificação (no máximo 200 caracteres, CHECK) |
 | `classification_id` | uuid → `prospect_classifications` | a classificação vigente |
-| `needs_review_reason` | text | por que exige humano: `confianca_baixa`, `revisao_obrigatoria`, `servico_nao_vendido`, `sem_ia`, `teto_ia`, `registro_manual`. Nulo quando não exige |
+| `needs_review_reason` | text | por que exige humano: `confianca_baixa`, `revisao_obrigatoria`, `servico_nao_vendido`, `sem_ia`, `teto_ia`, `ia_invalida`, `registro_manual`. Nulo quando não exige |
 | `owner_employee_id` | uuid → employees | dono |
 | `respond_by` | timestamptz | prazo para responder (3.1 e 3.2). Nulo no radar |
 | `responded_at` | timestamptz | primeira resposta humana (eco do Direct, se a Meta mandar, ou o botão "Respondi") |
@@ -161,7 +161,7 @@ Divergência registrada: no plano, "Expansão da própria rede" vai para o funil
 
 ## 2.7 Classificador: `prospect_classifier_cache` e `prospect_classifier_runs` (C3)
 
-**`prospect_classifier_cache`** — o mesmo texto nunca é classificado duas vezes. **O texto não é guardado.**
+**`prospect_classifier_cache`** — o mesmo texto nunca é classificado duas vezes. **O texto de entrada não é guardado**; o resultado guarda só a `frase` justificativa (até 200 caracteres, trecho do próprio texto), por isso a retenção é curta (anexo 2, §4.7).
 
 | Coluna | Tipo | Regra |
 |---|---|---|
