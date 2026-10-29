@@ -14,6 +14,7 @@ import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
 import {
   auditLog,
+  contactOptOuts,
   leadEvents,
   leadNotes,
   leadTrackingLinks,
@@ -630,6 +631,12 @@ describe('sending', () => {
     });
     expect(blocked.statusCode).toBe(409);
     expect(blocked.json().error).toBe('opted_out');
+    // The word also goes to the one register, by phone, even with Sofia off.
+    const [registered] = await db
+      .select()
+      .from(contactOptOuts)
+      .where(eq(contactOptOuts.keyValue, '5521912120000'));
+    expect(registered).toMatchObject({ channel: 'whatsapp', origin: 'whatsapp_palavra' });
     await deliver(inbound('5521912120000', 'Pensei melhor, me liga').body);
     await run();
     const thread = await app.inject({
