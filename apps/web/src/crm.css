@@ -3147,3 +3147,63 @@
     width: auto;
   }
 }
+
+/* ---------- Central WhatsApp (docs/whatsapp/central.md): filters, contact panel ---------- */
+.crm-wa-web .crm-wa-tabs {
+  flex-wrap: wrap;
+  overflow-x: visible;
+}
+.crm-wa-filters > summary {
+  cursor: pointer;
+  color: var(--text-2);
+  font-size: var(--text-sm);
+}
+.crm-wa-filters-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.crm-wa-row-meta {
+  font-size: var(--text-xs);
+}
+.crm-wa-row-meta > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.crm-wa-web-split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.crm-wa-web-split > .crm-wa-chat {
+  flex: 1;
+  min-width: 0;
+}
+.crm-wa-web-panel {
+  width: 340px;
+  flex: none;
+  overflow: auto;
+  padding: var(--space-3);
+  border-left: 1px solid var(--line);
+}
+.crm-wa-web-panel-toggle {
+  display: none;
+}
+@media (max-width: 1100px) {
+  .crm-wa-web-panel {
+    display: none;
+  }
+  .crm-wa-web-panel-toggle {
+    display: inline-flex;
+  }
+  .crm-wa-web-split.show-panel .crm-wa-web-panel {
+    display: block;
+    width: 100%;
+    border-left: 0;
+  }
+  .crm-wa-web-split.show-panel > .crm-wa-chat {
+    display: none;
+  }
+}

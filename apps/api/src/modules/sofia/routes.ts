@@ -96,8 +96,11 @@ export const sofiaRoutes: FastifyPluginAsync = async (app) => {
 
   const ownerOf = (request: FastifyRequest) =>
     leadOwnerFilter(request.session.actor, 'leads.whatsapp');
+  // Sofia's screen is the official number's: a work number's chats are never hers (central.md).
   const scopeSql = (owner: string | undefined) =>
-    owner === undefined ? sql`` : sql`and l.owner_employee_id = ${owner}`;
+    owner === undefined
+      ? sql`and c.number_id is null`
+      : sql`and c.number_id is null and l.owner_employee_id = ${owner}`;
   const canManage = (request: FastifyRequest) => can(request.session.actor, 'sofia.manage').allowed;
 
   app.get('/sofia/overview', use, async (request, reply) => {
@@ -139,6 +142,7 @@ export const sofiaRoutes: FastifyPluginAsync = async (app) => {
         readerId: request.session.actor.employeeId,
         limit: 200,
         where: sql`
+        and c.number_id is null
         ${state ? sql`and c.attendance = ${state}` : sql``}
         ${
           segment === 'none'
@@ -164,7 +168,7 @@ export const sofiaRoutes: FastifyPluginAsync = async (app) => {
     const conversation = await db.query.waConversations.findFirst({
       where: eq(waConversations.id, id),
     });
-    if (!conversation) return null;
+    if (!conversation || conversation.numberId) return null;
     if (conversation.leadId) {
       const lead = await leadInScope(
         db,

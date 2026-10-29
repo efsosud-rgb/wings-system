@@ -32,7 +32,7 @@ import {
   type ReactNode,
   type RefObject,
 } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { hasPermission, useSession } from '../../api/auth.js';
 import { CompanyLink } from '../../components/CompanyLink.js';
 import { ApiError } from '../../api/client.js';
@@ -278,6 +278,8 @@ function Head({
   canAssign: boolean;
 }) {
   const { lead } = data;
+  // Opened from the Central WhatsApp: back to the same conversation, with its filters.
+  const back = (useLocation().state as { back?: unknown } | null)?.back;
   const stages = useStages(lead.pipeline ?? '');
   const update = useUpdateLead(lead.id);
   const [losing, setLosing] = useState(false);
@@ -295,12 +297,18 @@ function Head({
   return (
     <header className="crm-deal-head">
       <div className="crm-deal-title">
-        <Link
-          className="crm-btn is-quiet is-small"
-          to={`/crm-vendas/negociacoes?funil=${lead.pipeline ?? 'expansao'}`}
-        >
-          ‹ Negociações
-        </Link>
+        {typeof back === 'string' && back.startsWith('/crm-vendas/whatsapp') ? (
+          <Link className="crm-btn is-quiet is-small" to={back}>
+            ‹ Voltar à conversa
+          </Link>
+        ) : (
+          <Link
+            className="crm-btn is-quiet is-small"
+            to={`/crm-vendas/negociacoes?funil=${lead.pipeline ?? 'expansao'}`}
+          >
+            ‹ Negociações
+          </Link>
+        )}
         <DealName lead={lead} canWrite={canWrite} />
         {lead.work.won === true && <span className="crm-status is-won">Ganha</span>}
         {lead.work.won === false && (

@@ -1,16 +1,24 @@
 import { createHmac, randomBytes } from 'node:crypto';
 import { SESSION_COOKIE, type RoleKey, type WaNumbersView } from '@wings/shared';
-import { eq } from 'drizzle-orm';
+import { eq, inArray, isNotNull } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
-import { auditLog, waContacts, waMessages, waNumbers, waTemplates } from '../../db/schema/index.js';
+import {
+  auditLog,
+  waContacts,
+  waConversations,
+  waMessages,
+  waNumbers,
+  waTemplates,
+} from '../../db/schema/index.js';
 import { loadEnv, type Env } from '../../env.js';
 import { createSecretBox } from '../../lib/secret-box.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
 import { applyWhatsAppPayload, processWhatsAppEvents } from './intake.js';
+import { workNumberOf } from './numbers.js';
 
 /**
  * Connecting a seller's WhatsApp Business number by coexistence, against a simulated Meta: the
@@ -27,6 +35,10 @@ const BUSINESS_TOKEN = 'EAAG-business-token-from-signup';
 const WABA = '3100000000000001';
 const NUMBER = '4200000000000001';
 const PORTFOLIO = '5300000000000001';
+/** Made-up numbers: the official one of this test environment, and its WABA. */
+const OFFICIAL_ID = '1253469287856067';
+const OFFICIAL_WABA = '3100000000000099';
+const OFFICIAL_PHONE = '5521977770000';
 const START = new Date('2026-10-20T15:00:00Z');
 
 let harness: TestDatabase;
@@ -96,8 +108,10 @@ const baseEnv = (extra: Record<string, string> = {}): Env =>
     WHATSAPP_APP_SECRET: APP_SECRET,
     WHATSAPP_WEBHOOK_VERIFY_TOKEN: VERIFY,
     WHATSAPP_APP_ID: APP_ID,
-    // The env number is the test number; the sellers' numbers are other ids.
-    WHATSAPP_PHONE_NUMBER_ID: '1253469287856067',
+    // The env number is the official one; the work numbers are other ids.
+    WHATSAPP_PHONE_NUMBER_ID: OFFICIAL_ID,
+    WHATSAPP_WABA_ID: OFFICIAL_WABA,
+    WINGS_WHATSAPP_NUMBER: OFFICIAL_PHONE,
     ...extra,
   });
 
@@ -121,6 +135,13 @@ beforeEach(async () => {
   answers = defaults();
   calls.length = 0;
   clock = START;
+  // A work number's chats go first: they point at the number.
+  const chats = db
+    .select({ id: waConversations.id })
+    .from(waConversations)
+    .where(isNotNull(waConversations.numberId));
+  await db.delete(waMessages).where(inArray(waMessages.conversationId, chats));
+  await db.delete(waConversations).where(isNotNull(waConversations.numberId));
   await db.delete(waNumbers);
 });
 
@@ -145,17 +166,35 @@ const connect = (
   target: FastifyInstance = app,
 ) => target.inject({ method: 'POST', url: '/whatsapp/numbers/connect', cookies, payload });
 
-describe('the sellers’ numbers', () => {
+describe('the work numbers', () => {
   let admin: Awaited<ReturnType<typeof sessionFor>>;
   let seller: Awaited<ReturnType<typeof sessionFor>>;
+  let numberId = '';
   beforeAll(async () => {
     admin = await sessionFor('admin_master');
     seller = await sessionFor('vendedor_expansao');
   });
+  const register = (extra: Record<string, unknown> = {}, cookies = admin.cookies) =>
+    app.inject({
+      method: 'POST',
+      url: '/whatsapp/numbers',
+      cookies,
+      payload: {
+        phone: '(21) 99999-0000',
+        label: 'Comercial teste',
+        ownerEmployeeId: seller.id,
+        sector: 'comercial',
+        eligibility: 'confirmado',
+        ...extra,
+      },
+    });
+  beforeEach(async () => {
+    numberId = (await register()).json<{ number: { id: string } }>().number.id;
+  });
   const payload = (extra: Record<string, unknown> = {}) => ({
     code: 'code-from-embedded-signup',
     wabaId: WABA,
-    ownerEmployeeId: seller.id,
+    numberId,
     ...extra,
   });
 
@@ -166,11 +205,12 @@ describe('the sellers’ numbers', () => {
       cookies: admin.cookies,
     });
     expect(view.statusCode).toBe(200);
-    expect(view.json<WaNumbersView>()).toEqual({
+    expect(view.json<WaNumbersView>()).toMatchObject({
       signup: { appId: APP_ID, configId: '987654321', graphVersion: 'v23.0' },
       missing: [],
-      numbers: [],
+      numbers: [{ status: 'registered', phone: '5521999990000', phoneNumberId: null }],
     });
+    expect(view.json<WaNumbersView>().people.map((p) => p.id)).toContain(seller.id);
     for (const role of ['vendedor_expansao', 'gerente_comercial', 'diretoria'] as const) {
       const other = await sessionFor(role);
       const read = await app.inject({
@@ -180,6 +220,7 @@ describe('the sellers’ numbers', () => {
       });
       expect(read.statusCode).toBe(403);
       expect((await connect(other.cookies, payload())).statusCode).toBe(403);
+      expect((await register({ phone: '21988880000' }, other.cookies)).statusCode).toBe(403);
     }
     expect(calls).toHaveLength(0);
   });
@@ -225,11 +266,13 @@ describe('the sellers’ numbers', () => {
       historySync: 'requested',
       historyProgress: null,
       syncDeadline: '2026-10-21T15:00:00.000Z',
+      // Meta gave no end for this token.
+      tokenExpiresAt: null,
     });
 
     const [row] = await db.select().from(waNumbers);
     expect(row!.tokenEnc).not.toContain(BUSINESS_TOKEN);
-    expect(createSecretBox(KEY).open(row!.tokenEnc)).toBe(BUSINESS_TOKEN);
+    expect(createSecretBox(KEY).open(row!.tokenEnc!)).toBe(BUSINESS_TOKEN);
     expect(row!.contactsSyncRequest).toBe('req-1');
     expect(row!.historySyncRequest).toBe('req-2');
 
@@ -269,18 +312,128 @@ describe('the sellers’ numbers', () => {
     const two = await connect(admin.cookies, payload());
     expect(two.json()).toMatchObject({ error: 'number_ambiguous' });
 
-    expect(await db.select().from(waNumbers)).toHaveLength(0);
+    const [row] = await db.select().from(waNumbers);
+    expect(row).toMatchObject({ status: 'registered', phoneNumberId: null, tokenEnc: null });
     expect(calls.some((c) => c.step === 'subscribe' || c.step === 'sync')).toBe(false);
   });
 
-  it('refuses an owner who is not an active seller before calling Meta', async () => {
+  it('refuses an owner who is not active, at the registry and before calling Meta', async () => {
     const gone = await createEmployee(db, { role: 'vendedor_expansao', status: 'inactive' });
-    for (const ownerEmployeeId of [gone.id, admin.id]) {
-      const res = await connect(admin.cookies, payload({ ownerEmployeeId }));
-      expect(res.statusCode).toBe(400);
-      expect(res.json()).toMatchObject({ error: 'owner_invalid' });
-    }
+    const refused = await register({ phone: '21988880000', ownerEmployeeId: gone.id });
+    expect(refused.statusCode).toBe(400);
+    expect(refused.json()).toMatchObject({ error: 'owner_invalid' });
+    // Any active person may own one (Diretoria, the Admin), not only a seller.
+    expect((await register({ phone: '21988880001', ownerEmployeeId: admin.id })).statusCode).toBe(
+      201,
+    );
+    await db.update(waNumbers).set({ ownerEmployeeId: gone.id }).where(eq(waNumbers.id, numberId));
+    const res = await connect(admin.cookies, payload());
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: 'owner_invalid' });
     expect(calls).toHaveLength(0);
+  });
+
+  it('never takes the official number as a work number', async () => {
+    const typed = await register({ phone: '(21) 97777-0000' });
+    expect(typed.statusCode).toBe(409);
+    expect(typed.json()).toMatchObject({ error: 'official_number' });
+    const edited = await app.inject({
+      method: 'PATCH',
+      url: `/whatsapp/numbers/${numberId}`,
+      cookies: admin.cookies,
+      payload: { phone: '21977770000' },
+    });
+    expect(edited.json()).toMatchObject({ error: 'official_number' });
+    // The official WABA is refused before the code is spent.
+    const byWaba = await connect(admin.cookies, payload({ wabaId: OFFICIAL_WABA }));
+    expect(byWaba.json()).toMatchObject({ error: 'official_number' });
+    expect(calls).toHaveLength(0);
+    // Meta shows the official number's id, or its phone, inside another WABA.
+    answers.numbers = () =>
+      json({ data: [{ id: OFFICIAL_ID, display_phone_number: '+55 21 99999-0000' }] });
+    expect((await connect(admin.cookies, payload())).json()).toMatchObject({
+      error: 'official_number',
+    });
+    answers.numbers = () =>
+      json({ data: [{ id: NUMBER, display_phone_number: '+55 21 97777-0000' }] });
+    expect((await connect(admin.cookies, payload())).json()).toMatchObject({
+      error: 'official_number',
+    });
+    const [row] = await db.select().from(waNumbers);
+    expect(row).toMatchObject({ status: 'registered', tokenEnc: null });
+    // And a change that names it is never read as a work number's, whatever a row says.
+    await db
+      .update(waNumbers)
+      .set({ phoneNumberId: OFFICIAL_ID, wabaId: WABA })
+      .where(eq(waNumbers.id, numberId));
+    expect(
+      await workNumberOf(db, { phoneNumberId: OFFICIAL_ID, wabaId: WABA } as never, {
+        phoneNumberId: OFFICIAL_ID,
+        wabaId: OFFICIAL_WABA,
+      }),
+    ).toBeNull();
+  });
+
+  it('connects only a number the registry confirmed, before spending the code', async () => {
+    await db
+      .update(waNumbers)
+      .set({ eligibility: 'a_confirmar' })
+      .where(eq(waNumbers.id, numberId));
+    const res = await connect(admin.cookies, payload());
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'not_eligible' });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('takes only the registered number from Meta’s window', async () => {
+    answers.numbers = () =>
+      json({ data: [{ id: NUMBER, display_phone_number: '+55 21 98888-1111' }] });
+    const other = await connect(admin.cookies, payload());
+    expect(other.statusCode).toBe(409);
+    expect(other.json()).toMatchObject({ error: 'number_mismatch' });
+    expect(calls.some((c) => c.step === 'subscribe')).toBe(false);
+  });
+
+  it('keeps the token’s end and the registry’s fields; the number is locked once connected', async () => {
+    answers.exchange = () => json({ access_token: BUSINESS_TOKEN, expires_in: 5_184_000 });
+    const res = await connect(admin.cookies, payload());
+    expect(res.json<{ number: { tokenExpiresAt: string } }>().number.tokenExpiresAt).toBe(
+      '2026-12-19T15:00:00.000Z',
+    );
+    const patched = await app.inject({
+      method: 'PATCH',
+      url: `/whatsapp/numbers/${numberId}`,
+      cookies: admin.cookies,
+      payload: {
+        eligibility: 'confirmado',
+        eligibilityNotes: 'App 2.24.20 no celular.',
+        checks: ['app', 'work'],
+      },
+    });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json()).toMatchObject({
+      number: {
+        eligibility: 'confirmado',
+        checks: ['app', 'work'],
+        label: 'Comercial teste',
+        sector: 'comercial',
+        status: 'connected',
+      },
+    });
+    const locked = await app.inject({
+      method: 'PATCH',
+      url: `/whatsapp/numbers/${numberId}`,
+      cookies: admin.cookies,
+      payload: { phone: '21988887777' },
+    });
+    expect(locked.json()).toMatchObject({ error: 'phone_locked' });
+    const twice = await register();
+    expect(twice.json()).toMatchObject({ error: 'phone_taken' });
+    const audit = await db.query.auditLog.findFirst({
+      where: eq(auditLog.action, 'whatsapp.number_updated'),
+    });
+    expect(audit?.metadata).toEqual({ fields: ['checks', 'eligibility', 'eligibilityNotes'] });
+    expect(JSON.stringify(audit?.metadata)).not.toContain('2.24');
   });
 
   it('does not ask for the syncs before the subscription went through; "Tentar de novo" does', async () => {
@@ -351,9 +504,10 @@ describe('the sellers’ numbers', () => {
     expect(again.statusCode).toBe(200);
     const rows = await db.select().from(waNumbers);
     expect(rows).toHaveLength(1);
-    expect(createSecretBox(KEY).open(rows[0]!.tokenEnc)).toBe('EAAG-second-token');
-    expect(rows[0]!.connectedAt.toISOString()).toBe(clock.toISOString());
+    expect(createSecretBox(KEY).open(rows[0]!.tokenEnc!)).toBe('EAAG-second-token');
+    expect(rows[0]!.connectedAt!.toISOString()).toBe(clock.toISOString());
     expect(rows[0]!.contactsSyncRequest).toBe('req-3');
+    expect(rows[0]!.phone).toBe('5521999990000');
   });
 
   it('the webhook marks a number that left, and how far its history is', async () => {
@@ -400,7 +554,7 @@ describe('the sellers’ numbers', () => {
     });
     await processWhatsAppEvents({
       db,
-      phoneNumberId: '1253469287856067',
+      phoneNumberId: OFFICIAL_ID,
       log: () => {},
       now: () => clock,
     });
@@ -419,7 +573,7 @@ describe('the sellers’ numbers', () => {
     expect(retry.statusCode).toBe(404);
   });
 
-  it('keeps the seller’s messages and templates out of the CRM, even with no official number set', async () => {
+  it('brings the number’s messages in as its own chat, never Sofia’s; its templates stay out', async () => {
     await connect(admin.cookies, payload());
     await db
       .insert(waTemplates)
@@ -477,12 +631,22 @@ describe('the sellers’ numbers', () => {
         { db, phoneNumberId: null, log: () => {}, now: () => clock },
         body,
       );
-    expect(
-      await db.select().from(waMessages).where(eq(waMessages.wamid, 'wamid.SELLER1')),
-    ).toHaveLength(0);
-    expect(
-      await db.select().from(waContacts).where(eq(waContacts.phone, '5521988887777')),
-    ).toHaveLength(0);
+    const [message] = await db
+      .select()
+      .from(waMessages)
+      .where(eq(waMessages.wamid, `${numberId}:wamid.SELLER1`));
+    expect(message).toMatchObject({ direction: 'in', author: 'contact', text: 'oi' });
+    const [chat] = await db
+      .select()
+      .from(waConversations)
+      .where(eq(waConversations.id, message!.conversationId));
+    expect(chat).toMatchObject({ numberId, attendance: 'with_person', sofiaDueAt: null });
+    // The official number's 24-hour window is not opened by a message to a work number.
+    const [contact] = await db
+      .select()
+      .from(waContacts)
+      .where(eq(waContacts.phone, '5521988887777'));
+    expect(contact?.lastInboundAt).toBeNull();
     const [template] = await db
       .select()
       .from(waTemplates)

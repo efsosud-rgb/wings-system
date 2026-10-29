@@ -56,7 +56,8 @@ Financeiro, Processos e Projetos, Contábil/Tributário, Logística, TI).
 
 Also by level, outside the menu: the sector-manager flag (`is_sector_manager`) adds the register of the person's
 own sector; Diretoria never sees TI sector records; Diretoria does not edit deals or employee data (only levels);
-nobody but the Admin Master sets the ad budget caps, connects Kairogen or connects a seller's WhatsApp number.
+nobody but the Admin Master sets the ad budget caps, connects Kairogen, or registers and connects a WhatsApp work
+number (CRM Vendas → WhatsApp → Números, `integrations.manage`).
 
 **Prospecção (Eric, 24/10; `docs/crm/prospeccao.md`).** `prospecting.use` opens the screen: `own` for the Vendedor
 Formatação (their own prospects; a company another seller holds is hidden from their search), `all` for the Gerente
@@ -109,6 +110,14 @@ comercial see every one. The old `/crm-vendas/agenda` redirects to `/produtivida
 - **WhatsApp → Importar em lote** (`whatsapp.import_bulk`, 19/10): Admin Master only, scope all, because it pairs
   conversations with any open deal. The single import in a deal stays `leads.whatsapp` + `leads.write`. See
   `docs/whatsapp/importar-conversa.md`.
+- **Central WhatsApp, work numbers** (26/10, `docs/whatsapp/central.md`): a chat on a company work number is seen
+  (list, conversation, files, send) by the **number's owner** and by whoever reads every lead (`leads.whatsapp`
+  scope all: Admin Master, Diretoria, Gerente Comercial). A seller who owns the deal but not the number does not see
+  that number's chat (404), only the official conversation of the deal; decision open for Eric. The official
+  number's rule does not change (deal owner; no deal: scope all). The seller's "em breve" key is the official
+  number's: a seller writes from their own connected work number with it off. Sofia's screen never lists a work
+  number's chat. The registry, the connection, the token's end and the failed webhook bodies ("Processar de novo")
+  are Admin Master only (`integrations.manage`); audit rows carry ids only.
 
 Not in the system: **Notion** (no module or link exists). **Meet** for a seller is the Google connection in
 "Minha conta" and the meetings inside the deal; Produtividade → Agenda and Reuniões only read (above).

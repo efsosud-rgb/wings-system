@@ -1,18 +1,23 @@
 import {
+  brazilianPhoneVariants,
   WA_SYNC_WINDOW_HOURS,
+  type SectorSlug,
   type WaNumber,
+  type WaNumberCheck,
   type WaNumberConnect,
+  type WaNumberEligibility,
+  type WaNumberRegister,
   type WaNumberStatus,
+  type WaNumberUpdate,
   type WaSignupConfig,
   type WaSyncState,
 } from '@wings/shared';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, ne, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import type { Database } from '../../db/client.js';
 import { employees, waNumbers } from '../../db/schema/index.js';
 import type { Env } from '../../env.js';
 import { createSecretBox, type SecretBox } from '../../lib/secret-box.js';
-import { listSellers } from '../leads/crm.js';
 import {
   exchangeSignupCode,
   readWabaNumbers,
@@ -21,22 +26,43 @@ import {
   subscribeWaba,
   WHATSAPP_GRAPH_VERSION,
   type GraphBusinessNumber,
+  type WhatsAppConfig,
 } from './graph.js';
 import type { WaChange } from './webhook-parse.js';
 
 /**
- * Connecting a seller's own WhatsApp Business number by coexistence
- * (docs/whatsapp/conectar-numero.md). The browser runs Meta's Embedded Signup and hands over
- * the code and the WABA; here the code becomes the business token, the WABA's numbers are read
- * with it (so an id from the browser is believed only if Meta shows it), our app subscribes to
- * the WABA's webhooks, and the contacts and the history are asked for, each once, within 24 h.
- * The token is sealed at once and never leaves the API.
+ * The company's work numbers (docs/whatsapp/central.md, conectar-numero.md). An Admin Master
+ * registers each one first (owner, department, the phone checks); connecting it by coexistence
+ * comes later, on the registered row. The browser runs Meta's Embedded Signup and hands over the
+ * code and the WABA; here the code becomes the business token, the WABA's numbers are read with it
+ * (so an id from the browser is believed only if Meta shows it, and only the registered number is
+ * taken), our app subscribes to the WABA's webhooks, and the contacts and the history are asked
+ * for, each once, within 24 h. The token is sealed at once and never leaves the API. The official
+ * number is never a work number: taken as one, all its messages would be skipped without a word.
  */
+
+/** The official number, as the environment names it: never registered nor connected here. */
+export interface OfficialNumber {
+  phoneNumberId: string | null;
+  wabaId: string | null;
+  /** WINGS_WHATSAPP_NUMBER: 55 + DDD + number. */
+  phone: string | null;
+}
+
+export const officialNumberOf = (env: Env): OfficialNumber => ({
+  phoneNumberId: env.WHATSAPP_PHONE_NUMBER_ID ?? null,
+  wabaId: env.WHATSAPP_WABA_ID ?? null,
+  phone: env.WINGS_WHATSAPP_NUMBER ?? null,
+});
+
+const samePhone = (a: string | null | undefined, b: string | null | undefined) =>
+  Boolean(a && b && brazilianPhoneVariants(a).some((v) => brazilianPhoneVariants(b).includes(v)));
 
 export interface NumbersDeps {
   db: Database;
   box: SecretBox;
   app: { appId: string; appSecret: string };
+  official: OfficialNumber;
   fetchImpl: typeof fetch;
   now: () => Date;
 }
@@ -78,6 +104,7 @@ export function numbersDepsOf(wings: {
     db: wings.db,
     box: createSecretBox(env.INTEGRATIONS_ENCRYPTION_KEY),
     app: { appId: env.WHATSAPP_APP_ID, appSecret: env.WHATSAPP_APP_SECRET },
+    official: officialNumberOf(env),
     fetchImpl: wings.whatsappFetch ?? fetch,
     now: wings.now ?? (() => new Date()),
   };
@@ -85,6 +112,12 @@ export function numbersDepsOf(wings: {
 
 export type ConnectErrorCode =
   | 'owner_invalid'
+  | 'official_number'
+  | 'phone_taken'
+  | 'phone_locked'
+  | 'number_mismatch'
+  | 'not_registered'
+  | 'not_eligible'
   | 'code_refused'
   | 'waba_unreadable'
   | 'number_not_found'
@@ -106,10 +139,10 @@ export class ConnectError extends Error {
 
 type Row = typeof waNumbers.$inferSelect;
 
-const deadlineOf = (row: Pick<Row, 'connectedAt'>) =>
-  new Date(row.connectedAt.getTime() + WA_SYNC_WINDOW_HOURS * 3_600_000);
+const deadlineOf = (connectedAt: Date) =>
+  new Date(connectedAt.getTime() + WA_SYNC_WINDOW_HOURS * 3_600_000);
 
-/** Every number, the newest connection first. Never the token. */
+/** Every number, the newest registry first. Never the token. */
 export async function listNumbers(db: Database): Promise<WaNumber[]> {
   const owner = alias(employees, 'owner');
   const by = alias(employees, 'connected_by');
@@ -118,13 +151,19 @@ export async function listNumbers(db: Database): Promise<WaNumber[]> {
     .from(waNumbers)
     .leftJoin(owner, eq(owner.id, waNumbers.ownerEmployeeId))
     .leftJoin(by, eq(by.id, waNumbers.connectedBy))
-    .orderBy(sql`${waNumbers.connectedAt} desc`);
+    .orderBy(sql`${waNumbers.createdAt} desc`);
   return rows.map(({ row, ownerName, byName }) => numberOf(row, ownerName, byName));
 }
 
 function numberOf(row: Row, ownerName: string | null, byName: string | null): WaNumber {
   return {
     id: row.id,
+    phone: row.phone,
+    label: row.label,
+    sector: row.sector as SectorSlug | null,
+    eligibility: row.eligibility as WaNumberEligibility,
+    eligibilityNotes: row.eligibilityNotes,
+    checks: row.checks as WaNumberCheck[],
     phoneNumberId: row.phoneNumberId,
     wabaId: row.wabaId,
     businessId: row.businessId,
@@ -133,16 +172,96 @@ function numberOf(row: Row, ownerName: string | null, byName: string | null): Wa
     ownerEmployeeId: row.ownerEmployeeId,
     ownerName,
     status: row.status as WaNumberStatus,
-    connectedAt: row.connectedAt.toISOString(),
+    connectedAt: row.connectedAt?.toISOString() ?? null,
     connectedByName: byName,
+    tokenExpiresAt: row.tokenExpiresAt?.toISOString() ?? null,
     disconnectReason: row.disconnectReason,
     disconnectedAt: row.disconnectedAt?.toISOString() ?? null,
     webhooksSubscribed: row.webhooksSubscribed,
     contactsSync: row.contactsSync as WaSyncState | null,
     historySync: row.historySync as WaSyncState | null,
     historyProgress: row.historyProgress,
-    syncDeadline: deadlineOf(row).toISOString(),
+    syncDeadline: row.connectedAt ? deadlineOf(row.connectedAt).toISOString() : null,
   };
+}
+
+/** Who may own a number: any active employee (sellers, Diretoria, the Admin). */
+export async function activePeople(db: Database) {
+  return db
+    .select({ id: employees.id, name: employees.fullName })
+    .from(employees)
+    .where(eq(employees.status, 'active'))
+    .orderBy(asc(employees.fullName));
+}
+
+async function activeOwner(db: Database, id: string) {
+  const owner = await db.query.employees.findFirst({
+    where: and(eq(employees.id, id), eq(employees.status, 'active')),
+    columns: { id: true },
+  });
+  if (!owner) throw new ConnectError('owner_invalid');
+}
+
+// drizzle wraps the driver's error: its code is on `cause`.
+const isUniqueViolation = (error: unknown) => {
+  const found = error as { code?: unknown; cause?: { code?: unknown } } | null;
+  return found?.code === '23505' || found?.cause?.code === '23505';
+};
+
+/** The Admin Master's registry: a number before (or without) its connection. */
+export async function registerNumber(
+  db: Database,
+  official: OfficialNumber,
+  input: WaNumberRegister,
+  actorId: string,
+): Promise<WaNumber> {
+  if (samePhone(input.phone, official.phone)) throw new ConnectError('official_number');
+  await activeOwner(db, input.ownerEmployeeId);
+  try {
+    const [row] = await db
+      .insert(waNumbers)
+      .values({
+        phone: input.phone,
+        label: input.label,
+        ownerEmployeeId: input.ownerEmployeeId,
+        sector: input.sector ?? null,
+        eligibility: input.eligibility ?? 'a_confirmar',
+        eligibilityNotes: input.eligibilityNotes ?? null,
+        checks: input.checks ?? [],
+        createdBy: actorId,
+      })
+      .returning({ id: waNumbers.id });
+    return await numberById(db, row!.id);
+  } catch (error) {
+    if (isUniqueViolation(error)) throw new ConnectError('phone_taken');
+    throw error;
+  }
+}
+
+/** Any field of the registry; the number itself only before the connection (then it is Meta's). */
+export async function updateNumber(
+  db: Database,
+  official: OfficialNumber,
+  id: string,
+  input: WaNumberUpdate,
+): Promise<WaNumber> {
+  const row = await db.query.waNumbers.findFirst({ where: eq(waNumbers.id, id) });
+  if (!row) throw new ConnectError('not_found');
+  if (input.phone !== undefined && input.phone !== row.phone) {
+    if (row.status !== 'registered') throw new ConnectError('phone_locked');
+    if (samePhone(input.phone, official.phone)) throw new ConnectError('official_number');
+  }
+  if (input.ownerEmployeeId !== undefined) await activeOwner(db, input.ownerEmployeeId);
+  try {
+    await db
+      .update(waNumbers)
+      .set({ ...input, updatedAt: new Date() })
+      .where(eq(waNumbers.id, id));
+  } catch (error) {
+    if (isUniqueViolation(error)) throw new ConnectError('phone_taken');
+    throw error;
+  }
+  return numberById(db, id);
 }
 
 /** Which of the WABA's numbers is the one connected: the browser's, if Meta lists it. */
@@ -166,61 +285,82 @@ function pickNumber(
 }
 
 /**
- * The browser's half of Embedded Signup becomes a connected number. Everything before the row is
+ * The browser's half of Embedded Signup connects a registered number. Everything before the row is
  * written is a read (or the code exchange), so a refusal there leaves nothing behind. Connecting
- * the same number again (after it left) replaces its token and starts its 24 hours anew.
+ * the same number again (after it left, or for a new token) replaces its token and starts its 24
+ * hours anew.
  */
 export async function connectNumber(
   deps: NumbersDeps,
   input: WaNumberConnect,
   actorId: string,
 ): Promise<{ number: WaNumber; steps: FinishSteps }> {
-  const owner = (await listSellers(deps.db)).find(
-    (seller) => seller.id === input.ownerEmployeeId && seller.active,
-  );
-  if (!owner) throw new ConnectError('owner_invalid');
+  const registered = await deps.db.query.waNumbers.findFirst({
+    where: eq(waNumbers.id, input.numberId),
+  });
+  if (!registered) throw new ConnectError('not_registered');
+  // The registry's check comes first (Eric, 26/10): only a number confirmed for coexistence.
+  if (registered.eligibility !== 'confirmado') throw new ConnectError('not_eligible');
+  await activeOwner(deps.db, registered.ownerEmployeeId);
+  if (input.wabaId === deps.official.wabaId) throw new ConnectError('official_number');
 
   // First: the code dies 30 seconds after Meta issued it.
   const exchanged = await exchangeSignupCode(deps.fetchImpl, deps.app, input.code);
   if (!exchanged.ok) throw new ConnectError('code_refused', exchanged.code);
-  const token = exchanged.data;
+  const { token, expiresIn } = exchanged.data;
 
   const listed = await readWabaNumbers(deps.fetchImpl, token, input.wabaId);
   if (!listed.ok) throw new ConnectError('waba_unreadable', listed.code);
   const number = pickNumber(listed.data, input.phoneNumberId);
+  if (
+    number.id === deps.official.phoneNumberId ||
+    samePhone(number.display_phone_number, deps.official.phone)
+  )
+    throw new ConnectError('official_number');
+  // Only the number registered on this row: another one shared in Meta's window is refused.
+  if (
+    registered.phone &&
+    number.display_phone_number &&
+    !samePhone(number.display_phone_number, registered.phone)
+  )
+    throw new ConnectError('number_mismatch');
   // Only a number that stays in the WhatsApp Business app is connected here; a new number
   // needs Meta's registration, which this screen does not do. A missing field is not a "no".
   if (number.is_on_biz_app === false) throw new ConnectError('not_business_app');
+  const elsewhere = await deps.db.query.waNumbers.findFirst({
+    where: and(eq(waNumbers.phoneNumberId, number.id), ne(waNumbers.id, registered.id)),
+    columns: { id: true },
+  });
+  if (elsewhere) throw new ConnectError('number_mismatch');
   const owned = await readWabaOwner(deps.fetchImpl, token, input.wabaId);
 
   const now = deps.now();
-  const fresh = {
-    wabaId: input.wabaId,
-    businessId: owned.ok ? owned.data : null,
-    displayPhone: number.display_phone_number?.slice(0, 40) ?? null,
-    verifiedName: number.verified_name?.slice(0, 200) ?? null,
-    ownerEmployeeId: owner.id,
-    tokenEnc: deps.box.seal(token),
-    status: 'connected',
-    connectedBy: actorId,
-    connectedAt: now,
-    disconnectReason: null,
-    disconnectedAt: null,
-    webhooksSubscribed: false,
-    contactsSync: null,
-    contactsSyncRequest: null,
-    historySync: null,
-    historySyncRequest: null,
-    historyProgress: null,
-    updatedAt: now,
-  };
-  const [row] = await deps.db
-    .insert(waNumbers)
-    .values({ phoneNumberId: number.id, ...fresh })
-    .onConflictDoUpdate({ target: [waNumbers.tenantId, waNumbers.phoneNumberId], set: fresh })
-    .returning();
-  const steps = await finishConnection(deps, row!.id, token);
-  return { number: await numberById(deps.db, row!.id), steps };
+  await deps.db
+    .update(waNumbers)
+    .set({
+      phoneNumberId: number.id,
+      wabaId: input.wabaId,
+      businessId: owned.ok ? owned.data : null,
+      displayPhone: number.display_phone_number?.slice(0, 40) ?? null,
+      verifiedName: number.verified_name?.slice(0, 200) ?? null,
+      tokenEnc: deps.box.seal(token),
+      tokenExpiresAt: expiresIn ? new Date(now.getTime() + expiresIn * 1000) : null,
+      status: 'connected',
+      connectedBy: actorId,
+      connectedAt: now,
+      disconnectReason: null,
+      disconnectedAt: null,
+      webhooksSubscribed: false,
+      contactsSync: null,
+      contactsSyncRequest: null,
+      historySync: null,
+      historySyncRequest: null,
+      historyProgress: null,
+      updatedAt: now,
+    })
+    .where(eq(waNumbers.id, registered.id));
+  const steps = await finishConnection(deps, registered.id, token);
+  return { number: await numberById(deps.db, registered.id), steps };
 }
 
 export interface FinishSteps {
@@ -249,8 +389,9 @@ async function finishConnection(
   running.add(id);
   try {
     const row = await deps.db.query.waNumbers.findFirst({ where: eq(waNumbers.id, id) });
-    if (!row) throw new ConnectError('not_found');
-    const syncsOpen = deps.now() <= deadlineOf(row);
+    if (!row?.wabaId || !row.phoneNumberId || !row.connectedAt) throw new ConnectError('not_found');
+    const { wabaId, phoneNumberId } = row;
+    const syncsOpen = deps.now() <= deadlineOf(row.connectedAt);
     const steps: FinishSteps = {
       webhooks: 'ok',
       contacts: row.contactsSync as WaSyncState | null,
@@ -261,19 +402,19 @@ async function finishConnection(
       contacts: steps.contacts ?? 'skipped',
       history: steps.history ?? 'skipped',
     });
-    const set = (values: Partial<typeof waNumbers.$inferInsert>) =>
+    const save = (values: Partial<typeof waNumbers.$inferInsert>) =>
       deps.db
         .update(waNumbers)
         .set({ ...values, updatedAt: deps.now() })
         .where(eq(waNumbers.id, row.id));
 
     if (!row.webhooksSubscribed) {
-      const subscribed = await subscribeWaba(deps.fetchImpl, token, row.wabaId);
+      const subscribed = await subscribeWaba(deps.fetchImpl, token, wabaId);
       if (!subscribed.ok || !subscribed.data) {
         steps.webhooks = 'failed';
         return skipRest();
       }
-      await set({ webhooksSubscribed: true });
+      await save({ webhooksSubscribed: true });
     }
     if (!syncsOpen) return skipRest();
 
@@ -281,11 +422,11 @@ async function finishConnection(
       const result = await requestSmbSync(
         deps.fetchImpl,
         token,
-        row.phoneNumberId,
+        phoneNumberId,
         type === 'contacts' ? 'smb_app_state_sync' : 'history',
       );
       const state: WaSyncState = result.ok ? 'requested' : result.unknown ? 'unknown' : 'failed';
-      await set(
+      await save(
         type === 'contacts'
           ? { contactsSync: state, contactsSyncRequest: result.ok ? result.data : null }
           : { historySync: state, historySyncRequest: result.ok ? result.data : null },
@@ -315,9 +456,10 @@ export async function retryConnection(
   id: string,
 ): Promise<{ number: WaNumber; steps: FinishSteps }> {
   const row = await deps.db.query.waNumbers.findFirst({ where: eq(waNumbers.id, id) });
-  if (!row || row.status !== 'connected') throw new ConnectError('not_found');
+  if (!row || row.status !== 'connected' || !row.tokenEnc || !row.connectedAt)
+    throw new ConnectError('not_found');
   const syncsLeft = syncOwed(row.contactsSync) || syncOwed(row.historySync);
-  if (row.webhooksSubscribed && syncsLeft && deps.now() > deadlineOf(row))
+  if (row.webhooksSubscribed && syncsLeft && deps.now() > deadlineOf(row.connectedAt))
     throw new ConnectError('sync_expired');
   const steps = await finishConnection(deps, row.id, deps.box.open(row.tokenEnc));
   return { number: await numberById(deps.db, row.id), steps };
@@ -330,30 +472,47 @@ async function numberById(db: Database, id: string): Promise<WaNumber> {
 }
 
 /**
- * Whether a webhook change is about a seller's connected number rather than the official one: by
- * its number when it names one, else by its WABA (unless that is the official number's WABA).
+ * The work number a webhook change is about, rather than the official one: by its number when it
+ * names one, else by its WABA (unless that is the official number's WABA). The official number
+ * itself never counts, even if a row names it.
  */
-export async function isSellerNumberChange(
+export async function workNumberOf(
   db: Database,
   change: WaChange,
-  officialWabaId: string | null,
-): Promise<boolean> {
+  official: Pick<OfficialNumber, 'phoneNumberId' | 'wabaId'>,
+): Promise<{ id: string; status: string } | null> {
+  if (change.phoneNumberId && change.phoneNumberId === official.phoneNumberId) return null;
   const which = change.phoneNumberId
     ? eq(waNumbers.phoneNumberId, change.phoneNumberId)
-    : change.wabaId && change.wabaId !== officialWabaId
+    : change.wabaId && change.wabaId !== official.wabaId
       ? eq(waNumbers.wabaId, change.wabaId)
       : null;
-  if (!which) return false;
-  const found = await db.query.waNumbers.findFirst({ where: which, columns: { id: true } });
-  return found !== undefined;
+  if (!which) return null;
+  const found = await db.query.waNumbers.findFirst({
+    where: which,
+    columns: { id: true, status: true },
+  });
+  return found ?? null;
+}
+
+/** How a send or a file read goes through a connected work number: its own id and token. */
+export async function numberConfigOf(
+  db: Database,
+  box: SecretBox | null,
+  numberId: string,
+): Promise<WhatsAppConfig | null> {
+  const row = await db.query.waNumbers.findFirst({ where: eq(waNumbers.id, numberId) });
+  if (!box || !row || row.status !== 'connected' || !row.tokenEnc || !row.phoneNumberId)
+    return null;
+  return { token: box.open(row.tokenEnc), phoneNumberId: row.phoneNumberId, wabaId: row.wabaId };
 }
 
 const LEFT = new Set(['ACCOUNT_OFFBOARDED', 'PARTNER_REMOVED']);
 
 /**
  * What Meta's webhook says about a connected number (from the queue, `intake.ts`): it left
- * (offboarded on the phone, or removed for inactivity), or how far its history is.
- * A change for a WABA or number that is not ours does nothing.
+ * (offboarded on the phone, or removed for inactivity), how far its history is, or that the owner
+ * said no to the history. A change for a WABA or number that is not ours does nothing.
  */
 export async function applyNumberChange(db: Database, change: WaChange, now: Date) {
   if (change.account && change.wabaId) {
@@ -370,7 +529,7 @@ export async function applyNumberChange(db: Database, change: WaChange, now: Dat
         })
         .where(and(eq(waNumbers.wabaId, change.wabaId), eq(waNumbers.status, 'connected')));
   }
-  if (change.historyProgress !== null) {
+  if (change.historyProgress !== null || change.historyDeclined) {
     const which = change.phoneNumberId
       ? eq(waNumbers.phoneNumberId, change.phoneNumberId)
       : change.wabaId
@@ -380,7 +539,13 @@ export async function applyNumberChange(db: Database, change: WaChange, now: Dat
       await db
         .update(waNumbers)
         .set({
-          historyProgress: sql`greatest(coalesce(${waNumbers.historyProgress}, 0), ${change.historyProgress})`,
+          ...(change.historyProgress !== null
+            ? {
+                historyProgress: sql`greatest(coalesce(${waNumbers.historyProgress}, 0), ${change.historyProgress})`,
+              }
+            : {}),
+          // The owner said no to the history on the phone (Meta's 2593109): it will not come.
+          ...(change.historyDeclined ? { historySync: 'declined' } : {}),
           updatedAt: now,
         })
         .where(which);

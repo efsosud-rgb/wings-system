@@ -111,6 +111,8 @@ const thread = (over: Partial<DealWhatsApp> = {}): DealWhatsApp => ({
   callPermission: { status: null, expiresAt: null, requestedAt: null },
   attendance: null,
   speaksFor: null,
+  number: null,
+  numberChats: [],
   messages: [],
   ...over,
 });

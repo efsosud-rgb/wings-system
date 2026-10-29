@@ -67,9 +67,12 @@ export function WhatsAppChat({
     bottom.current?.scrollIntoView?.({ block: 'end' });
   }, [last]);
   const [useTemplate, setUseTemplate] = useState(false);
-  const templateMode = useTemplate || !data.window.open;
+  // A work number's chat (docs/whatsapp/central.md): free text and files only, inside its 24 h.
+  const onNumber = Boolean(data.number);
+  const templateMode = !onNumber && (useTemplate || !data.window.open);
   const older = useOlder(thread, data.messages);
-  const soon = useWhatsAppSoon();
+  // The seller's "em breve" is the official number's; a work number is live once connected.
+  const soon = useWhatsAppSoon() && !onNumber;
   // One composer per conversation: what was typed or chosen in one never goes to the next opened.
   const composerKey = 'leadId' in thread ? thread.leadId : thread.conversationId;
 
@@ -122,7 +125,12 @@ export function WhatsAppChat({
         <div ref={bottom} />
       </div>
       {canSend && !soon && data.configured && data.phone ? (
-        templateMode ? (
+        onNumber && !data.window.open ? (
+          <p className="crm-wa-off">
+            Fora das 24 h da última mensagem da pessoa para este número: só dá para responder quando
+            ela escrever de novo. Para falar primeiro, use o número oficial e um modelo aprovado.
+          </p>
+        ) : templateMode ? (
           <TemplateCompose
             key={composerKey}
             thread={thread}
@@ -135,13 +143,15 @@ export function WhatsAppChat({
             key={composerKey}
             thread={thread}
             leadId={data.leadId}
-            onTemplate={() => setUseTemplate(true)}
+            onTemplate={onNumber ? undefined : () => setUseTemplate(true)}
           />
         )
       ) : (
         <p className="crm-wa-off">
           {!data.configured
-            ? 'O envio liga quando a API oficial do WhatsApp estiver ligada no sistema.'
+            ? onNumber
+              ? 'Este número não está conectado ao sistema agora: o envio volta quando ele for conectado de novo.'
+              : 'O envio liga quando a API oficial do WhatsApp estiver ligada no sistema.'
             : !canSend
               ? 'Você não pode enviar por esta conversa.'
               : soon
@@ -165,7 +175,7 @@ function WindowNotice({ data }: { data: DealWhatsApp }) {
     <p className="crm-wa-window is-open">
       Janela de 24 h aberta até {formatDateTime(data.window.expiresAt)}: dá para escrever livre.
     </p>
-  ) : (
+  ) : data.number ? null : (
     <p className="crm-wa-window is-closed">
       Fora das 24 h desde a última mensagem da pessoa: só vai modelo aprovado pela Meta.
     </p>
@@ -463,6 +473,7 @@ function Bubble({ message }: { message: WaMessage }) {
       <span className="crm-wa-meta">
         {out && message.bySofia ? 'Sofia (IA) · ' : ''}
         {out && message.authorName ? `${message.authorName} · ` : ''}
+        {out && message.fromPhone ? 'Pelo celular · ' : ''}
         <time dateTime={message.at} title={formatDateTime(message.at)}>
           {timeOf(message.at)}
         </time>
@@ -492,7 +503,8 @@ function TextCompose({
 }: {
   thread: WhatsAppThread;
   leadId: string | null;
-  onTemplate: () => void;
+  /** Absent on a work number's chat: its templates come later. */
+  onTemplate?: () => void;
 }) {
   const send = useSendWhatsAppText(thread);
   const sendFile = useSendWhatsAppFile(thread, leadId);
@@ -695,9 +707,11 @@ function TextCompose({
         >
           {picked ? 'Enviar arquivo' : 'Enviar'}
         </button>
-        <button type="button" className="crm-btn is-quiet is-small" onClick={onTemplate}>
-          Usar modelo
-        </button>
+        {onTemplate && (
+          <button type="button" className="crm-btn is-quiet is-small" onClick={onTemplate}>
+            Usar modelo
+          </button>
+        )}
       </div>
       {note && <p className="crm-wa-note">{note}</p>}
       {failure && <p className="crm-error">{failure}</p>}

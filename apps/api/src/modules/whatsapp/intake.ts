@@ -40,7 +40,8 @@ import { officialNumberLive } from './official-number.js';
 import { deliverWhatsApp, type Contact } from './outbox.js';
 import { reasonOf } from './templates.js';
 import { brandOf, callPermissionText, permissionOf } from './thread.js';
-import { applyNumberChange, isSellerNumberChange } from './numbers.js';
+import { applyNumberChange, workNumberOf } from './numbers.js';
+import { applyWorkNumberChange } from './number-intake.js';
 import {
   isOptOut,
   whatsappChangesOf,
@@ -62,6 +63,8 @@ import { notifyInboxChanged } from './inbox-signal.js';
 
 export const WHATSAPP_JOB = 'whatsapp_intake';
 const MAX_ATTEMPTS = 5;
+/** Minutes before the next try: a passing database error gets time to pass. */
+export const retryMinutesOf = (attempts: number) => Math.min(60, 2 ** attempts);
 const PAYLOAD_DAYS = 90;
 
 export async function storeWhatsAppEvent(db: Database, payload: unknown): Promise<string> {
@@ -111,7 +114,10 @@ export async function processWhatsAppEvents(
     const claimed = await db.execute<{ id: string; payload: unknown; attempts: number }>(sql`
       update wa_webhook_events set status = 'processing', attempts = attempts + 1
       where id = (
-        select id from wa_webhook_events where status = 'pending'
+        select id from wa_webhook_events
+        -- A new body at once; one that failed waits for its next try.
+        where status = 'pending'
+          and (attempts = 0 or next_attempt_at <= ${now().toISOString()}::timestamptz)
         order by received_at limit 1 for update skip locked
       )
       returning id, payload, attempts`);
@@ -133,7 +139,11 @@ export async function processWhatsAppEvents(
       const giveUp = event.attempts >= MAX_ATTEMPTS;
       await db
         .update(waWebhookEvents)
-        .set({ status: giveUp ? 'failed' : 'pending', lastError: code })
+        .set({
+          status: giveUp ? 'failed' : 'pending',
+          lastError: code,
+          nextAttemptAt: new Date(now().getTime() + retryMinutesOf(event.attempts) * 60_000),
+        })
         .where(eq(waWebhookEvents.id, event.id));
       if (giveUp) result.failed++;
       else result.retried++;
@@ -161,11 +171,15 @@ export async function purgeWhatsAppPayloads(db: Database, now = new Date()) {
 }
 
 export async function applyWhatsAppPayload(deps: WhatsAppIntakeDeps, body: unknown) {
+  const official = { phoneNumberId: deps.phoneNumberId, wabaId: deps.wabaId ?? null };
   for (const change of whatsappChangesOf(body)) {
-    // A seller's connected number: only whether it left and how far its history is. Its
-    // messages, echoes and templates do not enter the CRM yet (docs/whatsapp/conectar-numero.md).
-    if (await isSellerNumberChange(deps.db, change, deps.wabaId ?? null)) {
-      await applyNumberChange(deps.db, change, deps.now?.() ?? new Date());
+    // A work number (docs/whatsapp/central.md): whether it left, its history's progress, and its
+    // chats in the CRM, without Sofia or the triage. Its templates stay out (they are its WABA's).
+    const number = await workNumberOf(deps.db, change, official);
+    if (number) {
+      const now = deps.now?.() ?? new Date();
+      await applyNumberChange(deps.db, change, now);
+      await applyWorkNumberChange(deps.db, number.id, change, now);
       continue;
     }
     if (deps.phoneNumberId && change.phoneNumberId && change.phoneNumberId !== deps.phoneNumberId)
@@ -218,13 +232,18 @@ export async function openLeadByPhone(db: Database, phone: string): Promise<stri
  * message that finds one): its messages go with it.
  */
 export async function adoptUnmatched(db: Database, contactId: string, leadId: string) {
+  const official = isNull(waConversations.numberId);
   const waiting = await db.query.waConversations.findFirst({
-    where: and(eq(waConversations.contactId, contactId), isNull(waConversations.leadId)),
+    where: and(eq(waConversations.contactId, contactId), isNull(waConversations.leadId), official),
   });
   if (!waiting) return;
   await db.transaction(async (tx) => {
     const existing = await tx.query.waConversations.findFirst({
-      where: and(eq(waConversations.contactId, contactId), eq(waConversations.leadId, leadId)),
+      where: and(
+        eq(waConversations.contactId, contactId),
+        eq(waConversations.leadId, leadId),
+        official,
+      ),
     });
     const target = existing?.id ?? waiting.id;
     if (existing) {
@@ -270,24 +289,40 @@ export async function adoptUnmatched(db: Database, contactId: string, leadId: st
   });
 }
 
+/**
+ * The official number's conversation of a phone and deal, or, with `numberId`, that work number's
+ * one chat with the phone (whatever deal it joined).
+ */
 export async function openConversation(
   db: Database,
   contactId: string,
   leadId: string | null,
   first: { referral: Record<string, unknown> | null; originCode: string | null },
+  numberId: string | null = null,
 ) {
   const match = () =>
     db.query.waConversations.findFirst({
       where: and(
         eq(waConversations.contactId, contactId),
-        leadId === null ? isNull(waConversations.leadId) : eq(waConversations.leadId, leadId),
+        numberId !== null
+          ? eq(waConversations.numberId, numberId)
+          : and(
+              isNull(waConversations.numberId),
+              leadId === null ? isNull(waConversations.leadId) : eq(waConversations.leadId, leadId),
+            ),
       ),
     });
   const found = await match();
   if (found) return { conversation: found, created: false };
   const [inserted] = await db
     .insert(waConversations)
-    .values({ contactId, leadId, referral: first.referral, originCode: first.originCode })
+    .values({
+      contactId,
+      leadId,
+      numberId,
+      referral: first.referral,
+      originCode: first.originCode,
+    })
     .onConflictDoNothing()
     .returning();
   return inserted
@@ -622,6 +657,7 @@ async function heldDealOf(db: Database, contactId: string, now: Date): Promise<s
     .where(
       and(
         eq(waConversations.contactId, contactId),
+        isNull(waConversations.numberId),
         sql`${waConversations.leadId} is not null`,
         inArray(waConversations.attendance, ['with_person', 'waiting_seller']),
         sql`exists (select 1 from wa_messages o where o.conversation_id = ${waConversations.id}
@@ -643,7 +679,7 @@ const STAMP: Partial<Record<WaMessageStatus, 'sentAt' | 'deliveredAt' | 'readAt'
   failed: 'failedAt',
 };
 
-async function applyStatus(db: Database, update: WaStatusUpdate) {
+export async function applyStatus(db: Database, update: WaStatusUpdate) {
   if (!update.status) return;
   const row = await db.query.waMessages.findFirst({ where: eq(waMessages.wamid, update.wamid) });
   if (!row || row.direction !== 'out') return;

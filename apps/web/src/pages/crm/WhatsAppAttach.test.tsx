@@ -47,6 +47,8 @@ const thread = (over: Partial<DealWhatsApp> = {}): DealWhatsApp => ({
   callPermission: { status: null, expiresAt: null, requestedAt: null },
   attendance: null,
   speaksFor: null,
+  number: null,
+  numberChats: [],
   messages: [],
   ...over,
 });
@@ -366,5 +368,29 @@ describe('emoji in the composer', () => {
     fireEvent.click(button);
     fireEvent.keyDown(screen.getByLabelText('Mensagem'), { key: 'Escape' });
     expect(screen.queryByRole('group', { name: 'Escolha um emoji' })).toBeNull();
+  });
+});
+
+describe('a work number’s chat (docs/whatsapp/central.md)', () => {
+  const number = {
+    id: 'n1',
+    label: 'Comercial Teste',
+    phone: '5521911110000',
+    ownerName: 'Fernando',
+  };
+
+  it('writes free text and files inside its 24 h, with no template', () => {
+    show(thread({ number }), { conversationId: 'c1' });
+    expect(screen.getByRole('button', { name: 'Enviar' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Usar modelo' })).toBeNull();
+  });
+
+  it('outside its 24 h says to wait for the person, and offers no template either', () => {
+    show(thread({ number, window: { open: false, expiresAt: null } }), { conversationId: 'c1' });
+    expect(
+      screen.getByText(/Fora das 24 h da última mensagem da pessoa para este número/),
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Enviar' })).toBeNull();
+    expect(screen.queryByText(/Escolha um modelo|Usar modelo/)).toBeNull();
   });
 });

@@ -28,6 +28,8 @@ export interface MediaStoreDeps {
   db: Database;
   storage: ObjectStorage;
   config: WhatsAppConfig;
+  /** A work number's file is read with that number's own token (`numberConfigOf`). */
+  numberConfig?: (numberId: string) => Promise<WhatsAppConfig | null>;
   fetchImpl: typeof fetch;
   log: (facts: Record<string, unknown>) => void;
   now?: () => Date;
@@ -93,6 +95,7 @@ export async function storeWhatsAppMedia(
       attempts: number;
       media_id: string | null;
       message_at: string;
+      number_id: string | null;
     }>(sql`
       with claimed as (
         update wa_message_files
@@ -107,11 +110,17 @@ export async function storeWhatsAppMedia(
         returning id, message_id, storage_key, attempts
       )
       select c.id, c.storage_key, c.attempts, m.content -> 'media' ->> 'id' as media_id,
-             m.created_at as message_at
-      from claimed c join wa_messages m on m.id = c.message_id`);
+             m.created_at as message_at, w.number_id
+      from claimed c join wa_messages m on m.id = c.message_id
+      join wa_conversations w on w.id = m.conversation_id`);
     const file = claimed.rows[0];
     if (!file) break;
-    const outcome = await copyOne(deps, file.storage_key, file.media_id);
+    const config = file.number_id
+      ? ((await deps.numberConfig?.(file.number_id)) ?? null)
+      : deps.config;
+    const outcome = config
+      ? await copyOne(deps, config, file.storage_key, file.media_id)
+      : ({ ok: false, reason: 'number_offline' } as const);
     const doneAt = now();
     if (outcome.ok) {
       await db
@@ -150,11 +159,12 @@ type CopyOutcome =
 
 async function copyOne(
   deps: MediaStoreDeps,
+  config: WhatsAppConfig,
   storageKey: string,
   mediaId: string | null,
 ): Promise<CopyOutcome> {
   if (!mediaId) return { ok: false, reason: 'no_media_id' };
-  const file = await downloadWhatsAppMedia(deps.fetchImpl, deps.config, mediaId);
+  const file = await downloadWhatsAppMedia(deps.fetchImpl, config, mediaId);
   if (!file.ok) {
     // Meta's code, or our own word for what went wrong: never Meta's free text.
     const reason =
