@@ -73,6 +73,7 @@ export const EVENT_LABELS: Record<string, string> = {
   'lead.file_removed': 'Arquivo removido',
   'lead.summary_generated': 'Resumo gerado pela IA',
   'whatsapp.conversation_imported': 'Conversa do celular importada',
+  'lead.whatsapp_linked': 'Conversa do WhatsApp ligada a esta negociação',
   'whatsapp.import_undone': 'Importação de conversa desfeita',
   'meeting.scheduled': 'Reunião marcada',
   'meeting.rescheduled': 'Reunião remarcada',
@@ -99,7 +100,11 @@ const TONE_LABELS: Record<Tone, string> = {
 
 const EMAIL_EVENTS = new Set(['lead.email_sent']);
 const FILE_EVENTS = new Set(['lead.file_added', 'lead.file_removed']);
-const WHATSAPP_EVENTS = new Set(['whatsapp.conversation_imported', 'whatsapp.import_undone']);
+const WHATSAPP_EVENTS = new Set([
+  'whatsapp.conversation_imported',
+  'whatsapp.import_undone',
+  'lead.whatsapp_linked',
+]);
 
 /** What an import line says: how many messages and over which days (the messages are in WhatsApp). */
 function importBody(event: LeadEvent): string | null {

@@ -19,7 +19,13 @@ import {
 } from '@wings/shared';
 import { and, eq, inArray } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
-import { crmCompanies, employees, leads, waTemplates } from '../../db/schema/index.js';
+import {
+  crmCompanies,
+  employees,
+  leads,
+  waNumberTemplates,
+  waTemplates,
+} from '../../db/schema/index.js';
 import { artFileOf, type ArtFile } from './art.js';
 import {
   buttonsPayload,
@@ -31,7 +37,7 @@ import {
   type OutgoingPayload,
 } from './graph.js';
 import type { Contact } from './outbox.js';
-import { brandOf, windowOf, type BrandVoice } from './thread.js';
+import { brandOf, numberWindowOf, windowOf, type BrandVoice } from './thread.js';
 
 /**
  * Which message a template becomes (docs/whatsapp/arte-modelos.md), one rule
@@ -95,6 +101,24 @@ export const asksCallPermission = (row: Pick<TemplateRow, 'components'>) =>
     (c) => c && typeof c === 'object' && c.type?.toUpperCase() === 'CALL_PERMISSION_REQUEST',
   );
 const headerFormat = (row: TemplateRow) => componentOf(row, 'HEADER')?.format ?? null;
+
+/**
+ * A part of the template this system does not fill yet, in the words the screen shows; null when
+ * every part goes complete. Sent anyway, it would reach Meta incomplete and be refused (or arrive
+ * cut): so it is refused here, before anything goes.
+ */
+export function unsupportedOf(row: TemplateRow): string | null {
+  const header = componentOf(row, 'HEADER');
+  const format = header?.format?.toUpperCase();
+  if (format === 'VIDEO' || format === 'DOCUMENT' || format === 'LOCATION')
+    return 'O cabeçalho deste modelo é vídeo, documento ou localização, e o sistema ainda não envia esse cabeçalho. Escolha outro modelo.';
+  if (format === 'TEXT' && /\{\{/.test(header?.text ?? ''))
+    return 'O título deste modelo tem um campo variável, e o sistema ainda não preenche o título. Escolha outro modelo.';
+  const buttons = componentOf(row, 'BUTTONS')?.buttons ?? [];
+  if (buttons.some((b) => b.type === 'URL' && /\{\{/.test(b.url ?? '')))
+    return 'O botão de link deste modelo tem uma parte variável, e o sistema ainda não preenche o link. Escolha outro modelo.';
+  return null;
+}
 
 // --- the plan (no database, no Meta) -------------------------------------------------------
 
@@ -185,6 +209,9 @@ export function planTemplate(input: PlanInput): TemplatePlan {
         }`,
       );
   }
+
+  const unsupported = unsupportedOf(version);
+  if (unsupported) return refuse(422, 'template_unsupported', unsupported);
 
   // The fields: what the seller typed (names without their article), or what the server knows.
   const body = bodyOf(version);
@@ -427,6 +454,8 @@ export async function templateContextOf(
     contact: Contact | null;
     /** Who sends: their first name fills "Aqui é {{2}}". */
     senderEmployeeId: string | null;
+    /** A work number's chat: its own window (the person's last message to that number). */
+    numberId?: string | null;
   },
   now: Date,
 ): Promise<TemplateContext> {
@@ -448,7 +477,10 @@ export async function templateContextOf(
   return {
     voice,
     art,
-    window: windowOf(target.contact, now),
+    window:
+      target.numberId && target.conversationId
+        ? await numberWindowOf(db, target.conversationId, now)
+        : windowOf(target.contact, now),
     defaults: {
       lead: firstName(lead?.name) || firstName(target.contact?.profileName),
       seller: firstName(sender?.name),
@@ -457,13 +489,34 @@ export async function templateContextOf(
   };
 }
 
-/** The approved rows of a template's family (`x` and `x_arte`) in one language. */
+/**
+ * The approved rows of a template's family (`x` and `x_arte`) in one language: the official
+ * WABA's, or with `numberId` that work number's own.
+ */
 export async function familyTemplates(
   db: Database,
   name: string,
   language: string,
+  numberId: string | null = null,
 ): Promise<TemplateRow[]> {
   const family = waTemplateFamily(name);
+  if (numberId)
+    return db
+      .select({
+        name: waNumberTemplates.name,
+        language: waNumberTemplates.language,
+        category: waNumberTemplates.category,
+        components: waNumberTemplates.components,
+      })
+      .from(waNumberTemplates)
+      .where(
+        and(
+          eq(waNumberTemplates.numberId, numberId),
+          inArray(waNumberTemplates.name, [family, `${family}${WA_ART_SUFFIX}`]),
+          eq(waNumberTemplates.language, language),
+          eq(waNumberTemplates.status, 'APPROVED'),
+        ),
+      );
   return db
     .select({
       name: waTemplates.name,
@@ -487,10 +540,11 @@ export async function planTemplateFor(
   db: Database,
   context: TemplateContext,
   request: PlanInput['request'],
+  numberId: string | null = null,
 ): Promise<TemplatePlan> {
   return planTemplate({
     request,
-    templates: await familyTemplates(db, request.name, request.language),
+    templates: await familyTemplates(db, request.name, request.language, numberId),
     window: context.window,
     voice: context.voice,
     hasArt: context.art !== null,

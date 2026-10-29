@@ -1,12 +1,17 @@
 import { createHmac } from 'node:crypto';
 import type { Readable } from 'node:stream';
-import { SESSION_COOKIE, type RoleKey, type WaRingingSnapshot } from '@wings/shared';
+import {
+  SESSION_COOKIE,
+  type RoleKey,
+  type WaInboxSummary,
+  type WaRingingSnapshot,
+} from '@wings/shared';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
-import { leads, sessions, waCalls } from '../../db/schema/index.js';
+import { leads, sessions, waCalls, waConversations } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { hashToken } from '../../lib/tokens.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
@@ -162,6 +167,46 @@ async function ringFrom(phone: string, callId: string) {
   await processWhatsAppEvents({ db, phoneNumberId: PHONE_ID, log: () => {} });
 }
 
+let messages = 0;
+/** The person writes: Meta's published shape of a text, delivered signed and applied by the queue. */
+async function messageFrom(phone: string, text: string) {
+  const body = JSON.stringify({
+    object: 'whatsapp_business_account',
+    entry: [
+      {
+        id: WABA,
+        changes: [
+          {
+            field: 'messages',
+            value: {
+              messaging_product: 'whatsapp',
+              metadata: { phone_number_id: PHONE_ID },
+              contacts: [{ profile: { name: 'Elena' }, wa_id: phone }],
+              messages: [
+                {
+                  from: phone,
+                  id: `wamid.STREAM${++messages}`,
+                  timestamp: String(Math.floor(Date.now() / 1000)),
+                  type: 'text',
+                  text: { body: text },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  });
+  const response = await app.inject({
+    method: 'POST',
+    url: '/integrations/whatsapp/webhook',
+    headers: { 'content-type': 'application/json', 'x-hub-signature-256': sign(body) },
+    payload: body,
+  });
+  expect(response.statusCode).toBe(200);
+  await processWhatsAppEvents({ db, phoneNumberId: PHONE_ID, log: () => {} });
+}
+
 type Sse = { comment: string } | { event: string; data: unknown };
 
 function parseSse(text: string): Sse[] {
@@ -221,6 +266,10 @@ async function openStream(
     events().flatMap((e) =>
       'event' in e && e.event === 'ringing' ? [e.data as WaRingingSnapshot] : [],
     );
+  const inbox = () =>
+    events().flatMap((e) =>
+      'event' in e && e.event === 'inbox' ? [e.data as WaInboxSummary] : [],
+    );
   const until = async (check: () => boolean, ms = 4_000) => {
     const limit = Date.now() + ms;
     while (!check()) {
@@ -231,6 +280,7 @@ async function openStream(
   return {
     events,
     ringing,
+    inbox,
     until,
     text: () => text,
     ended: () => ended,
@@ -320,6 +370,71 @@ describe('the answer', () => {
     const stream = await openStream(owner.cookies);
     await stream.until(() => stream.ringing().length === 1);
     expect(stream.ringing()[0]).toEqual({ calling: false, calls: [] });
+  });
+});
+
+describe('the inbox (Caixa como o WhatsApp Desktop)', () => {
+  const summaryOf = async (cookies: Record<string, string>) =>
+    (await app.inject({ url: '/whatsapp/inbox/summary', cookies })).json<WaInboxSummary>();
+  const conversationOf = async (leadId: string) =>
+    (await db.select().from(waConversations).where(eq(waConversations.leadId, leadId)))[0]!;
+
+  it('comes on connect, and again the moment a message arrives, for its readers only', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const other = await sessionFor('vendedor_formatacao');
+    await deal('5521977002101', owner.id);
+    const ownerStream = await openStream(owner.cookies);
+    const otherStream = await openStream(other.cookies);
+    await ownerStream.until(() => ownerStream.inbox().length === 1);
+    await otherStream.until(() => otherStream.inbox().length === 1);
+    expect(ownerStream.inbox()[0]).toEqual(await summaryOf(owner.cookies));
+    expect(ownerStream.inbox()[0]!.unread).toBe(0);
+
+    await messageFrom('5521977002101', 'oi, tudo bem?');
+    await ownerStream.until(() => ownerStream.inbox().length === 2);
+    expect(ownerStream.inbox()[1]!.unread).toBe(1);
+    // The poll route answers the very same thing.
+    expect(ownerStream.inbox()[1]).toEqual(await summaryOf(owner.cookies));
+    await quiet(150);
+    expect(otherStream.inbox()).toHaveLength(1);
+  });
+
+  it('counts the conversation read in every tab once one of them opens it', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const lead = await deal('5521977002102', owner.id);
+    await messageFrom('5521977002102', 'bom dia');
+    const stream = await openStream(owner.cookies);
+    await stream.until(() => stream.inbox().length === 1);
+    expect(stream.inbox()[0]!.unread).toBe(1);
+
+    const opened = await app.inject({
+      method: 'POST',
+      url: `/whatsapp/conversations/${(await conversationOf(lead)).id}/read`,
+      cookies: owner.cookies,
+    });
+    expect(opened.statusCode).toBe(204);
+    await stream.until(() => stream.inbox().length === 2);
+    expect(stream.inbox()[1]!.unread).toBe(0);
+  });
+
+  it('moves the stamp when the team writes, without waiting for a beat', async () => {
+    const admin = await sessionFor('admin_master');
+    const lead = await deal('5521977002103', null);
+    await messageFrom('5521977002103', 'quero um orçamento');
+    const stream = await openStream(admin.cookies);
+    await stream.until(() => stream.inbox().length === 1);
+
+    // Meta (simulated) refuses the send: the message is still written, so the inbox moved.
+    const sent = await app.inject({
+      method: 'POST',
+      url: `/leads/${lead}/whatsapp/text`,
+      cookies: admin.cookies,
+      payload: { text: 'Olá! Já te mando.' },
+    });
+    expect(sent.statusCode).toBeLessThan(500);
+    // Writing also made the conversation the Admin's (attendance.ts): one more push, maybe two.
+    await stream.until(() => stream.inbox().length >= 2);
+    expect(stream.inbox().at(-1)!.stamp).not.toBe(stream.inbox()[0]!.stamp);
   });
 });
 

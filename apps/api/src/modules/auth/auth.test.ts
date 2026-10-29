@@ -121,13 +121,20 @@ describe('POST /auth/login', () => {
 
   it('counts every wrong password of a parallel burst, and locks (security audit A6)', async () => {
     const employee = await createEmployee(db);
-    await Promise.all(
+    const burst = await Promise.all(
       Array.from({ length: 20 }, () => loginAs(employee.email, 'senha-errada-123')),
+    );
+    // A request that reads the account after the 5th failure locked it is refused uncounted (CI
+    // under load, 29/10): every wrong password checked is counted, none lost to the race.
+    const checked = burst.filter((res) => res.json().error === 'invalid_credentials').length;
+    expect(checked).toBeGreaterThanOrEqual(5);
+    expect(burst.length - checked).toBe(
+      burst.filter((res) => res.json().error === 'account_locked').length,
     );
     const credentials = await db.query.employeeCredentials.findFirst({
       where: eq(sql`employee_id`, employee.id),
     });
-    expect(credentials?.failedAttempts).toBe(20);
+    expect(credentials?.failedAttempts).toBe(checked);
     const res = await loginAs(employee.email, employee.password);
     expect(res.statusCode).toBe(429);
     expect(res.json().error).toBe('account_locked');

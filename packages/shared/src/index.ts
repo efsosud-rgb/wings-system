@@ -61,3 +61,5 @@ export * from './whatsapp-art.js';
 export * from './whatsapp-numbers.js';
 export * from './whatsapp-templates.js';
 export * from './sofia.js';
+export * from './whatsapp-inbox.js';
+export * from './whatsapp-attendance.js';

@@ -5,13 +5,13 @@ import {
   SOFIA_MODEL,
   SOFIA_SEGMENTS,
   SOFIA_STATES,
+  WA_INBOX_PAGE,
   sofiaAttendanceSchema,
   sofiaSettingsSchema,
   type LeadPipeline,
   type SofiaCloseReason,
   type SofiaConversationDetail,
   type SofiaConversationItem,
-  type SofiaFact,
   type SofiaHandoffReason,
   type SofiaOverview,
   type SofiaSegment,
@@ -32,13 +32,9 @@ import {
 } from '../whatsapp/thread.js';
 import { sofiaSpentToday } from './engine.js';
 import { loadSofiaSettings, saveSofiaSettings } from './settings.js';
-import {
-  factsOf,
-  giveBackToSofia,
-  setAttendance,
-  SOFIA_GIVEN_BACK,
-  takeConversation,
-} from './state.js';
+import { resolve, switchSofia, takeOver } from '../whatsapp/attendance.js';
+import { AttendanceError, attendanceRefusal } from '../whatsapp/attendance-errors.js';
+import { factListOf, SOFIA_GIVEN_BACK } from './state.js';
 
 /**
  * Sofia's screen (docs/whatsapp/sofia.md): every WhatsApp conversation with
@@ -55,6 +51,8 @@ const listQuery = z.object({
   state: z.enum(SOFIA_STATES).optional(),
   segment: z.enum([...SOFIA_SEGMENTS, 'none']).optional(),
   q: z.string().trim().max(80).optional(),
+  /** The cursor `next` of the previous page (it stopped at 200 before: auditoria, 26/10). */
+  before: z.string().max(80).optional(),
 });
 
 export function reasonLabel(reason: string | null): string | null {
@@ -96,8 +94,11 @@ export const sofiaRoutes: FastifyPluginAsync = async (app) => {
 
   const ownerOf = (request: FastifyRequest) =>
     leadOwnerFilter(request.session.actor, 'leads.whatsapp');
+  // Sofia's screen is the official number's: a work number's chats are never hers (central.md).
   const scopeSql = (owner: string | undefined) =>
-    owner === undefined ? sql`` : sql`and l.owner_employee_id = ${owner}`;
+    owner === undefined
+      ? sql`and c.number_id is null`
+      : sql`and c.number_id is null and l.owner_employee_id = ${owner}`;
   const canManage = (request: FastifyRequest) => can(request.session.actor, 'sofia.manage').allowed;
 
   app.get('/sofia/overview', use, async (request, reply) => {
@@ -131,14 +132,24 @@ export const sofiaRoutes: FastifyPluginAsync = async (app) => {
     const query = listQuery.safeParse(request.query);
     if (!query.success)
       return reply.status(400).send({ error: 'invalid', message: 'Filtro inválido.' });
-    const { state, segment, q } = query.data;
+    const { state, segment, q, before } = query.data;
     const digits = q?.replace(/\D/g, '') ?? '';
+    // The page's cursor, as the Central's: the last row's time (with its microseconds) and id.
+    const cursor = before?.match(/^(.+)\|([0-9a-f-]{36})$/i);
+    if (before && (!cursor || Number.isNaN(Date.parse(cursor[1]!))))
+      return reply.status(400).send({ error: 'invalid', message: 'Página inválida.' });
     const rows = await db.execute<ConversationListRow>(
       conversationListSql({
         owner: ownerOf(request),
         readerId: request.session.actor.employeeId,
-        limit: 200,
+        limit: WA_INBOX_PAGE + 1,
         where: sql`
+        and c.number_id is null
+        ${
+          cursor
+            ? sql`and (c.last_message_at, c.id) < (${cursor[1]}::timestamptz, ${cursor[2]}::uuid)`
+            : sql``
+        }
         ${state ? sql`and c.attendance = ${state}` : sql``}
         ${
           segment === 'none'
@@ -156,7 +167,12 @@ export const sofiaRoutes: FastifyPluginAsync = async (app) => {
       }),
     );
     const at = now();
-    return reply.send({ conversations: rows.rows.map((row) => itemOf(row, at)) });
+    const page = rows.rows.slice(0, WA_INBOX_PAGE);
+    const last = page.at(-1);
+    return reply.send({
+      conversations: page.map((row) => itemOf(row, at)),
+      next: rows.rows.length > WA_INBOX_PAGE && last ? `${last.cursor_at}|${last.id}` : null,
+    });
   });
 
   /** The conversation, if the reader may see it. */
@@ -164,7 +180,7 @@ export const sofiaRoutes: FastifyPluginAsync = async (app) => {
     const conversation = await db.query.waConversations.findFirst({
       where: eq(waConversations.id, id),
     });
-    if (!conversation) return null;
+    if (!conversation || conversation.numberId) return null;
     if (conversation.leadId) {
       const lead = await leadInScope(
         db,
@@ -197,16 +213,6 @@ export const sofiaRoutes: FastifyPluginAsync = async (app) => {
     if (!row)
       return reply.status(404).send({ error: 'not_found', message: 'Conversa não encontrada.' });
     const item = itemOf(row, at);
-    const facts = factsOf(conversation);
-    const questions = item.segment === 'expansao' ? settings.expansao : settings.formatacao;
-    const listed: SofiaFact[] = questions
-      .filter((q) => facts.answers[q.key] !== undefined)
-      .map((q) => ({ key: q.key, label: q.label, answer: facts.answers[q.key]! }));
-    const others: SofiaFact[] = Object.entries(facts.answers)
-      .filter(([key]) => !questions.some((q) => q.key === key))
-      .map(([key, answer]) => ({ key, label: key, answer }));
-    if (facts.brandText)
-      others.push({ key: 'marca', label: 'Marca citada', answer: facts.brandText });
     const lead = conversation.leadId
       ? await db.query.leads.findFirst({
           where: (l, { eq: equals }) => equals(l.id, conversation.leadId!),
@@ -223,7 +229,7 @@ export const sofiaRoutes: FastifyPluginAsync = async (app) => {
     const state = item.state;
     const detail: SofiaConversationDetail = {
       item,
-      facts: [...listed, ...others],
+      facts: factListOf(conversation, settings, item.segment),
       origin: {
         code: conversation.originCode,
         adHeadline: referral?.headline ?? null,
@@ -263,16 +269,23 @@ export const sofiaRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(400).send({ error: 'invalid', message: 'Ação inválida.' });
     const at = now();
     const { action } = body.data;
-    if (action === 'give_back') {
-      const settings = await loadSofiaSettings(db);
-      if (!settings.enabled)
-        return reply.status(409).send({
-          error: 'sofia_off',
-          message: 'A Sofia está desligada. Ligue-a na configuração antes de devolver.',
-        });
-      await giveBackToSofia(db, conversation.id, at);
-    } else if (action === 'take') await takeConversation(db, conversation.id, at);
-    else await setAttendance(db, conversation.id, 'closed', at, 'encerrada');
+    const input = {
+      conversationId: conversation.id,
+      version: body.data.version ?? null,
+      actor: request.session.actor,
+      at,
+    };
+    try {
+      if (action === 'give_back') {
+        const settings = await loadSofiaSettings(db);
+        await switchSofia(db, { ...input, action: 'resume', sofiaOn: settings.enabled });
+      } else if (action === 'take') await takeOver(db, input);
+      else await resolve(db, input);
+    } catch (error) {
+      if (!(error instanceof AttendanceError)) throw error;
+      const refused = attendanceRefusal(error);
+      return reply.status(refused.status).send(refused.body);
+    }
     await writeAudit(db, {
       actorEmployeeId: request.session.actor.employeeId,
       action: `sofia.${action}`,

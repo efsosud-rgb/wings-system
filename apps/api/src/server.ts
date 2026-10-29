@@ -2,6 +2,7 @@ import { buildApp } from './app.js';
 import { createDb } from './db/client.js';
 import { loadDotEnv } from './db/load-env.js';
 import { loadEnv } from './env.js';
+import { storageOf } from './lib/storage/index.js';
 import { createOpenRouterLlm } from './modules/agent/llm.js';
 import { startFormatacaoIntakeScheduler } from './modules/expansion/formatacao.js';
 import { startExpansionIntakeScheduler } from './modules/expansion/scheduler.js';
@@ -15,6 +16,9 @@ import { startProspectingRetentionScheduler } from './modules/prospecting/retent
 import { startSofia } from './modules/sofia/engine.js';
 import { whatsappConfigOf } from './modules/whatsapp/graph.js';
 import { startWhatsAppIntake } from './modules/whatsapp/intake.js';
+import { startWhatsAppMediaStore } from './modules/whatsapp/media-store.js';
+import { numberConfigOf, numbersDepsOf } from './modules/whatsapp/numbers.js';
+import { createSecretBox } from './lib/secret-box.js';
 import { startYoutubeScheduler } from './modules/youtube/scheduler.js';
 
 const pageIdsOf = (value: string | undefined) =>
@@ -128,6 +132,7 @@ async function main() {
       wabaId: env.WHATSAPP_WABA_ID ?? null,
       log: (facts) => app.log.info(facts),
       send: whatsappSend,
+      numbers: numbersDepsOf({ db, env }),
     });
     app.wings.whatsappKick = intake.kick;
     app.addHook('onClose', async () => intake.stop());
@@ -144,6 +149,24 @@ async function main() {
       log: (facts) => app.log.info(facts),
     });
     app.addHook('onClose', async () => sofia.stop());
+
+    // Received files go to our storage, so they outlive Meta's 30 days (docs/whatsapp/cloud-api.md).
+    const storage = storageOf(app.wings);
+    const config = whatsappConfigOf(env);
+    if (storage && config) {
+      const box = env.INTEGRATIONS_ENCRYPTION_KEY
+        ? createSecretBox(env.INTEGRATIONS_ENCRYPTION_KEY)
+        : null;
+      const files = startWhatsAppMediaStore({
+        db,
+        storage,
+        config,
+        numberConfig: (numberId) => numberConfigOf(db, box, numberId),
+        fetchImpl: fetch,
+        log: (facts) => app.log.info(facts),
+      });
+      app.addHook('onClose', async () => files.stop());
+    }
   }
 
   // CRM automations: due rules and sequence steps, then the deadline alerts, then

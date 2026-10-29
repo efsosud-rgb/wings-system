@@ -1,3 +1,4 @@
+import type { WaSendKind } from '@wings/shared';
 import type { Env } from '../../env.js';
 
 /**
@@ -93,6 +94,9 @@ export type InteractiveHeader =
 export type OutgoingPayload =
   | { type: 'text'; text: { body: string; preview_url: boolean } }
   | { type: 'image'; image: { id: string; caption?: string } }
+  | { type: 'video'; video: { id: string; caption?: string } }
+  | { type: 'audio'; audio: { id: string } }
+  | { type: 'document'; document: { id: string; caption?: string; filename: string } }
   | {
       type: 'interactive';
       interactive: {
@@ -181,6 +185,24 @@ export const imagePayload = (mediaId: string, caption: string): OutgoingPayload 
   type: 'image',
   image: { id: mediaId, ...(caption ? { caption } : {}) },
 });
+
+/**
+ * A deal's file by its Meta media id, inside the 24-hour window: an audio goes
+ * without a caption, a document with its name (what the person sees).
+ */
+export const filePayload = (
+  kind: WaSendKind,
+  mediaId: string,
+  caption: string,
+  filename: string,
+): OutgoingPayload => {
+  const text = caption ? { caption } : {};
+  if (kind === 'audio') return { type: 'audio', audio: { id: mediaId } };
+  if (kind === 'video') return { type: 'video', video: { id: mediaId, ...text } };
+  if (kind === 'document')
+    return { type: 'document', document: { id: mediaId, ...text, filename } };
+  return imagePayload(mediaId, caption);
+};
 
 /** One link button (title of up to 20 characters), inside the 24-hour window. */
 export const ctaUrlPayload = (
@@ -351,10 +373,10 @@ export async function readCallingSettings(
   );
 }
 
-// --- files we send (the art) -------------------------------------------------------------
+// --- files we send (the art, a deal's file) ----------------------------------------------
 
 /**
- * POST /{phone-number-id}/media: the art goes up to Meta once and is sent by
+ * POST /{phone-number-id}/media: the file goes up to Meta once and is sent by
  * its id (Meta keeps it 30 days). Uploading sends nothing to anybody.
  */
 export async function uploadWhatsAppMedia(
@@ -467,7 +489,8 @@ export const MAX_MEDIA_BYTES = 100 * 1024 * 1024;
 
 /**
  * A received file: GET /{media-id} gives a short-lived signed URL, which is
- * read with the same token. Nothing is stored; the browser gets the bytes.
+ * read with the same token. The caller keeps the bytes (`media-store.ts`) or
+ * passes them on to the browser.
  */
 export async function downloadWhatsAppMedia(
   fetchImpl: Fetch,
@@ -513,18 +536,59 @@ export async function exchangeSignupCode(
   fetchImpl: Fetch,
   app: { appId: string; appSecret: string },
   code: string,
-): Promise<GraphResult<string>> {
+): Promise<GraphResult<{ token: string; expiresIn: number | null }>> {
   const query = new URLSearchParams({ client_id: app.appId, client_secret: app.appSecret, code });
-  const result = await graph<{ access_token?: unknown }>(
+  const result = await graph<{ access_token?: unknown; expires_in?: unknown }>(
     fetchImpl,
     null,
     'GET',
     `/oauth/access_token?${query}`,
   );
+  return tokenOf(result);
+}
+
+function tokenOf(
+  result: GraphResult<{ access_token?: unknown; expires_in?: unknown }>,
+): GraphResult<{ token: string; expiresIn: number | null }> {
   if (!result.ok) return result;
+  // Seconds until the token ends (60 days with Meta's default configuration); absent: no end given.
+  const expiresIn = Number(result.data.expires_in);
   return typeof result.data.access_token === 'string' && result.data.access_token
-    ? { ok: true, data: result.data.access_token }
+    ? {
+        ok: true,
+        data: {
+          token: result.data.access_token,
+          expiresIn: Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn : null,
+        },
+      }
     : { ok: false, code: null, title: 'no_token', unknown: false };
+}
+
+/**
+ * A work number's 60-day token renewed before it ends: Meta's `fb_exchange_token` with
+ * `set_token_expires_in_60_days`, as its docs give it for an expiring system user token. NOT
+ * verified live (no number was ever connected); a refusal leaves the current token as it is.
+ */
+export async function refreshBusinessToken(
+  fetchImpl: Fetch,
+  app: { appId: string; appSecret: string },
+  token: string,
+): Promise<GraphResult<{ token: string; expiresIn: number | null }>> {
+  const query = new URLSearchParams({
+    grant_type: 'fb_exchange_token',
+    client_id: app.appId,
+    client_secret: app.appSecret,
+    set_token_expires_in_60_days: 'true',
+    fb_exchange_token: token,
+  });
+  return tokenOf(
+    await graph<{ access_token?: unknown; expires_in?: unknown }>(
+      fetchImpl,
+      null,
+      'GET',
+      `/oauth/access_token?${query}`,
+    ),
+  );
 }
 
 export interface GraphBusinessNumber {

@@ -20,6 +20,19 @@ vi.mock('../pages/crm/WhatsAppCalls.js', () => ({
 // The new-lead pop-up has its own tests (NewLeadAlerts.test.tsx) and needs the query client.
 vi.mock('./NewLeadAlerts.js', () => ({ NewLeadAlerts: () => null }));
 
+// The WhatsApp entry's badge: the official number's switch and the inbox count (whatsapp-inbox.test.tsx).
+const whatsapp = { live: true as boolean | undefined, unread: undefined as number | undefined };
+vi.mock('../api/whatsapp.js', () => ({
+  useOfficialNumber: () => ({
+    data: whatsapp.live === undefined ? undefined : { live: whatsapp.live },
+  }),
+}));
+vi.mock('../api/whatsapp-inbox.js', () => ({
+  useInboxSummary: () => ({
+    data: whatsapp.unread === undefined ? undefined : { unread: whatsapp.unread, stamp: 's' },
+  }),
+}));
+
 vi.mock('../api/auth.js', () => ({
   useSession: () => ({ data: session.current, isLoading: false }),
   useLogout: () => ({ mutateAsync: vi.fn(), isPending: false }),
@@ -62,6 +75,8 @@ function renderShell(path = '/marketing/trafego-pago-wings') {
 
 beforeEach(() => {
   session.current = makeUser();
+  whatsapp.live = true;
+  whatsapp.unread = undefined;
 });
 
 afterEach(() => {
@@ -121,6 +136,49 @@ describe('sub-modules without a backend', () => {
     const studio = screen.getByRole('link', { name: /Agente de Tráfego Pago — Wings/ });
     expect(studio.className).not.toContain('menu-item-soon');
     expect(studio.textContent).not.toContain('em breve');
+  });
+});
+
+describe('the WhatsApp entry', () => {
+  const whatsappLink = () => menu().getByRole('link', { name: /WhatsApp/ });
+
+  it('shows how many conversations hold a message not opened, as WhatsApp Desktop', () => {
+    session.current = makeUser({ role: 'admin_master', permissions: { 'leads.whatsapp': 'all' } });
+    whatsapp.unread = 3;
+    renderShell('/crm-vendas/whatsapp');
+    expect(whatsappLink().textContent).toContain('3 conversas não lidas');
+    whatsapp.unread = 120;
+    cleanup();
+    renderShell('/crm-vendas/whatsapp');
+    expect(whatsappLink().textContent).toContain('99+');
+  });
+
+  it('shows nothing while there is none, or while the count is not known', () => {
+    session.current = makeUser({ role: 'admin_master', permissions: { 'leads.whatsapp': 'all' } });
+    whatsapp.unread = 0;
+    renderShell('/crm-vendas/whatsapp');
+    expect(whatsappLink().querySelector('.menu-badge')).toBeNull();
+    whatsapp.unread = undefined;
+    cleanup();
+    renderShell('/crm-vendas/whatsapp');
+    expect(whatsappLink().querySelector('.menu-badge')).toBeNull();
+  });
+
+  it('says "em breve" to a seller until the official number is live, then counts', () => {
+    session.current = makeUser({
+      role: 'vendedor_formatacao',
+      permissions: { 'leads.whatsapp': 'own' },
+    });
+    whatsapp.unread = 2;
+    whatsapp.live = false;
+    renderShell('/crm-vendas/whatsapp');
+    expect(whatsappLink().textContent).toContain('em breve');
+    expect(whatsappLink().querySelector('.menu-badge')).toBeNull();
+    whatsapp.live = true;
+    cleanup();
+    renderShell('/crm-vendas/whatsapp');
+    expect(whatsappLink().textContent).not.toContain('em breve');
+    expect(whatsappLink().textContent).toContain('2 conversas não lidas');
   });
 });
 

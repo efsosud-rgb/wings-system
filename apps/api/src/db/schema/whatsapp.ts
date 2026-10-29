@@ -83,6 +83,13 @@ export const waConversations = pgTable(
       .notNull()
       .references(() => waContacts.id),
     leadId: uuid('lead_id').references(() => leads.id),
+    /**
+     * A person's work number the chat is on (docs/whatsapp/central.md): one chat per contact per
+     * number, as on the phone, never Sofia's. Null is the official number.
+     */
+    numberId: uuid('number_id').references(() => waNumbers.id),
+    /** The name the number's owner saved for the person in the phone (`smb_app_state_sync`). */
+    phoneContactName: text('phone_contact_name'),
     /** open | closed */
     status: text('status').notNull().default('open'),
     /** The ad the person came from (`referral` of the first message), ids and texts of the ad only. */
@@ -117,20 +124,66 @@ export const waConversations = pgTable(
     sofiaClaimedAt: timestamp('sofia_claimed_at', { withTimezone: true }),
     /** The person's messages up to here were already answered. */
     sofiaReadUntil: timestamp('sofia_read_until', { withTimezone: true }),
+    /** A person paused Sofia in this conversation: she never takes it until someone turns her on. */
+    sofiaPaused: boolean('sofia_paused').notNull().default(false),
+    /**
+     * Who answers it (docs/whatsapp/central.md, "Atendimento"). Null: the deal's owner holds it on
+     * the official number, the number's owner on a work number; with neither, it waits in its queue.
+     */
+    assigneeEmployeeId: uuid('assignee_employee_id').references(() => employees.id),
+    /** The department (a SectorSlug) whose queue it waits in; null: the number's, or none. */
+    queue: text('queue'),
+    /** Moves on every change of hands: an action made on an older one is refused (compare-and-set). */
+    version: integer('version').notNull().default(0),
+    /** "Outra pessoa está respondendo": who is typing and until when (renewed while they type). */
+    replyingEmployeeId: uuid('replying_employee_id').references(() => employees.id),
+    replyingUntil: timestamp('replying_until', { withTimezone: true }),
   },
   (table) => [
     index('wa_conversations_attendance_idx').on(table.attendance, table.lastMessageAt),
+    index('wa_conversations_assignee_idx').on(table.assigneeEmployeeId),
     index('wa_conversations_sofia_due_idx')
       .on(table.sofiaDueAt)
       .where(sql`${table.sofiaDueAt} is not null`),
     uniqueIndex('wa_conversations_contact_lead_uq')
       .on(table.contactId, table.leadId)
-      .where(sql`${table.leadId} is not null`),
+      .where(sql`${table.leadId} is not null and ${table.numberId} is null`),
     uniqueIndex('wa_conversations_contact_unmatched_uq')
       .on(table.contactId)
-      .where(sql`${table.leadId} is null`),
+      .where(sql`${table.leadId} is null and ${table.numberId} is null`),
+    uniqueIndex('wa_conversations_number_contact_uq')
+      .on(table.numberId, table.contactId)
+      .where(sql`${table.numberId} is not null`),
     index('wa_conversations_lead_idx').on(table.leadId),
     index('wa_conversations_last_idx').on(table.lastMessageAt),
+  ],
+);
+
+/**
+ * The history of who had a conversation (docs/whatsapp/central.md, "Atendimento"): every take,
+ * transfer, queue, resolve, reopen, and Sofia's pauses and handovers, with who did it (null: the
+ * system or Sofia). Append-only; ids and codes, never the person's data.
+ */
+export const waConversationEvents = pgTable(
+  'wa_conversation_events',
+  {
+    tenantId: tenantId(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => waConversations.id),
+    /** A WaConversationEventKind. */
+    kind: text('kind').notNull(),
+    fromEmployeeId: uuid('from_employee_id').references(() => employees.id),
+    toEmployeeId: uuid('to_employee_id').references(() => employees.id),
+    queue: text('queue'),
+    /** A code (a SofiaHandoffReason, `sofia_pausada`...), never free text. */
+    reason: text('reason'),
+    actorEmployeeId: uuid('actor_employee_id').references(() => employees.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('wa_conversation_events_conversation_idx').on(table.conversationId, table.createdAt),
   ],
 );
 
@@ -258,7 +311,8 @@ export const waMessages = pgTable(
     text: text('text'),
     /**
      * The rest, without the text: media id, type and file name; template name,
-     * language and parameters; the message replied to; a reaction's target.
+     * language and parameters; the message replied to; a reaction's target; a
+     * contact card's names and numbers; a location's point, name and address.
      * Never a media URL (they carry Meta's signature and expire).
      */
     content: jsonb('content').notNull().default({}),
@@ -292,6 +346,49 @@ export const waMessages = pgTable(
       .where(sql`${table.importBatchId} is not null`),
     index('wa_messages_conversation_idx').on(table.conversationId, table.createdAt),
     index('wa_messages_lead_idx').on(table.leadId, table.createdAt),
+    // The file queue looks only at messages that have a file.
+    index('wa_messages_media_idx')
+      .on(table.createdAt)
+      .where(sql`(${table.content} -> 'media' ->> 'id') is not null`),
+  ],
+);
+
+/**
+ * A received file, copied to our storage (R2) soon after it arrives, so it
+ * outlives the 30 days Meta keeps it (docs/whatsapp/cloud-api.md). The queue
+ * in `media-store.ts` copies each message's file once; the screen opens it by
+ * a 5-minute signed address. The file lives as long as its message, and a
+ * message as long as its deal: a message deleted leaves the row without one,
+ * and the queue deletes the object, then the row.
+ */
+export const waMessageFiles = pgTable(
+  'wa_message_files',
+  {
+    tenantId: tenantId(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** Null once the message is gone: the object is deleted next. */
+    messageId: uuid('message_id').references(() => waMessages.id, { onDelete: 'set null' }),
+    /** `whatsapp/2026-10/<uuid>`: made here, nothing of the person's file name. */
+    storageKey: text('storage_key').notNull(),
+    /** pending | stored | failed */
+    status: text('status').notNull().default('pending'),
+    mimeType: text('mime_type'),
+    byteSize: integer('byte_size'),
+    attempts: integer('attempts').notNull().default(0),
+    /** Why the last copy failed (`too_large`, `media_unavailable`, a Meta code): never the person's data. */
+    lastError: text('last_error'),
+    nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    storedAt: timestamp('stored_at', { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex('wa_message_files_message_uq').on(table.messageId),
+    index('wa_message_files_due_idx')
+      .on(table.nextAttemptAt)
+      .where(sql`${table.status} = 'pending'`),
+    index('wa_message_files_orphan_idx')
+      .on(table.id)
+      .where(sql`${table.messageId} is null`),
   ],
 );
 
@@ -330,6 +427,8 @@ export const waWebhookEvents = pgTable(
     attempts: integer('attempts').notNull().default(0),
     /** A code (bad_payload, db_error, ...), never text about the person. */
     lastError: text('last_error'),
+    /** A failed try waits longer each time (`intake.ts`). */
+    nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }).notNull().defaultNow(),
     processedAt: timestamp('processed_at', { withTimezone: true }),
   },
   (table) => [
@@ -448,35 +547,57 @@ export const waMediaUploads = pgTable(
 export const whatsappSettings = pgTable('whatsapp_settings', {
   tenantId: tenantId().primaryKey(),
   officialNumberLive: boolean('official_number_live').notNull().default(false),
+  /**
+   * Who gets a conversation nobody holds (a WaAssignmentMode): `manual`, it waits in its queue for
+   * a person to take it; `rodizio`, the funnel's rotation (`crm_distribution_members`) picks.
+   */
+  assignmentMode: text('assignment_mode').notNull().default('manual'),
   updatedBy: uuid('updated_by').references(() => employees.id),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 /**
- * The sellers' own WhatsApp Business numbers, mirrored by coexistence (Eric, 20/10;
- * docs/whatsapp/conectar-numero.md). One row per number, each with its own WABA and business
- * portfolio: nothing assumes one portfolio for all. `token_enc` is the business token Meta gave
- * when this number was connected, sealed by `secret-box.ts` under INTEGRATIONS_ENCRYPTION_KEY;
- * it is never sent to the browser, never logged, and this table is not granted to `wings_ro`.
+ * The company's work numbers (docs/whatsapp/central.md, conectar-numero.md): an Admin Master
+ * registers each one (owner, department, the phone checks), then connects it by coexistence. One
+ * row per number, each with its own WABA and business portfolio: nothing assumes one portfolio for
+ * all. Meta's ids, the token and `connected_at` stay null until the connection. `token_enc` is the
+ * business token Meta gave, sealed by `secret-box.ts` under INTEGRATIONS_ENCRYPTION_KEY; it is
+ * never sent to the browser, never logged, and this table is not granted to `wings_ro`.
  */
 export const waNumbers = pgTable(
   'wa_numbers',
   {
     tenantId: tenantId(),
     id: uuid('id').primaryKey().defaultRandom(),
-    phoneNumberId: text('phone_number_id').notNull(),
-    wabaId: text('waba_id').notNull(),
+    /** The number as registered: 55 + DDD + number, digits only. */
+    phone: text('phone'),
+    /** A name for it on the screens ("Comercial Expansão"). */
+    label: text('label'),
+    /** Its department, a SectorSlug. */
+    sector: text('sector'),
+    /** a_confirmar | confirmado | inelegivel (WaNumberEligibility). */
+    eligibility: text('eligibility').notNull().default('a_confirmar'),
+    eligibilityNotes: text('eligibility_notes'),
+    /** The phone checks done so far (WA_NUMBER_CHECKS keys). */
+    checks: text('checks')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    phoneNumberId: text('phone_number_id'),
+    wabaId: text('waba_id'),
     businessId: text('business_id'),
     displayPhone: text('display_phone'),
     verifiedName: text('verified_name'),
     ownerEmployeeId: uuid('owner_employee_id')
       .notNull()
       .references(() => employees.id),
-    tokenEnc: text('token_enc').notNull(),
-    /** connected | disconnected */
-    status: text('status').notNull().default('connected'),
+    tokenEnc: text('token_enc'),
+    /** When Meta said the token ends (`expires_in` of the exchange); null: Meta gave no end. */
+    tokenExpiresAt: timestamp('token_expires_at', { withTimezone: true }),
+    /** registered | connected | disconnected */
+    status: text('status').notNull().default('registered'),
     connectedBy: uuid('connected_by').references(() => employees.id),
-    connectedAt: timestamp('connected_at', { withTimezone: true }).notNull(),
+    connectedAt: timestamp('connected_at', { withTimezone: true }),
     /** Meta's event and reason when the number left: a code, never a message. */
     disconnectReason: text('disconnect_reason'),
     disconnectedAt: timestamp('disconnected_at', { withTimezone: true }),
@@ -488,10 +609,50 @@ export const waNumbers = pgTable(
     historySyncRequest: text('history_sync_request'),
     /** 0–100, the highest Meta reported in a `history` webhook. */
     historyProgress: integer('history_progress'),
+    /**
+     * A connection (or "Tentar de novo") under way holds the number until this time: the one-time
+     * syncs are never asked twice, whatever API container runs it. Expires on its own if one dies.
+     */
+    connectingUntil: timestamp('connecting_until', { withTimezone: true }),
+    /** The last try to renew the token before it ends, and Meta's code when it failed. */
+    tokenRenewTriedAt: timestamp('token_renew_tried_at', { withTimezone: true }),
+    tokenRenewError: text('token_renew_error'),
+    createdBy: uuid('created_by').references(() => employees.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     uniqueIndex('wa_numbers_phone_number_uq').on(table.tenantId, table.phoneNumberId),
+    uniqueIndex('wa_numbers_phone_uq')
+      .on(table.tenantId, table.phone)
+      .where(sql`${table.phone} is not null`),
     index('wa_numbers_waba_idx').on(table.wabaId),
+  ],
+);
+
+/**
+ * The message templates of each work number's own WABA (docs/whatsapp/central.md), as read from
+ * Meta: a number sends only its own WABA's approved templates. The official number's stay in
+ * `wa_templates`, with the Modelos screen.
+ */
+export const waNumberTemplates = pgTable(
+  'wa_number_templates',
+  {
+    tenantId: tenantId(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    numberId: uuid('number_id')
+      .notNull()
+      .references(() => waNumbers.id, { onDelete: 'cascade' }),
+    metaId: text('meta_id'),
+    name: text('name').notNull(),
+    language: text('language').notNull(),
+    category: text('category'),
+    status: text('status').notNull(),
+    rejectedReason: text('rejected_reason'),
+    components: jsonb('components').notNull().default([]),
+    syncedAt: timestamp('synced_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('wa_number_templates_name_lang_uq').on(table.numberId, table.name, table.language),
   ],
 );

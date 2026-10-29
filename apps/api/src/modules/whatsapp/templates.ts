@@ -6,7 +6,7 @@ import {
 } from '@wings/shared';
 import type { Database } from '../../db/client.js';
 import { eq } from 'drizzle-orm';
-import { waTemplates } from '../../db/schema/index.js';
+import { waNumberTemplates, waTemplates } from '../../db/schema/index.js';
 import {
   errorText,
   listWhatsAppTemplates,
@@ -57,6 +57,52 @@ export async function syncTemplates(
       .from(waTemplates))
       if (!names.has(`${stored.name}|${stored.language}`))
         await db.delete(waTemplates).where(eq(waTemplates.id, stored.id));
+  return null;
+}
+
+/**
+ * A work number's own templates (its WABA's), read into `wa_number_templates`: the same reading
+ * as the official list, kept per number, never mixed with the official one.
+ */
+export async function syncNumberTemplates(
+  db: Database,
+  fetchImpl: typeof fetch,
+  numberId: string,
+  config: WhatsAppConfig & { wabaId: string },
+  at: Date,
+): Promise<string | null> {
+  const listed = await listWhatsAppTemplates(fetchImpl, config);
+  if (!listed.ok) return errorText(listed.code, listed.title);
+  const names = new Set(listed.data.map((t) => `${t.name}|${t.language}`));
+  for (const t of listed.data) {
+    if (!t.name || !t.language || !t.status) continue;
+    const row = {
+      metaId: t.id ?? null,
+      category: t.category ?? null,
+      status: t.status,
+      rejectedReason: reasonOf(t.rejected_reason),
+      components: (t.components ?? []) as object[],
+      syncedAt: at,
+    };
+    await db
+      .insert(waNumberTemplates)
+      .values({ ...row, numberId, name: t.name, language: t.language })
+      .onConflictDoUpdate({
+        target: [waNumberTemplates.numberId, waNumberTemplates.name, waNumberTemplates.language],
+        set: row,
+      });
+  }
+  if (listed.data.length < TEMPLATE_LIST_MAX)
+    for (const stored of await db
+      .select({
+        id: waNumberTemplates.id,
+        name: waNumberTemplates.name,
+        language: waNumberTemplates.language,
+      })
+      .from(waNumberTemplates)
+      .where(eq(waNumberTemplates.numberId, numberId)))
+      if (!names.has(`${stored.name}|${stored.language}`))
+        await db.delete(waNumberTemplates).where(eq(waNumberTemplates.id, stored.id));
   return null;
 }
 

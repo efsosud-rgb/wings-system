@@ -7,6 +7,7 @@ import {
   payloadOf,
   planTemplate,
   toFreeMessage,
+  unsupportedOf,
   type PlanInput,
   type TemplateRow,
 } from './template-send.js';
@@ -680,5 +681,45 @@ describe("Meta's refusals in Portuguese", () => {
     expect(errorText(131030, 'Recipient phone number not in allowed list')).toMatch(
       /número de teste da Meta/,
     );
+  });
+});
+
+describe('a template with a part the system does not fill yet (auditoria, item 4)', () => {
+  const plain = (...more: Record<string, unknown>[]) =>
+    row('aviso_teste', 'UTILITY', 'Olá, {{1}}! Temos novidades.', ...more);
+  const cases: [string, TemplateRow][] = [
+    ['a variable in the title', plain({ type: 'HEADER', format: 'TEXT', text: 'Oi, {{1}}' })],
+    [
+      'a link button with a variable part',
+      plain({
+        type: 'BUTTONS',
+        buttons: [{ type: 'URL', text: 'Ver proposta', url: 'https://exemplo.com.br/p/{{1}}' }],
+      }),
+    ],
+    ['a video header', plain({ type: 'HEADER', format: 'VIDEO' })],
+    ['a document header', plain({ type: 'HEADER', format: 'DOCUMENT' })],
+  ];
+  for (const [what, template] of cases)
+    it(`is refused before anything goes, window open or closed: ${what}`, () => {
+      for (const open of [false, true]) {
+        const plan = planTemplate(
+          base({
+            request: { name: 'aviso_teste', language: 'pt_BR', params: [], companyArticle: 'a' },
+            templates: [template],
+            window: { open, expiresAt: null },
+            hasArt: false,
+          }),
+        );
+        expect(plan).toMatchObject({ ok: false, status: 422, error: 'template_unsupported' });
+        expect(unsupportedOf(template)).toContain('Escolha outro modelo');
+      }
+    });
+
+  it('a fixed title and a fixed link still go', () => {
+    const fixed = plain(
+      { type: 'HEADER', format: 'TEXT', text: 'Novidades' },
+      { type: 'BUTTONS', buttons: [{ type: 'URL', text: 'Ver', url: 'https://exemplo.com.br/p' }] },
+    );
+    expect(unsupportedOf(fixed)).toBeNull();
   });
 });

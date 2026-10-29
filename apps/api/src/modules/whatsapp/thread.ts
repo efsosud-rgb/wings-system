@@ -12,11 +12,13 @@ import {
   type SofiaState,
   type WaCallPermission,
   type WaCallPermissionState,
+  type WaChatNumber,
   type WaMessage,
   type WaMessageKind,
   type WaMessageStatus,
+  type WaQuote,
 } from '@wings/shared';
-import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   clients,
@@ -25,6 +27,7 @@ import {
   waContacts,
   waConversations,
   waMessages,
+  waNumbers,
 } from '../../db/schema/index.js';
 import type { Env } from '../../env.js';
 import { contactBlock } from '../leads/contact-block.js';
@@ -71,7 +74,85 @@ export const windowOf = (contact: Contact | null | undefined, now: Date) => {
   return { open: expires !== null && expires > now, expiresAt: expires?.toISOString() ?? null };
 };
 
-export function toMessage(row: MessageRow, authors: Map<string, string>): WaMessage {
+type Reactions = { emoji: string; direction: 'in' | 'out' }[];
+
+/** What a page's replies and reactions point at, and the reactions on its messages, by wamid. */
+export interface MessageLinks {
+  quoted: Map<string, MessageRow>;
+  reactions: Map<string, Reactions>;
+}
+const NO_LINKS: MessageLinks = { quoted: new Map(), reactions: new Map() };
+
+/**
+ * The messages a page's replies quote and reactions are for, and the reactions
+ * on the page's own messages, looked up only inside `scope` (the page's own
+ * deal or conversation), so nothing of another deal shows.
+ */
+export async function linksOf(
+  db: Database,
+  rows: MessageRow[],
+  scope: SQL | undefined,
+): Promise<MessageLinks> {
+  if (!scope) return NO_LINKS;
+  const wanted = new Set<string>();
+  for (const row of rows) {
+    const content = row.content as { replyTo?: unknown; reactionTo?: unknown } | null;
+    for (const wamid of [content?.replyTo, content?.reactionTo])
+      if (typeof wamid === 'string') wanted.add(wamid);
+  }
+  const own = rows.flatMap((row) => (row.wamid && row.kind !== 'reaction' ? [row.wamid] : []));
+  const quoted = wanted.size
+    ? await db
+        .select()
+        .from(waMessages)
+        .where(and(scope, inArray(waMessages.wamid, [...wanted])))
+    : [];
+  const target = sql<string>`${waMessages.content} ->> 'reactionTo'`;
+  const reacting = own.length
+    ? await db
+        .select({ target, direction: waMessages.direction, emoji: waMessages.text })
+        .from(waMessages)
+        .where(and(scope, eq(waMessages.kind, 'reaction'), inArray(target, own)))
+        .orderBy(
+          sql`coalesce(${waMessages.waTimestamp}, ${waMessages.createdAt})`,
+          waMessages.createdAt,
+        )
+    : [];
+  // Each side's last reaction wins, as on WhatsApp; an empty one took it back.
+  const last = new Map<string, Map<'in' | 'out', string | null>>();
+  for (const reaction of reacting) {
+    const sides = last.get(reaction.target) ?? new Map<'in' | 'out', string | null>();
+    sides.set(reaction.direction === 'out' ? 'out' : 'in', reaction.emoji);
+    last.set(reaction.target, sides);
+  }
+  const reactions = new Map<string, Reactions>();
+  for (const [wamid, sides] of last)
+    reactions.set(
+      wamid,
+      [...sides].flatMap(([direction, emoji]) => (emoji ? [{ emoji, direction }] : [])),
+    );
+  return { quoted: new Map(quoted.map((row) => [row.wamid!, row])), reactions };
+}
+
+function quoteOf(wamid: unknown, links: MessageLinks): WaQuote | null {
+  if (typeof wamid !== 'string') return null;
+  const row = links.quoted.get(wamid);
+  return row
+    ? {
+        found: true,
+        id: row.id,
+        direction: row.direction === 'out' ? 'out' : 'in',
+        kind: row.kind as WaMessageKind,
+        text: row.text?.slice(0, 300) ?? null,
+      }
+    : { found: false };
+}
+
+export function toMessage(
+  row: MessageRow,
+  authors: Map<string, string>,
+  links: MessageLinks = NO_LINKS,
+): WaMessage {
   const content = (row.content ?? {}) as Record<string, unknown>;
   const media = content.media as { mimeType?: string | null; filename?: string | null } | undefined;
   const template = content.template as { name?: string; language?: string } | undefined;
@@ -83,6 +164,19 @@ export function toMessage(row: MessageRow, authors: Map<string, string>): WaMess
     direction: row.direction === 'out' ? 'out' : 'in',
     kind: row.kind as WaMessageKind,
     text: row.text,
+    replyTo: quoteOf(content.replyTo, links),
+    reactionTo:
+      row.kind === 'reaction' ? (quoteOf(content.reactionTo, links) ?? { found: false }) : null,
+    reactions: row.wamid ? (links.reactions.get(row.wamid) ?? []) : [],
+    // A card from before the numbers were kept holds only their count.
+    contacts:
+      row.kind === 'contacts' && Array.isArray(content.contacts)
+        ? (content.contacts as { name: string | null; phones: string[] }[])
+        : null,
+    location:
+      row.kind === 'location' && content.location
+        ? (content.location as NonNullable<WaMessage['location']>)
+        : null,
     media:
       media && WA_MEDIA_KINDS.includes(row.kind as WaMessageKind)
         ? { mimeType: media.mimeType ?? null, filename: media.filename ?? null }
@@ -100,6 +194,8 @@ export function toMessage(row: MessageRow, authors: Map<string, string>): WaMess
     error: tracked ? errorText(row.errorCode, row.errorTitle) : null,
     authorName: row.employeeId ? (authors.get(row.employeeId) ?? null) : null,
     bySofia: row.author === 'sofia',
+    // An imported line says "Do celular" by itself.
+    fromPhone: row.author === 'app' && row.importBatchId === null,
     imported: row.importBatchId
       ? { file: imported?.file ?? null, omitted: imported?.omitted === true }
       : null,
@@ -192,7 +288,7 @@ export async function brandOf(
           .select({ segment: waConversations.segment, ...voiceColumns })
           .from(waConversations)
           .leftJoin(clients, eq(clients.id, waConversations.brandClientId))
-          .where(eq(waConversations.leadId, leadId))
+          .where(and(eq(waConversations.leadId, leadId), isNull(waConversations.numberId)))
           .orderBy(desc(waConversations.lastMessageAt))
           .limit(1)
       : [];
@@ -239,58 +335,133 @@ export interface ConversationListRow extends Record<string, unknown> {
   text: string | null;
   status: string | null;
   unread: number;
+  /** With `textLike`: the latest message whose text matched (`f` in the query). */
+  match_text?: string | null;
+  match_at?: Date | string | null;
+  /** `last_message_at` with its microseconds, for the next page's cursor. */
+  cursor_at: string | null;
+  phone_contact_name: string | null;
+  number_id: string | null;
+  number_label: string | null;
+  number_phone: string | null;
+  number_owner_name: string | null;
+  holder_id: string | null;
+  holder_name: string | null;
+  queue: string | null;
 }
 
 /**
- * The conversations a reader may see (`owner` = their id when they see only
- * their own deals' ones), newest first, with the last message and how many
- * of the person's messages this reader has not opened (after their last
- * opening, or after our last reply when they never opened it).
+ * A message `u` of the conversation `c` that the reader has not opened: the
+ * person's, after the reader's last opening, or after our last reply when they
+ * never opened it. One rule for the list's counts and the inbox total.
+ */
+export const unreadMessageOf = (readerId: string) => sql`
+  u.conversation_id = c.id and u.direction = 'in' and u.import_batch_id is null
+  and (u.content ->> 'history') is null
+  and u.created_at > coalesce(
+    (select r.read_at from wa_conversation_reads r
+      where r.conversation_id = c.id and r.employee_id = ${readerId}),
+    (select max(o.created_at) from wa_messages o
+      where o.conversation_id = c.id and o.direction = 'out' and o.author <> 'system'),
+    '-infinity'::timestamptz)`;
+
+/**
+ * The conversations a reader reaches (`owner` = their id when they see only their own): an
+ * official one through its deal's owner, a work number's chat through the number's owner, and any
+ * one assigned to them (whatsapp/attendance.ts). Needs
+ * `c`, `l` (the deal) and `n` (the number) in the query.
+ */
+export const reachOf = (owner: string | undefined) =>
+  owner === undefined
+    ? sql``
+    : sql`and ((c.number_id is null and l.owner_employee_id = ${owner}) or n.owner_employee_id = ${owner}
+          or c.assignee_employee_id = ${owner})`;
+
+/** Who answers a conversation (whatsapp/attendance.ts), over `c`, `l` (its deal) and `n` (its number). */
+export const holderSql = sql`coalesce(c.assignee_employee_id, case when c.number_id is null then l.owner_employee_id else n.owner_employee_id end)`;
+
+/** An ILIKE pattern that finds `term` as typed: `%`, `_` and `\` in it are plain characters. */
+export const likeOf = (term: string) => `%${term.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+
+/**
+ * The conversations a reader may see (`reachOf`), newest first, with the last
+ * message and how many of the person's messages this reader has not opened
+ * (`unreadMessageOf`). With `textLike`, each row also brings its latest message
+ * whose text matches (`f`), for `where` to filter on: the same conversations, so
+ * the same reach.
  */
 export function conversationListSql(input: {
   owner: string | undefined;
   readerId: string;
   where: SQL;
   limit: number;
+  textLike?: string;
 }) {
   return sql`
     select c.id, c.lead_id, l.name as lead_name, l.pipeline as lead_pipeline,
            e.full_name as owner_name, k.profile_name, k.phone, k.last_inbound_at,
-           c.last_message_at, c.attendance, c.segment, c.state_changed_at, c.reason,
-           b.name as brand_name, m.direction, m.kind, m.text, m.status,
+           c.last_message_at, c.last_message_at::text as cursor_at, c.attendance, c.segment,
+           c.state_changed_at, c.reason, b.name as brand_name, m.direction, m.kind, m.text, m.status,
+           c.phone_contact_name, c.number_id, n.label as number_label,
+           h.id as holder_id, h.full_name as holder_name, c.queue,
+           coalesce(n.phone, n.display_phone) as number_phone, ne.full_name as number_owner_name,
            (select count(*)::int from wa_messages u
-             where u.conversation_id = c.id and u.direction = 'in' and u.import_batch_id is null
-               and u.created_at > coalesce(
-                 (select r.read_at from wa_conversation_reads r
-                   where r.conversation_id = c.id and r.employee_id = ${input.readerId}),
-                 (select max(o.created_at) from wa_messages o
-                   where o.conversation_id = c.id and o.direction = 'out' and o.author <> 'system'),
-                 '-infinity'::timestamptz)) as unread
+             where ${unreadMessageOf(input.readerId)}) as unread
+           ${input.textLike ? sql`, f.text as match_text, f.at as match_at` : sql``}
     from wa_conversations c
     join wa_contacts k on k.id = c.contact_id
     left join leads l on l.id = c.lead_id
     left join employees e on e.id = l.owner_employee_id
     left join clients b on b.id = c.brand_client_id
+    left join wa_numbers n on n.id = c.number_id
+    left join employees ne on ne.id = n.owner_employee_id
+    left join employees h on h.id = ${holderSql}
     left join lateral (
       select direction, kind, text, status from wa_messages
       -- The system's own call-permission request is not an answer: the conversation stays waiting.
       where conversation_id = c.id and author <> 'system' order by created_at desc limit 1
     ) m on true
+    ${
+      input.textLike
+        ? sql`left join lateral (
+            select s.text, coalesce(s.wa_timestamp, s.created_at) as at from wa_messages s
+            where s.conversation_id = c.id and s.kind <> 'reaction'
+              and s.text ilike ${input.textLike}
+            order by s.created_at desc limit 1
+          ) f on true`
+        : sql``
+    }
     where c.last_message_at is not null
-      ${input.owner === undefined ? sql`` : sql`and l.owner_employee_id = ${input.owner}`}
+      ${reachOf(input.owner)}
       ${input.where}
-    order by c.last_message_at desc
+    order by c.last_message_at desc, c.id desc
     limit ${input.limit}`;
 }
 
-export function conversationItemOf(row: ConversationListRow, now: Date): WaConversationItem {
+/** About `size` characters of a found message around the first place `term` is. */
+export function snippetOf(text: string, term: string, size = 80): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  if (flat.length <= size) return flat;
+  const at = flat
+    .toLocaleLowerCase('pt-BR')
+    .indexOf(term.replace(/\s+/g, ' ').trim().toLocaleLowerCase('pt-BR'));
+  const start = Math.max(0, Math.min(at - 20, flat.length - size));
+  return `${start > 0 ? '…' : ''}${flat.slice(start, start + size)}${start + size < flat.length ? '…' : ''}`;
+}
+
+export function conversationItemOf(
+  row: ConversationListRow,
+  now: Date,
+  term?: string,
+): WaConversationItem {
   const lastInbound = row.last_inbound_at ? new Date(row.last_inbound_at) : null;
   const kind = (row.kind ?? 'text') as WaMessageKind;
   return {
     conversationId: row.id,
     leadId: row.lead_id,
     leadName: row.lead_name,
-    profileName: row.profile_name,
+    // The name the number's owner saved in the phone, before the person's own profile name.
+    profileName: row.phone_contact_name ?? row.profile_name,
     phone: row.phone,
     lastAt: row.last_message_at ? new Date(row.last_message_at).toISOString() : null,
     lastDirection: row.direction === 'in' ? 'in' : row.direction === 'out' ? 'out' : null,
@@ -302,6 +473,23 @@ export function conversationItemOf(row: ConversationListRow, now: Date): WaConve
     lastStatus: row.direction === 'out' ? ((row.status ?? 'pending') as WaMessageStatus) : null,
     attendance: row.attendance as SofiaState,
     ownerName: row.owner_name,
+    holderId: row.holder_id,
+    holderName: row.holder_name,
+    queue: row.queue,
+    number: row.number_id
+      ? {
+          id: row.number_id,
+          label: row.number_label,
+          phone: row.number_phone,
+          ownerName: row.number_owner_name,
+        }
+      : null,
+    ...(term !== undefined && {
+      match:
+        row.match_text && row.match_at
+          ? { text: snippetOf(row.match_text, term), at: new Date(row.match_at).toISOString() }
+          : null,
+    }),
   };
 }
 
@@ -326,6 +514,50 @@ export interface ThreadDeps {
   now: Date;
 }
 
+/** A deal's messages on the official number (a work number's chat is opened in the Central). */
+const officialOfLead = (leadId: string) =>
+  and(
+    eq(waMessages.leadId, leadId),
+    sql`${waMessages.conversationId} in (select w.id from wa_conversations w where w.number_id is null)`,
+  );
+
+/** A work number as a chat shows it, and whether it can send now (connected, with its token). */
+export async function chatNumberOf(
+  db: Database,
+  numberId: string,
+): Promise<{ number: WaChatNumber; connected: boolean } | null> {
+  const [row] = await db
+    .select({
+      id: waNumbers.id,
+      label: waNumbers.label,
+      phone: sql<string | null>`coalesce(${waNumbers.phone}, ${waNumbers.displayPhone})`,
+      ownerName: employees.fullName,
+      status: waNumbers.status,
+      token: sql<boolean>`${waNumbers.tokenEnc} is not null`,
+    })
+    .from(waNumbers)
+    .leftJoin(employees, eq(employees.id, waNumbers.ownerEmployeeId))
+    .where(eq(waNumbers.id, numberId));
+  if (!row) return null;
+  const { status, token, ...number } = row;
+  return { number, connected: status === 'connected' && token };
+}
+
+/**
+ * Meta's 24-hour window on a work number: from the person's last message to that number, which
+ * lives in the chat (the contact's `last_inbound_at` is the official number's).
+ */
+export async function numberWindowOf(db: Database, conversationId: string, now: Date) {
+  const [last] = await db
+    .select({
+      at: sql<string | null>`max(coalesce(${waMessages.waTimestamp}, ${waMessages.createdAt}))`,
+    })
+    .from(waMessages)
+    .where(and(eq(waMessages.conversationId, conversationId), eq(waMessages.direction, 'in')));
+  const lastInboundAt = last?.at ? new Date(last.at) : null;
+  return windowOf({ lastInboundAt } as Contact, now);
+}
+
 export async function buildThread(
   deps: ThreadDeps,
   contact: Contact | null,
@@ -333,56 +565,68 @@ export async function buildThread(
   conversationId: string | null,
 ): Promise<DealWhatsApp> {
   const { db } = deps;
-  const config = whatsappConfigOf(deps.env);
-  const rows = conversationId
+  const scope = conversationId
+    ? eq(waMessages.conversationId, conversationId)
+    : leadId
+      ? officialOfLead(leadId)
+      : undefined;
+  const rows = scope
     ? await db
         .select()
         .from(waMessages)
-        .where(eq(waMessages.conversationId, conversationId))
+        .where(scope)
         .orderBy(desc(waMessages.createdAt))
         .limit(WA_MESSAGES_PAGE)
-    : leadId
-      ? await db
-          .select()
-          .from(waMessages)
-          .where(eq(waMessages.leadId, leadId))
-          .orderBy(desc(waMessages.createdAt))
-          .limit(WA_MESSAGES_PAGE)
-      : [];
+    : [];
   rows.reverse();
   const authors = await authorsOf(db, rows);
-  const pick = { id: waConversations.id, attendance: waConversations.attendance };
+  const links = await linksOf(db, rows, scope);
+  const pick = {
+    id: waConversations.id,
+    attendance: waConversations.attendance,
+    numberId: waConversations.numberId,
+  };
   const [conversation] = conversationId
     ? await db.select(pick).from(waConversations).where(eq(waConversations.id, conversationId))
     : leadId
       ? await db
           .select(pick)
           .from(waConversations)
-          .where(eq(waConversations.leadId, leadId))
+          .where(and(eq(waConversations.leadId, leadId), isNull(waConversations.numberId)))
           .orderBy(desc(waConversations.lastMessageAt))
           .limit(1)
       : [];
+  const onNumber = conversation?.numberId ? await chatNumberOf(db, conversation.numberId) : null;
+  // A work number sends with its own token: no call, no opt-out of the official number.
+  const config = onNumber ? null : whatsappConfigOf(deps.env);
   return {
     conversationId: conversationId ?? conversation?.id ?? null,
     leadId,
     profileName: contact?.profileName ?? null,
-    configured: config !== null,
-    calling: await callingOn(deps.fetchImpl, config),
+    configured: onNumber ? onNumber.connected : config !== null,
+    calling: onNumber ? false : await callingOn(deps.fetchImpl, config),
     phone: contact?.phone ?? null,
-    window: windowOf(contact, deps.now),
+    window:
+      onNumber && conversation
+        ? await numberWindowOf(db, conversation.id, deps.now)
+        : windowOf(contact, deps.now),
+    // SAIR is said to the company: a work number sends no template to them either.
     optedOut: Boolean(contact?.optOutAt),
     contactBlock: await contactBlock(db, 'whatsapp', { leadId, phone: contact?.phone }),
     callBlock: await contactBlock(db, ['whatsapp', 'phone'], { leadId, phone: contact?.phone }),
-    callPermission: permissionOf(contact, deps.now),
+    callPermission: permissionOf(onNumber ? null : contact, deps.now),
     attendance: (conversation?.attendance as SofiaState | undefined) ?? null,
     speaksFor: await brandVoiceOf(db, leadId, conversation?.id ?? null),
-    messages: rows.map((row) => toMessage(row, authors)),
+    number: onNumber?.number ?? null,
+    numberChats: [],
+    messages: rows.map((row) => toMessage(row, authors, links)),
   };
 }
 
 /**
- * The deal's messages older than the message `beforeId`, a page at a time ("Mostrar anteriores").
- * Compared in the database: its timestamps have microseconds, a JS Date has not. The caller checked access.
+ * The deal's official messages older than the message `beforeId`, a page at a time ("Mostrar
+ * anteriores"). Compared in the database: its timestamps have microseconds, a JS Date has not.
+ * The caller checked access.
  */
 export async function olderMessages(
   db: Database,
@@ -394,7 +638,7 @@ export async function olderMessages(
     .from(waMessages)
     .where(
       and(
-        eq(waMessages.leadId, leadId),
+        officialOfLead(leadId),
         sql`(${waMessages.createdAt}, ${waMessages.id}) < (select o.created_at, o.id from wa_messages o where o.id = ${beforeId} and o.lead_id = ${leadId})`,
       ),
     )
@@ -402,5 +646,6 @@ export async function olderMessages(
     .limit(WA_MESSAGES_PAGE);
   rows.reverse();
   const authors = await authorsOf(db, rows);
-  return rows.map((row) => toMessage(row, authors));
+  const links = await linksOf(db, rows, officialOfLead(leadId));
+  return rows.map((row) => toMessage(row, authors, links));
 }
