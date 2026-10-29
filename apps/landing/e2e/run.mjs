@@ -1228,7 +1228,7 @@ async function openFakePage(
       return route.fulfill({
         status: 200,
         contentType: 'application/javascript',
-        body: FAKE_TURNSTILE,
+        body: fakeTurnstile(DUMMY_TOKEN),
       });
     }
     if (url.href.startsWith(apiBase + '/')) return api(route, request);

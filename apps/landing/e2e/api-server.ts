@@ -332,7 +332,8 @@ async function checkDatabase(db: TestDatabase['db'], report: Report): Promise<vo
       lead.instagram === expectedInstagram,
       `instagram ${lead.instagram ?? 'null'}`,
     );
-    const revenue = SITE_FORM_REVENUE_OPTIONS[submission.revenue];
+    // like the interest, the first arrival's faixa stays on the lead; a later send changes neither
+    const revenue = SITE_FORM_REVENUE_OPTIONS[first.revenue];
     check(
       `${label}: e-mail kept as ${expectedEmail ? 'the one typed' : 'null (none typed)'}`,
       lead.email === expectedEmail,
@@ -347,7 +348,7 @@ async function checkDatabase(db: TestDatabase['db'], report: Report): Promise<vo
     );
     check(
       `${label}: the page shows the API's revenue text`,
-      submission.revenueText === revenue,
+      submission.revenueText === SITE_FORM_REVENUE_OPTIONS[submission.revenue],
       submission.revenueText,
     );
     check(
