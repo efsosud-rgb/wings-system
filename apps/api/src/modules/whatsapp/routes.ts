@@ -18,7 +18,13 @@ import {
 import { and, asc, eq, isNull, max, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { waContacts, waConversations, waMessages, waTemplates } from '../../db/schema/index.js';
+import {
+  waContacts,
+  waConversations,
+  waMessageFiles,
+  waMessages,
+  waTemplates,
+} from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import {
   leadOptInMissing,
@@ -824,7 +830,10 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
 
   // --- received files -------------------------------------------------------------------
 
-  /** Types a browser may show in place; anything else is a download, never run on our origin. */
+  /**
+   * Types a browser may show in place; anything else is a download, never run on our origin.
+   * AMR audio and 3GPP video are downloads too: browsers do not play them.
+   */
   const INLINE = new Set([
     'image/jpeg',
     'image/png',
@@ -833,9 +842,7 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     'audio/mpeg',
     'audio/aac',
     'audio/mp4',
-    'audio/amr',
     'video/mp4',
-    'video/3gpp',
     'application/pdf',
   ]);
 
@@ -850,6 +857,26 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     if (!allowed) return notFound(reply);
     const media = (row.content as { media?: { id?: string; filename?: string | null } }).media;
     if (!media?.id) return notFound(reply);
+    const typeOf = (mime: string | null) => (mime ?? '').split(';')[0]!.trim().toLowerCase();
+    const name = (media.filename ?? `arquivo-${row.id.slice(0, 8)}`).replace(/[^\w.\- ]/g, '_');
+    // Copied to our storage (media-store.ts): the browser takes it from there, by an
+    // address good for five minutes that only this check hands out.
+    const kept = await db.query.waMessageFiles.findFirst({
+      where: and(eq(waMessageFiles.messageId, row.id), eq(waMessageFiles.status, 'stored')),
+    });
+    const storage = kept ? storageOf(app.wings) : null;
+    if (kept && storage) {
+      const type = typeOf(kept.mimeType);
+      const inline = INLINE.has(type);
+      const url = await storage.presignGet(kept.storageKey, {
+        expiresSeconds: 300,
+        disposition: inline ? 'inline' : 'attachment',
+        filename: name,
+        contentType: inline ? type : 'application/octet-stream',
+      });
+      return reply.header('Cache-Control', 'private, max-age=240').redirect(url, 302);
+    }
+    // Not copied yet (or the copy failed): straight from Meta, as before.
     const config = whatsappConfigOf(env);
     if (!config) return off(reply);
     const file = await downloadWhatsAppMedia(fetchImpl(), config, media.id);
@@ -858,9 +885,8 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
         error: 'media_unavailable',
         message: 'A Meta não entregou o arquivo (a Meta guarda os arquivos recebidos por 30 dias).',
       });
-    const type = (file.data.mimeType ?? '').split(';')[0]!.trim().toLowerCase();
+    const type = typeOf(file.data.mimeType);
     const inline = INLINE.has(type);
-    const name = (media.filename ?? `arquivo-${row.id.slice(0, 8)}`).replace(/[^\w.\- ]/g, '_');
     return reply
       .header('Content-Type', inline ? type : 'application/octet-stream')
       .header('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${name}"`)

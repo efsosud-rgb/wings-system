@@ -91,11 +91,38 @@ export const WA_MEDIA_KINDS: readonly WaMessageKind[] = [
   'sticker',
 ];
 
+/**
+ * The message a reply quotes or a reaction is for, looked up only in the same conversation. Not
+ * found: older than the number's connection to the system, under another deal of the same
+ * person, or kept only on the phone.
+ */
+export type WaQuote =
+  | { found: true; id: string; direction: 'in' | 'out'; kind: WaMessageKind; text: string | null }
+  | { found: false };
+
 export interface WaMessage {
   id: string;
   direction: 'in' | 'out';
   kind: WaMessageKind;
   text: string | null;
+  /** A reply: the message it quotes. Optional only so fixtures of other branches still type. */
+  replyTo?: WaQuote | null;
+  /** A reaction: the message it is for. Its emoji is `text`; no text means it was taken back. */
+  reactionTo?: WaQuote | null;
+  /** The reactions on this message now: the last one of each side, a taken-back one left out. */
+  reactions?: { emoji: string; direction: 'in' | 'out' }[];
+  /**
+   * A contact card: each contact's name and numbers as WhatsApp sent them. Null on a card that came
+   * before the numbers were kept (its first name is the `text`).
+   */
+  contacts?: { name: string | null; phones: string[] }[] | null;
+  /** A location: its point (null when WhatsApp sent none), the place's name and address. */
+  location?: {
+    latitude: number | null;
+    longitude: number | null;
+    name: string | null;
+    address: string | null;
+  } | null;
   /** Present when the message has a file, opened at `/whatsapp/messages/:id/media`. */
   media: { mimeType: string | null; filename: string | null } | null;
   template: { name: string; language: string } | null;

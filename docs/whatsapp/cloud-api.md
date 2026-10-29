@@ -34,10 +34,36 @@ permissão. O que o Eric faz na Meta e o roteiro da troca do número ficam em `/
   arte da marca no cabeçalho (`arte-modelos.md`).
 - **Pedido para parar:** "SAIR", "PARAR", "PARE", "STOP", "CANCELAR" ou "DESCADASTRAR" sozinhos bloqueiam
   modelos para aquele telefone até a pessoa escrever outra coisa.
-- **Arquivos recebidos:** não são copiados; `GET /whatsapp/messages/:id/media` busca na Meta na hora (a Meta
-  guarda por 30 dias), com a mesma regra de acesso. Imagem, áudio, vídeo e PDF abrem no navegador; qualquer
-  outro tipo só baixa, com `Content-Security-Policy: sandbox`, para nada rodar na origem do sistema. O token só
-  vai para os servidores da Meta.
+- **Arquivos recebidos:** copiados da Meta para o nosso armazenamento (R2) logo depois de chegar
+  (`modules/whatsapp/media-store.ts`, a cada minuto, na API; liga sozinho quando o WhatsApp e o armazenamento
+  estão configurados). Cada arquivo vai uma vez; uma falha é tentada de novo depois de 1, 5 e 30 minutos, 2, 6
+  e 12 horas e depois uma vez por dia, enquanto a Meta ainda guarda o arquivo (30 dias desde a mensagem): um
+  token vencido ou o armazenamento fora do ar, consertados dentro desse prazo, não perdem nada. Só arquivo
+  grande demais (mais de 100 MB) fica `failed` na hora. Só entra na fila mensagem dos últimos 30 dias.
+  `GET /whatsapp/messages/:id/media`, com a mesma regra de acesso, responde com um endereço assinado de 5
+  minutos para o arquivo guardado; antes da cópia (ou se ela falhou), busca na Meta na hora, como antes.
+  Imagem, áudio (menos AMR), vídeo MP4 e PDF abrem no navegador; qualquer outro tipo só baixa
+  (`application/octet-stream`, e com `Content-Security-Policy: sandbox` quando vem da Meta), para nada rodar
+  na origem do sistema. O token só vai para os servidores da Meta. Na tela, a foto e a figurinha aparecem no
+  balão, áudio e vídeo têm o player do navegador (só baixam no play), AMR, 3GPP e documento são um link; o
+  que não abre mostra "—" e o motivo. Trocar o armazenamento (do volume local para o R2, ou de bucket) deixa
+  os arquivos já guardados no lugar antigo: copiar antes, como no `drive:migrate-media`.
+- **O que mais o balão mostra (b1, mesmo PR):** a resposta citada traz no topo a mensagem respondida
+  (`context.id`); a reação aparece no balão da mensagem a que é (a última de cada lado; a reação sem emoji
+  tira a anterior), e vira uma linha quando essa mensagem não está na lista da tela; o cartão de contato
+  mostra o nome e os números de cada contato (guardados em `content.contacts` desde esta versão; um cartão de
+  antes só tem a quantidade); a localização mostra nome, endereço e um link para o Google Maps. A API acha a
+  mensagem citada ou reagida **só na mesma negociação** (ou na mesma conversa sem negociação), nunca em
+  outra. O que não dá para mostrar aparece com "—" e o motivo, nunca some.
+- **Ordem de entrada da migração 0097:** depois da 0096 (PR #26, `wa_template_fields`), gerada de novo
+  sobre ela para que a data cresça. O drizzle aplica pela data: uma migração com data menor que a última
+  aplicada é pulada para sempre, sem erro (`journal.test.ts` confere a ordem).
+- **Números dos vendedores (próximo bloco):** a fila e a rota usam o token do número oficial. Antes de guardar
+  mensagens dos números dos vendedores, a mensagem precisa dizer de qual número veio, e a cópia usar o token
+  desse número (`wa_numbers`); senão a Meta recusa e o arquivo se perde nos 30 dias.
+- **Quanto tempo o arquivo fica:** o mesmo que a mensagem, e a mensagem o mesmo que a negociação (o banco não
+  apaga uma negociação com conversa). Quem apagar mensagens deixa o arquivo sem mensagem, e a fila apaga o
+  objeto e depois a linha (`wa_message_files.message_id` fica nulo com `ON DELETE SET NULL`).
 
 ## Ligação de voz (Calling API)
 
@@ -128,7 +154,9 @@ Migrações 0077, 0079 (`wa_calls`; permissão de ligação no contato) e 0081 (
 Meta, só ids e datas, legível pelo `wings_ro`; arte e artigo em `clients`): `wa_contacts` (telefone único, `wa_id`, nome do perfil, última mensagem recebida, opt-out),
 `wa_conversations` (uma por telefone e negociação; a sem negociação é única por telefone), `wa_messages`,
 `wa_webhook_events`, `wa_templates`; 0093 (`wa_import_batches`, as importações do celular; visão
-`wa_imports_analysis` para o `wings_ro`, ver `importar-conversa.md`). Telefone e texto são dados pessoais: sem GRANT ao `wings_ro`, nada disso
+`wa_imports_analysis` para o `wings_ro`, ver `importar-conversa.md`); 0097 (`wa_message_files`, a fila e o
+endereço no armazenamento de cada arquivo recebido; visão `wa_message_files_analysis` para o `wings_ro`, sem a
+chave do arquivo). Telefone e texto são dados pessoais: sem GRANT ao `wings_ro`, nada disso
 em log (o webhook registra só o formato do corpo, `shapeOf`). A auditoria `whatsapp.message_sent` guarda ids,
 tipo, nome do modelo e resultado, nunca o texto.
 
@@ -168,6 +196,11 @@ Leitura sem nenhum envio: Graph API só com GET, dentro do contêiner da API, se
 Os formatos seguem a referência publicada pela Meta; nenhum corpo real chegou ainda. O primeiro teste é o do
 Eric com o número de teste no staging; o log `whatsapp webhook` mostra o formato de cada corpo para conferir.
 Versão da Graph API: `v23.0`, num só lugar (`modules/whatsapp/graph.ts`).
+A cópia dos arquivos para o R2 só rodou contra a Meta simulada e o armazenamento local: o primeiro arquivo real
+(foto ou áudio mandado ao número de teste) confere o tipo, o tamanho e o player do navegador no endereço do R2;
+a fila aparece no log como `whatsapp_media` (só contagens) e na visão `wa_message_files_analysis`.
+Resposta citada, reação (em especial a tirada, que a Meta manda sem emoji), cartão de contato e localização
+seguem só o formato publicado.
 
 ## Custos (página de preços da Meta, 30/09/2026)
 

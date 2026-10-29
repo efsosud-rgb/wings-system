@@ -15,6 +15,7 @@ import {
   type WaMessage,
   type WaMessageKind,
   type WaMessageStatus,
+  type WaQuote,
 } from '@wings/shared';
 import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
@@ -70,7 +71,85 @@ export const windowOf = (contact: Contact | null | undefined, now: Date) => {
   return { open: expires !== null && expires > now, expiresAt: expires?.toISOString() ?? null };
 };
 
-export function toMessage(row: MessageRow, authors: Map<string, string>): WaMessage {
+type Reactions = { emoji: string; direction: 'in' | 'out' }[];
+
+/** What a page's replies and reactions point at, and the reactions on its messages, by wamid. */
+export interface MessageLinks {
+  quoted: Map<string, MessageRow>;
+  reactions: Map<string, Reactions>;
+}
+const NO_LINKS: MessageLinks = { quoted: new Map(), reactions: new Map() };
+
+/**
+ * The messages a page's replies quote and reactions are for, and the reactions
+ * on the page's own messages, looked up only inside `scope` (the page's own
+ * deal or conversation), so nothing of another deal shows.
+ */
+export async function linksOf(
+  db: Database,
+  rows: MessageRow[],
+  scope: SQL | undefined,
+): Promise<MessageLinks> {
+  if (!scope) return NO_LINKS;
+  const wanted = new Set<string>();
+  for (const row of rows) {
+    const content = row.content as { replyTo?: unknown; reactionTo?: unknown } | null;
+    for (const wamid of [content?.replyTo, content?.reactionTo])
+      if (typeof wamid === 'string') wanted.add(wamid);
+  }
+  const own = rows.flatMap((row) => (row.wamid && row.kind !== 'reaction' ? [row.wamid] : []));
+  const quoted = wanted.size
+    ? await db
+        .select()
+        .from(waMessages)
+        .where(and(scope, inArray(waMessages.wamid, [...wanted])))
+    : [];
+  const target = sql<string>`${waMessages.content} ->> 'reactionTo'`;
+  const reacting = own.length
+    ? await db
+        .select({ target, direction: waMessages.direction, emoji: waMessages.text })
+        .from(waMessages)
+        .where(and(scope, eq(waMessages.kind, 'reaction'), inArray(target, own)))
+        .orderBy(
+          sql`coalesce(${waMessages.waTimestamp}, ${waMessages.createdAt})`,
+          waMessages.createdAt,
+        )
+    : [];
+  // Each side's last reaction wins, as on WhatsApp; an empty one took it back.
+  const last = new Map<string, Map<'in' | 'out', string | null>>();
+  for (const reaction of reacting) {
+    const sides = last.get(reaction.target) ?? new Map<'in' | 'out', string | null>();
+    sides.set(reaction.direction === 'out' ? 'out' : 'in', reaction.emoji);
+    last.set(reaction.target, sides);
+  }
+  const reactions = new Map<string, Reactions>();
+  for (const [wamid, sides] of last)
+    reactions.set(
+      wamid,
+      [...sides].flatMap(([direction, emoji]) => (emoji ? [{ emoji, direction }] : [])),
+    );
+  return { quoted: new Map(quoted.map((row) => [row.wamid!, row])), reactions };
+}
+
+function quoteOf(wamid: unknown, links: MessageLinks): WaQuote | null {
+  if (typeof wamid !== 'string') return null;
+  const row = links.quoted.get(wamid);
+  return row
+    ? {
+        found: true,
+        id: row.id,
+        direction: row.direction === 'out' ? 'out' : 'in',
+        kind: row.kind as WaMessageKind,
+        text: row.text?.slice(0, 300) ?? null,
+      }
+    : { found: false };
+}
+
+export function toMessage(
+  row: MessageRow,
+  authors: Map<string, string>,
+  links: MessageLinks = NO_LINKS,
+): WaMessage {
   const content = (row.content ?? {}) as Record<string, unknown>;
   const media = content.media as { mimeType?: string | null; filename?: string | null } | undefined;
   const template = content.template as { name?: string; language?: string } | undefined;
@@ -82,6 +161,19 @@ export function toMessage(row: MessageRow, authors: Map<string, string>): WaMess
     direction: row.direction === 'out' ? 'out' : 'in',
     kind: row.kind as WaMessageKind,
     text: row.text,
+    replyTo: quoteOf(content.replyTo, links),
+    reactionTo:
+      row.kind === 'reaction' ? (quoteOf(content.reactionTo, links) ?? { found: false }) : null,
+    reactions: row.wamid ? (links.reactions.get(row.wamid) ?? []) : [],
+    // A card from before the numbers were kept holds only their count.
+    contacts:
+      row.kind === 'contacts' && Array.isArray(content.contacts)
+        ? (content.contacts as { name: string | null; phones: string[] }[])
+        : null,
+    location:
+      row.kind === 'location' && content.location
+        ? (content.location as NonNullable<WaMessage['location']>)
+        : null,
     media:
       media && WA_MEDIA_KINDS.includes(row.kind as WaMessageKind)
         ? { mimeType: media.mimeType ?? null, filename: media.filename ?? null }
@@ -333,23 +425,22 @@ export async function buildThread(
 ): Promise<DealWhatsApp> {
   const { db } = deps;
   const config = whatsappConfigOf(deps.env);
-  const rows = conversationId
+  const scope = conversationId
+    ? eq(waMessages.conversationId, conversationId)
+    : leadId
+      ? eq(waMessages.leadId, leadId)
+      : undefined;
+  const rows = scope
     ? await db
         .select()
         .from(waMessages)
-        .where(eq(waMessages.conversationId, conversationId))
+        .where(scope)
         .orderBy(desc(waMessages.createdAt))
         .limit(WA_MESSAGES_PAGE)
-    : leadId
-      ? await db
-          .select()
-          .from(waMessages)
-          .where(eq(waMessages.leadId, leadId))
-          .orderBy(desc(waMessages.createdAt))
-          .limit(WA_MESSAGES_PAGE)
-      : [];
+    : [];
   rows.reverse();
   const authors = await authorsOf(db, rows);
+  const links = await linksOf(db, rows, scope);
   const pick = { id: waConversations.id, attendance: waConversations.attendance };
   const [conversation] = conversationId
     ? await db.select(pick).from(waConversations).where(eq(waConversations.id, conversationId))
@@ -373,7 +464,7 @@ export async function buildThread(
     callPermission: permissionOf(contact, deps.now),
     attendance: (conversation?.attendance as SofiaState | undefined) ?? null,
     speaksFor: await brandVoiceOf(db, leadId, conversation?.id ?? null),
-    messages: rows.map((row) => toMessage(row, authors)),
+    messages: rows.map((row) => toMessage(row, authors, links)),
   };
 }
 
@@ -399,5 +490,6 @@ export async function olderMessages(
     .limit(WA_MESSAGES_PAGE);
   rows.reverse();
   const authors = await authorsOf(db, rows);
-  return rows.map((row) => toMessage(row, authors));
+  const links = await linksOf(db, rows, eq(waMessages.leadId, leadId));
+  return rows.map((row) => toMessage(row, authors, links));
 }

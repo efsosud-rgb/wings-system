@@ -6,6 +6,7 @@ import {
   type BrandArticle,
   type DealWhatsApp,
   type WaMessage,
+  type WaQuote,
   type WaTemplate,
   type WaTemplatePreview,
 } from '@wings/shared';
@@ -25,7 +26,7 @@ import {
   type WhatsAppThread,
 } from '../../api/whatsapp.js';
 import { LoadFailure } from '../../components/LoadFailure.js';
-import { formatDateTime } from './format.js';
+import { formatDateTime, formatPhone } from './format.js';
 
 /**
  * The conversation itself, for a deal or for one no deal took yet: the
@@ -94,10 +95,10 @@ export function WhatsAppChat({
                 {older.error && <span className="crm-wa-error">{older.error}</span>}
               </li>
             )}
-            {older.messages.map((message) => (
+            {placedReactionsOut(older.messages).map((message) => (
               <Bubble key={message.id} message={message} />
             ))}
-            {data.messages.map((message) => (
+            {placedReactionsOut(data.messages).map((message) => (
               <Bubble key={message.id} message={message} />
             ))}
           </ol>
@@ -186,13 +187,192 @@ function useOlder(thread: WhatsAppThread, shown: WaMessage[]) {
   return { messages, more, load, loading, error };
 }
 
+/**
+ * A received file inside the balloon: a photo or a sticker shown, an audio or
+ * a video with the browser's player (fetched only on play), anything else a
+ * download. The address answers from our storage once the file is copied,
+ * from Meta before that.
+ */
+const UNPLAYABLE = new Set(['audio/amr', 'video/3gpp']);
+
+function MediaBody({ message }: { message: WaMessage }) {
+  const [broken, setBroken] = useState(false);
+  const url = whatsappMediaUrl(message.id);
+  const label = WA_KIND_LABELS[message.kind];
+  const download = (
+    <a className="crm-wa-media" href={url} target="_blank" rel="noreferrer">
+      {message.kind === 'image' || message.kind === 'sticker' ? 'Abrir ' : 'Baixar '}
+      {label.toLowerCase()}
+      {message.media?.filename ? ` · ${message.media.filename}` : ''}
+    </a>
+  );
+  if (broken)
+    return (
+      <span className="crm-wa-media-failed">
+        — {label}: não abriu aqui. Tente pelo link; se a mensagem tem mais de 30 dias e o arquivo
+        não foi guardado, ele já saiu da Meta. {download}
+      </span>
+    );
+  const fail = () => setBroken(true);
+  // Browsers do not play these: the file goes as a download (the API serves it so).
+  if (UNPLAYABLE.has(message.media?.mimeType?.split(';')[0]?.trim() ?? '')) return download;
+  if (message.kind === 'image' || message.kind === 'sticker')
+    return (
+      <a className="crm-wa-shot" href={url} target="_blank" rel="noreferrer">
+        <img
+          className={message.kind === 'sticker' ? 'is-sticker' : undefined}
+          src={url}
+          alt={`${label} recebida pelo WhatsApp`}
+          loading="lazy"
+          onError={fail}
+        />
+      </a>
+    );
+  if (message.kind === 'audio')
+    return (
+      <audio className="crm-wa-player" src={url} controls preload="none" onError={fail}>
+        {download}
+      </audio>
+    );
+  if (message.kind === 'video')
+    return (
+      <video className="crm-wa-player is-video" src={url} controls preload="none" onError={fail}>
+        {download}
+      </video>
+    );
+  return download;
+}
+
+/** Why a quoted or reacted-to message is not in this conversation (the API looks only here). */
+const NOT_HERE =
+  'é de antes de o número entrar no sistema, está em outra negociação desta pessoa, ou ficou só no celular.';
+
+/** The message a reply quotes, at the top of the balloon, as WhatsApp shows it. */
+function Quote({ quote }: { quote: WaQuote }) {
+  if (!quote.found)
+    return (
+      <span className="crm-wa-quote is-missing">
+        — A mensagem respondida não está aqui: {NOT_HERE}
+      </span>
+    );
+  return (
+    <span className="crm-wa-quote">
+      <strong>{quote.direction === 'out' ? 'Equipe' : 'Cliente'}</strong>
+      <span className="crm-wa-quote-text">{quote.text ?? WA_KIND_LABELS[quote.kind]}</span>
+    </span>
+  );
+}
+
+const sideOf = (direction: 'in' | 'out') => (direction === 'out' ? 'da equipe' : 'do cliente');
+
+/**
+ * A reaction whose message is not on this list: a line saying what it was for. One whose message
+ * is on the list shows on that balloon instead (`placedReactionsOut`).
+ */
+function ReactionLine({ message }: { message: WaMessage }) {
+  const who = message.direction === 'out' ? 'Equipe' : 'Cliente';
+  const what = message.text ? `${who} reagiu com ${message.text}` : `${who} tirou a reação`;
+  const to = message.reactionTo;
+  return (
+    <li className={`crm-wa-reaction-line ${message.direction === 'out' ? 'is-out' : 'is-in'}`}>
+      {to?.found ? (
+        <>
+          {what} {message.text ? 'a' : 'de'}: <q>{to.text ?? WA_KIND_LABELS[to.kind]}</q>
+        </>
+      ) : (
+        `${what}. — A mensagem da reação não está aqui: ${NOT_HERE}`
+      )}{' '}
+      <time dateTime={message.at} title={formatDateTime(message.at)}>
+        {timeOf(message.at)}
+      </time>
+    </li>
+  );
+}
+
+/**
+ * Leaves out each reaction whose message is on the same list: that balloon came in the same
+ * answer (or an older page loaded after it) and already shows it. A reaction to a balloon of
+ * another list stays a line, so a new one to an older page's message is never missed.
+ */
+function placedReactionsOut(list: WaMessage[]) {
+  const ids = new Set(list.map((m) => m.id));
+  return list.filter(
+    (m) => !(m.kind === 'reaction' && m.reactionTo?.found && ids.has(m.reactionTo.id)),
+  );
+}
+
+/** A contact card: each contact's name and numbers, or "—" and why something is missing. */
+function ContactCards({ message }: { message: WaMessage }) {
+  if (!message.contacts)
+    return (
+      <span className="crm-wa-contacts">
+        {message.text && <strong>{message.text}</strong>}
+        <span className="crm-wa-media-failed">
+          — Cartão de contato sem o número: chegou antes de o sistema guardar os números dos
+          cartões.
+        </span>
+      </span>
+    );
+  if (message.contacts.length === 0)
+    return (
+      <span className="crm-wa-media-failed">
+        — Cartão de contato vazio: o WhatsApp não mandou nome nem número.
+      </span>
+    );
+  return (
+    <span className="crm-wa-contacts">
+      {message.contacts.map((card, index) => (
+        <span key={index} className="crm-wa-contact">
+          <strong>{card.name ?? '— Sem nome no cartão'}</strong>
+          {card.phones.length > 0 ? (
+            card.phones.map((phone, i) => <span key={i}>{formatPhone(phone)}</span>)
+          ) : (
+            <span className="crm-wa-media-failed">— Sem número no cartão.</span>
+          )}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/** A location: the place's name and address, and the point opened in Google Maps. */
+function Place({ message }: { message: WaMessage }) {
+  const place = message.location;
+  const point =
+    place && place.latitude !== null && place.longitude !== null
+      ? `${place.latitude},${place.longitude}`
+      : null;
+  return (
+    <span className="crm-wa-place">
+      <strong>{place?.name ?? WA_KIND_LABELS.location}</strong>
+      {place?.address && <span>{place.address}</span>}
+      {point ? (
+        <a
+          className="crm-wa-media"
+          href={`https://www.google.com/maps/search/?api=1&query=${point}`}
+          target="_blank"
+          rel="noreferrer"
+        >
+          Abrir no mapa
+        </a>
+      ) : (
+        <span className="crm-wa-media-failed">
+          — Sem o ponto no mapa: o WhatsApp não mandou as coordenadas.
+        </span>
+      )}
+    </span>
+  );
+}
+
 function Bubble({ message }: { message: WaMessage }) {
   const out = message.direction === 'out';
   const failed = message.status === 'failed' || (message.status === 'pending' && message.error);
+  if (message.kind === 'reaction') return <ReactionLine message={message} />;
   return (
     <li
       className={`crm-wa-bubble ${out ? 'is-out' : 'is-in'}${message.bySofia ? ' is-sofia' : ''}${failed ? ' is-failed' : ''}`}
     >
+      {message.replyTo && <Quote quote={message.replyTo} />}
       {message.template && (
         <span className="crm-wa-tag">
           Modelo · {message.template.name}
@@ -205,18 +385,7 @@ function Bubble({ message }: { message: WaMessage }) {
           {message.withArt ? ' · com arte' : ''}
         </span>
       )}
-      {message.media && (
-        <a
-          className="crm-wa-media"
-          href={whatsappMediaUrl(message.id)}
-          target="_blank"
-          rel="noreferrer"
-        >
-          {message.kind === 'image' || message.kind === 'sticker' ? 'Abrir ' : 'Baixar '}
-          {WA_KIND_LABELS[message.kind].toLowerCase()}
-          {message.media.filename ? ` · ${message.media.filename}` : ''}
-        </a>
-      )}
+      {message.media && <MediaBody message={message} />}
       {message.imported && (
         <span className="crm-wa-tag">
           Do celular
@@ -227,7 +396,11 @@ function Bubble({ message }: { message: WaMessage }) {
               : ''}
         </span>
       )}
-      {message.text ? (
+      {message.kind === 'contacts' && !message.imported ? (
+        <ContactCards message={message} />
+      ) : message.kind === 'location' ? (
+        <Place message={message} />
+      ) : message.text ? (
         <span className="crm-wa-text">{message.text}</span>
       ) : (
         !message.media &&
@@ -235,6 +408,20 @@ function Bubble({ message }: { message: WaMessage }) {
         !message.imported?.omitted && (
           <span className="crm-wa-text is-muted">{WA_KIND_LABELS[message.kind]}</span>
         )
+      )}
+      {message.reactions && message.reactions.length > 0 && (
+        <span className="crm-wa-reactions">
+          {message.reactions.map((reaction) => (
+            <span
+              key={reaction.direction}
+              role="img"
+              aria-label={`Reação ${sideOf(reaction.direction)}: ${reaction.emoji}`}
+              title={`Reação ${sideOf(reaction.direction)}`}
+            >
+              {reaction.emoji}
+            </span>
+          ))}
+        </span>
       )}
       <span className="crm-wa-meta">
         {out && message.bySofia ? 'Sofia (IA) · ' : ''}
