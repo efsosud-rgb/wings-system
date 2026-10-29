@@ -10,5 +10,7 @@ export default defineConfig({
     // may ever be able to reach a live platform. See apps/api/src/test/no-network.ts
     // Absolute: setupFiles resolve against each package's root, not this file.
     setupFiles: [resolve(import.meta.dirname, 'apps/api/src/test/no-network.ts')],
+    // A beforeAll that migrates a throwaway database (100+ migrations) passed 10 s on a busy runner.
+    hookTimeout: 60_000,
   },
 });
