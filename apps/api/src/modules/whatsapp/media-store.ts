@@ -75,6 +75,8 @@ export async function storeWhatsAppMedia(
            ${at.toISOString()}::timestamptz
     from wa_messages m
     where (m.content -> 'media' ->> 'id') is not null
+      -- A file we sent from the deal's files is already in the Drive: never copied back from Meta.
+      and (m.content -> 'file') is null
       and m.created_at > ${new Date(at.getTime() - QUEUE_DAYS * 86_400_000).toISOString()}::timestamptz
       and not exists (select 1 from wa_message_files f where f.message_id = m.id)
     order by m.created_at

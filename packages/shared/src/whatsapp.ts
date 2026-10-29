@@ -189,6 +189,60 @@ export const waSendTextSchema = z.object({
 });
 export type WaSendText = z.infer<typeof waSendTextSchema>;
 
+// --- a file of the deal, sent in the conversation ---------------------------------------
+
+/** Meta's limits, in decimal megabytes so a file at the edge is never refused for a rounding. */
+export const WA_SEND_LIMITS = {
+  image: 5_000_000,
+  video: 16_000_000,
+  audio: 16_000_000,
+  document: 100_000_000,
+} as const;
+export type WaSendKind = keyof typeof WA_SEND_LIMITS;
+
+/** Text under a photo, a video or a document; an audio goes without. */
+export const WA_CAPTION_MAX = 1024;
+
+const WA_SEND_TYPES: Record<Exclude<WaSendKind, 'document'>, readonly string[]> = {
+  image: ['image/jpeg', 'image/png'],
+  video: ['video/mp4', 'video/3gpp'],
+  audio: ['audio/aac', 'audio/amr', 'audio/mpeg', 'audio/mp4', 'audio/ogg'],
+};
+
+/** Names browsers give that Meta knows by another one. */
+const WA_TYPE_ALIASES: Record<string, string> = { 'audio/x-m4a': 'audio/mp4' };
+
+/**
+ * How a file of the deal goes on WhatsApp: a JPG or PNG up to 5 MB as a photo, an MP4 or 3GP up
+ * to 16 MB as a video, an audio of Meta's types up to 16 MB as an audio; anything else, or over
+ * its limit, as a document up to 100 MB. `type` is what Meta is told the file is. Null: too big
+ * even as a document. The composer asks before the upload; the API asks again before it sends.
+ */
+export function waSendKindOf(file: {
+  mimeType: string;
+  byteSize: number;
+}): { kind: WaSendKind; type: string } | null {
+  const declared = file.mimeType.split(';')[0]!.trim().toLowerCase();
+  const type = WA_TYPE_ALIASES[declared] ?? declared;
+  for (const kind of ['image', 'video', 'audio'] as const)
+    if (WA_SEND_TYPES[kind].includes(type) && file.byteSize <= WA_SEND_LIMITS[kind])
+      return { kind, type };
+  return file.byteSize <= WA_SEND_LIMITS.document
+    ? { kind: 'document', type: type || 'application/octet-stream' }
+    : null;
+}
+
+export const waSendMediaSchema = z.object({
+  /** One of the deal's own files (it went up to the deal's Arquivos first). */
+  fileId: z.uuid(),
+  caption: z
+    .string()
+    .trim()
+    .max(WA_CAPTION_MAX, `Legenda de até ${WA_CAPTION_MAX} caracteres.`)
+    .optional(),
+});
+export type WaSendMedia = z.infer<typeof waSendMediaSchema>;
+
 /**
  * The forms a Brazilian mobile takes on WhatsApp: Meta's `wa_id` may lack the
  * 9th digit (55 DD 8 digits) while the CRM keeps 55 DD 9 8 digits. Both are

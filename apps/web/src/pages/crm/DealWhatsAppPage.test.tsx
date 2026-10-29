@@ -199,6 +199,8 @@ vi.mock('../../api/whatsapp.js', () => ({
   useRefreshWhatsAppTemplates: () => mutation(),
   useSendWhatsAppText: () => mutation(textMutate),
   useSendWhatsAppTemplate: () => mutation(templateMutate),
+  useSendWhatsAppFile: () => ({ ...mutation(), reset: vi.fn() }),
+  NO_DEAL_FOR_FILES: 'O arquivo fica nos arquivos da negociação.',
   useTemplatePreview: (_thread: unknown, input: { name: string } | null) => {
     if (input) previewCalls.push(input);
     // Like react-query's placeholderData: while a template's preview loads, the previous one is returned.

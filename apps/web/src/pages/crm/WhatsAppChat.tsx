@@ -1,4 +1,6 @@
 import {
+  mentionsWings,
+  WA_CAPTION_MAX,
   WA_KIND_LABELS,
   WA_STATUS_LABELS,
   waTemplateFamily,
@@ -11,10 +13,13 @@ import {
   type WaTemplatePreview,
 } from '@wings/shared';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { hasPermission, useSession } from '../../api/auth.js';
 import { ApiError } from '../../api/client.js';
 import {
+  NO_DEAL_FOR_FILES,
   olderWhatsAppMessages,
   useRefreshWhatsAppTemplates,
+  useSendWhatsAppFile,
   useSendWhatsAppTemplate,
   useSendWhatsAppText,
   useTemplatePreview,
@@ -25,8 +30,10 @@ import {
   WHATSAPP_SOON_TEXT,
   type WhatsAppThread,
 } from '../../api/whatsapp.js';
+import { Icon } from '../../components/Icon.js';
 import { LoadFailure } from '../../components/LoadFailure.js';
 import { formatDateTime, formatPhone } from './format.js';
+import { AttachTray, EmojiButton, pickedOf, type Picked } from './WhatsAppAttach.js';
 import { dayLabel } from './whatsapp-time.js';
 
 /**
@@ -63,6 +70,8 @@ export function WhatsAppChat({
   const templateMode = useTemplate || !data.window.open;
   const older = useOlder(thread, data.messages);
   const soon = useWhatsAppSoon();
+  // One composer per conversation: what was typed or chosen in one never goes to the next opened.
+  const composerKey = 'leadId' in thread ? thread.leadId : thread.conversationId;
 
   return (
     <section className="crm-wa-chat" aria-label="Conversa">
@@ -115,13 +124,19 @@ export function WhatsAppChat({
       {canSend && !soon && data.configured && data.phone ? (
         templateMode ? (
           <TemplateCompose
+            key={composerKey}
             thread={thread}
             optedOut={data.optedOut}
             windowOpen={data.window.open}
             onText={() => setUseTemplate(false)}
           />
         ) : (
-          <TextCompose thread={thread} onTemplate={() => setUseTemplate(true)} />
+          <TextCompose
+            key={composerKey}
+            thread={thread}
+            leadId={data.leadId}
+            onTemplate={() => setUseTemplate(true)}
+          />
         )
       ) : (
         <p className="crm-wa-off">
@@ -195,10 +210,10 @@ function useOlder(thread: WhatsAppThread, shown: WaMessage[]) {
 }
 
 /**
- * A received file inside the balloon: a photo or a sticker shown, an audio or
- * a video with the browser's player (fetched only on play), anything else a
- * download. The address answers from our storage once the file is copied,
- * from Meta before that.
+ * A file inside the balloon: a photo or a sticker shown, an audio or a video
+ * with the browser's player (fetched only on play), anything else a download.
+ * The address answers from our storage once a received file is copied (from
+ * Meta before that), and from the deal's Arquivos for one the team sent.
  */
 const UNPLAYABLE = new Set(['audio/amr', 'video/3gpp']);
 
@@ -229,7 +244,7 @@ function MediaBody({ message }: { message: WaMessage }) {
         <img
           className={message.kind === 'sticker' ? 'is-sticker' : undefined}
           src={url}
-          alt={`${label} recebida pelo WhatsApp`}
+          alt={`${label} ${message.direction === 'out' ? 'enviada' : 'recebida'} pelo WhatsApp`}
           loading="lazy"
           onError={fail}
         />
@@ -458,14 +473,142 @@ function Bubble({ message }: { message: WaMessage }) {
   );
 }
 
-function TextCompose({ thread, onTemplate }: { thread: WhatsAppThread; onTemplate: () => void }) {
+/** Why the 📎 is off for this reader (null: it is on). The file goes up to the deal's Arquivos first. */
+function attachOffOf(leadId: string | null, canEditDeal: boolean) {
+  if (!leadId) return NO_DEAL_FOR_FILES;
+  if (!canEditDeal)
+    return 'Para anexar, é preciso poder editar a negociação: o arquivo fica nos arquivos dela.';
+  return null;
+}
+
+/**
+ * Free text inside the window, with emoji, or one file of the deal (photo, video, document,
+ * audio) with the text as its caption. The file goes up to the deal's Arquivos, then by its id.
+ */
+function TextCompose({
+  thread,
+  leadId,
+  onTemplate,
+}: {
+  thread: WhatsAppThread;
+  leadId: string | null;
+  onTemplate: () => void;
+}) {
   const send = useSendWhatsAppText(thread);
+  const sendFile = useSendWhatsAppFile(thread, leadId);
+  const session = useSession();
+  const attachOff = attachOffOf(leadId, hasPermission(session.data, 'leads.write'));
+  const field = useRef<HTMLTextAreaElement>(null);
+  const chooser = useRef<HTMLInputElement>(null);
   const [text, setText] = useState('');
+  const [picked, setPicked] = useState<Picked | null>(null);
+  const [progress, setProgress] = useState<number | null>(null);
+  // Why the 📎 is off, or why the chosen file cannot go: shown under the field.
+  const [note, setNote] = useState<string | null>(null);
+  const captionless = picked?.kind === 'audio';
+
+  const pick = (file: File | undefined) => {
+    if (!file) return;
+    sendFile.reset();
+    const next = pickedOf(file);
+    setPicked(typeof next === 'string' ? null : next);
+    setNote(typeof next === 'string' ? `${file.name}: ${next}` : null);
+  };
+
+  const sendPicked = (over: { uploaded: string | null; file?: File }) => {
+    if (!picked || sendFile.isPending) return;
+    const caption = captionless ? '' : text.trim();
+    // Checked before the upload: the API would refuse it only after the file went up.
+    if (caption.length > WA_CAPTION_MAX)
+      return setNote(`Legenda de até ${WA_CAPTION_MAX} caracteres: encurte o texto para enviar.`);
+    setNote(null);
+    const file = over.file ?? picked.file;
+    if (over.file) setPicked({ ...picked, file, taken: null, renameWhy: null });
+    sendFile.mutate(
+      {
+        file,
+        uploaded: over.uploaded,
+        caption,
+        onProgress: setProgress,
+        onUploaded: (fileId) => setPicked((now) => now && { ...now, uploaded: fileId }),
+      },
+      {
+        onSuccess: () => {
+          setPicked(null);
+          // An audio went without the text: it stays for the next message.
+          if (!captionless) setText('');
+        },
+        onError: (error) => {
+          if (!(error instanceof ApiError)) return;
+          const existing =
+            error.code === 'name_taken'
+              ? (error.body as { existingFileId?: unknown }).existingFileId
+              : undefined;
+          // A name that cannot go is a choice in the tray (another name), not an error line.
+          const renameWhy =
+            typeof existing === 'string'
+              ? 'Já existe um arquivo com este nome nos arquivos da negociação.'
+              : error.code === 'file_not_found' && picked.taken && over.uploaded === picked.taken
+                ? // The file the name belongs to was taken off the deal (it stays in its folder).
+                  'O arquivo com este nome não está mais nos arquivos da negociação: envie este com outro nome.'
+                : error.code === 'brand_voice' &&
+                    !mentionsWings(caption) &&
+                    mentionsWings(file.name)
+                  ? error.message
+                  : null;
+          if (renameWhy)
+            setPicked(
+              (now) =>
+                now && {
+                  ...now,
+                  uploaded: null,
+                  taken: typeof existing === 'string' ? existing : null,
+                  renameWhy,
+                },
+            );
+        },
+        onSettled: () => setProgress(null),
+      },
+    );
+  };
+
   const submit = () => {
+    // A name the deal already has waits for the choice in the tray.
+    if (picked) return picked.renameWhy ? undefined : sendPicked({ uploaded: picked.uploaded });
     const body = text.trim();
     if (!body || send.isPending) return;
     send.mutate({ text: body }, { onSuccess: () => setText('') });
   };
+
+  /** The emoji goes where the cursor is, and the cursor after it. */
+  const insert = (emoji: string) => {
+    const el = field.current;
+    const start = el?.selectionStart ?? text.length;
+    const end = el?.selectionEnd ?? text.length;
+    setText(text.slice(0, start) + emoji + text.slice(end));
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(start + emoji.length, start + emoji.length);
+    });
+  };
+
+  const busy = send.isPending || sendFile.isPending;
+  const status =
+    progress !== null && progress < 1
+      ? `Subindo para os arquivos da negociação… ${Math.round(progress * 100)}%`
+      : sendFile.isPending
+        ? 'Enviando…'
+        : null;
+  // A name that cannot go is not a failure: the tray says why and offers another name.
+  const failure = picked?.renameWhy
+    ? null
+    : sendFile.error
+      ? sendFile.error instanceof TypeError
+        ? // No answer: the request may have arrived, so nothing is claimed either way.
+          'Sem resposta do servidor. Confira a conexão e, antes de tentar de novo, veja se o arquivo já aparece na conversa.'
+        : // The upload's own words too (the storage refused, the connection fell).
+          sendFile.error.message || 'Não foi possível enviar o arquivo.'
+      : send.error && errorText(send.error, 'Não foi possível enviar.');
   return (
     <form
       className="crm-wa-compose"
@@ -474,12 +617,67 @@ function TextCompose({ thread, onTemplate }: { thread: WhatsAppThread; onTemplat
         submit();
       }}
     >
+      {picked && (
+        <AttachTray
+          picked={picked}
+          status={status}
+          busy={busy}
+          onRemove={() => {
+            setPicked(null);
+            sendFile.reset();
+          }}
+          onUseExisting={() => picked.taken && sendPicked({ uploaded: picked.taken })}
+          onRename={(name) =>
+            sendPicked({
+              uploaded: null,
+              file: new File([picked.file], name, { type: picked.file.type }),
+            })
+          }
+        />
+      )}
+      <div className="crm-wa-compose-tools">
+        <EmojiButton onPick={insert} />
+        <input
+          ref={chooser}
+          type="file"
+          hidden
+          aria-label="Escolher o arquivo"
+          onChange={(event) => {
+            pick(event.target.files?.[0]);
+            event.target.value = '';
+          }}
+        />
+        <button
+          type="button"
+          className="crm-wa-tool"
+          aria-label="Anexar arquivo"
+          title={attachOff ?? 'Anexar foto, vídeo, documento ou áudio'}
+          aria-disabled={attachOff !== null || busy}
+          onClick={() => {
+            if (busy) return;
+            if (attachOff) setNote(attachOff);
+            else chooser.current?.click();
+          }}
+        >
+          <Icon name="paperclip" size={20} />
+        </button>
+      </div>
       <textarea
+        ref={field}
         className="crm-input"
-        aria-label="Mensagem"
-        placeholder="Escreva uma mensagem (Enter envia, Shift+Enter quebra a linha)"
+        aria-label={picked ? 'Legenda' : 'Mensagem'}
+        placeholder={
+          captionless
+            ? 'Áudio vai sem legenda: o texto fica para a próxima mensagem'
+            : picked
+              ? 'Legenda (opcional)'
+              : 'Escreva uma mensagem (Enter envia, Shift+Enter quebra a linha)'
+        }
         rows={2}
-        maxLength={4096}
+        maxLength={picked ? WA_CAPTION_MAX : 4096}
+        disabled={captionless}
+        // What goes is what was there on the click: no edit while it goes, none lost after.
+        readOnly={busy}
         value={text}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={(event) => {
@@ -493,17 +691,16 @@ function TextCompose({ thread, onTemplate }: { thread: WhatsAppThread; onTemplat
         <button
           type="submit"
           className="crm-btn is-primary"
-          disabled={send.isPending || text.trim().length === 0}
+          disabled={busy || (picked ? picked.renameWhy !== null : text.trim().length === 0)}
         >
-          Enviar
+          {picked ? 'Enviar arquivo' : 'Enviar'}
         </button>
         <button type="button" className="crm-btn is-quiet is-small" onClick={onTemplate}>
           Usar modelo
         </button>
       </div>
-      {send.error && (
-        <p className="crm-error">{errorText(send.error, 'Não foi possível enviar.')}</p>
-      )}
+      {note && <p className="crm-wa-note">{note}</p>}
+      {failure && <p className="crm-error">{failure}</p>}
     </form>
   );
 }

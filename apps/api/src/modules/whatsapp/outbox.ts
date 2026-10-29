@@ -27,8 +27,8 @@ export interface Delivery {
   author: 'employee' | 'sofia' | 'system';
   employeeId: string | null;
   kind: WaMessageKind;
-  /** What the screen shows (the body, a filled template). */
-  shown: string;
+  /** What the screen shows (the body, a filled template, a file's caption or none). */
+  shown: string | null;
   content: Record<string, unknown>;
   payload: OutgoingPayload;
   at: Date;

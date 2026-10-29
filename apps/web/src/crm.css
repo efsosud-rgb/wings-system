@@ -2263,11 +2263,14 @@
   color: var(--text-2);
 }
 .crm-wa-compose {
+  position: relative;
   flex-wrap: wrap;
 }
 .crm-wa-compose textarea.crm-input {
   resize: vertical;
   min-height: 44px;
+  /* On a phone the buttons go to the next line instead of squeezing the field. */
+  min-width: min(100%, 200px);
 }
 .crm-wa-compose.is-template {
   flex-direction: column;
@@ -2277,9 +2280,124 @@
   gap: var(--space-2);
   align-items: center;
 }
+/* Wrapped under the field on a phone, Enviar stays on the right. */
+.crm-wa-compose:not(.is-template) > .crm-wa-compose-actions {
+  margin-left: auto;
+}
 .crm-wa-compose .crm-error {
   flex-basis: 100%;
   margin: 0;
+}
+/* 😊 and 📎 left of the field, as WhatsApp Desktop has them; the chosen file sits above it. */
+.crm-wa-compose-tools {
+  display: flex;
+  gap: 2px;
+  align-self: flex-end;
+}
+.crm-wa-tool {
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-2);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.crm-wa-tool:hover:not([aria-disabled='true']) {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+.crm-wa-tool:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.crm-wa-tool[aria-disabled='true'] {
+  color: var(--text-3);
+  cursor: default;
+}
+.crm-wa-tool[aria-expanded='true'] {
+  color: var(--accent);
+}
+.crm-wa-emoji {
+  position: relative;
+}
+.crm-wa-emoji-grid {
+  position: absolute;
+  bottom: calc(100% + var(--space-2));
+  left: 0;
+  z-index: 5;
+  display: grid;
+  grid-template-columns: repeat(8, 36px);
+  gap: 2px;
+  padding: var(--space-2);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-2);
+}
+.crm-wa-emoji-grid button {
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.crm-wa-emoji-grid button:hover {
+  background: var(--surface-hover);
+}
+.crm-wa-emoji-grid button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.crm-wa-attach {
+  flex-basis: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  border-left: 3px solid var(--accent);
+  /* surface-2 is white in the light theme, the same as the composer around it. */
+  background: var(--surface-3);
+}
+.crm-wa-attach-icon {
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+}
+.crm-wa-attach-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.crm-wa-attach-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.crm-wa-attach-taken {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: var(--space-2);
+}
+.crm-wa-attach-taken p {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+.crm-wa-attach-taken .crm-input {
+  min-width: 0;
+}
+.crm-wa-note {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--text-sm);
 }
 .crm-wa-preview {
   margin: 0;

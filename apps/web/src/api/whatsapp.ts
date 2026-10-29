@@ -10,6 +10,7 @@ import type {
   WaMessage,
   WaTargets,
   WaArtLink,
+  WaSendMedia,
   WaSendText,
   WaTemplate,
   WaTemplatePreview,
@@ -172,6 +173,13 @@ export function useRefreshWhatsAppTemplates() {
   });
 }
 
+function afterSend(queryClient: ReturnType<typeof useQueryClient>, thread: WhatsAppThread) {
+  void queryClient.invalidateQueries({ queryKey: threadKey(thread) });
+  void queryClient.invalidateQueries({ queryKey: ['whatsapp', 'conversations'] });
+  // A person writing takes the conversation from Sofia: her screen shows it at once.
+  void queryClient.invalidateQueries({ queryKey: ['sofia'] });
+}
+
 /** CRM Vendas → WhatsApp → Modelos (docs/whatsapp/modelos.md): every template, read again from Meta. */
 export function useManagedTemplates() {
   return useQuery({
@@ -209,18 +217,50 @@ function useSend<T>(thread: WhatsAppThread, kind: 'text' | 'template') {
   return useMutation({
     mutationFn: (input: T) =>
       api.post<{ message: WaMessage }>(`${threadPath(thread)}/${kind}`, input),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: threadKey(thread) });
-      void queryClient.invalidateQueries({ queryKey: ['whatsapp', 'conversations'] });
-      // A person writing takes the conversation from Sofia: her screen shows it at once.
-      void queryClient.invalidateQueries({ queryKey: ['sofia'] });
-    },
+    onSuccess: () => afterSend(queryClient, thread),
   });
 }
 
 export const useSendWhatsAppText = (thread: WhatsAppThread) => useSend<WaSendText>(thread, 'text');
 export const useSendWhatsAppTemplate = (thread: WhatsAppThread) =>
   useSend<WaTemplateSend>(thread, 'template');
+
+/**
+ * A file in the conversation: it goes up to the deal's Arquivos first (`sendLeadFile`), then the
+ * conversation sends it by its id. `uploaded` is a file already there (the one of the same name, or
+ * this one after a send that failed past the upload): it goes without going up again.
+ */
+export function useSendWhatsAppFile(thread: WhatsAppThread, leadId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      file: File | null;
+      uploaded: string | null;
+      caption: string;
+      onProgress: (fraction: number) => void;
+      onUploaded: (fileId: string) => void;
+    }) => {
+      let fileId = input.uploaded;
+      if (!fileId) {
+        if (!leadId || !input.file) throw new Error(NO_DEAL_FOR_FILES);
+        fileId = (await sendLeadFile({ leadId, file: input.file, onProgress: input.onProgress }))
+          .fileId;
+        input.onUploaded(fileId);
+      }
+      const body: WaSendMedia = { fileId, ...(input.caption ? { caption: input.caption } : {}) };
+      return api.post<{ message: WaMessage }>(`${threadPath(thread)}/media`, body);
+    },
+    onSuccess: () => afterSend(queryClient, thread),
+    // The deal's Arquivos, its count and timeline show the file that went up, whatever happened after.
+    onSettled: () => {
+      if (leadId) void queryClient.invalidateQueries({ queryKey: ['leads'] });
+    },
+  });
+}
+
+/** Why a conversation with no deal sends no file (the API says the same). */
+export const NO_DEAL_FOR_FILES =
+  'O arquivo fica nos arquivos da negociação: esta conversa ainda não tem negociação.';
 
 /**
  * What the chosen template becomes now (a common message inside the window,
