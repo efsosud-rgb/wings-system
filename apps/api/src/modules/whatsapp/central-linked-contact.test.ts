@@ -85,7 +85,7 @@ const leadOf = async (conversationId: string) =>
   (await db.query.waConversations.findFirst({ where: eq(waConversations.id, conversationId) }))
     ?.leadId ?? null;
 
-const link = (cookies: Record<string, string>, leadId: string, payload: unknown) =>
+const link = (cookies: Record<string, string>, leadId: string, payload: Record<string, unknown>) =>
   app.inject({ method: 'POST', url: `/leads/${leadId}/contacts`, cookies, payload });
 
 describe("a number in attendance does not join a seller's deal as a contact (WA-03)", () => {
