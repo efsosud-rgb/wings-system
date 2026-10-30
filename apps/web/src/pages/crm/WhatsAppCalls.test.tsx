@@ -21,7 +21,9 @@ const { state, calls, media } = vi.hoisted(() => ({
     thread: null as DealWhatsApp | null,
     threadQuery: {} as Record<string, unknown>,
     permission: null as WaCallPermissionLive | null,
-    askMutate: (() => undefined) as () => void,
+    askMutate: (() => undefined) as (...args: unknown[]) => void,
+    callRequestPreview: {} as Record<string, unknown>,
+    previewEnabled: [] as boolean[],
   },
   calls: {
     start: vi.fn(),
@@ -56,10 +58,15 @@ vi.mock('../../api/whatsapp.js', () => ({
   useCallPermission: () => ({ data: state.permission, error: null }),
   useRequestCallPermission: () => ({
     mutate: state.askMutate,
+    reset: () => undefined,
     isPending: false,
     isSuccess: false,
     error: null,
   }),
+  useCallRequestPreview: (_leadId: string, enabled: boolean) => {
+    state.previewEnabled.push(enabled);
+    return enabled ? state.callRequestPreview : { data: undefined, error: null };
+  },
   whatsappCalls: calls,
 }));
 
@@ -242,7 +249,9 @@ describe('the WhatsApp part of the call panel', () => {
     expect(ask).toHaveBeenCalled();
   });
 
-  it('outside the window points to the permission template', () => {
+  it('outside the window sends by the template, after its preview', () => {
+    const ask = vi.fn();
+    state.askMutate = ask;
     state.thread = thread({ window: { open: false, expiresAt: null } });
     state.permission = {
       status: 'no_permission',
@@ -251,13 +260,78 @@ describe('the WhatsApp part of the call panel', () => {
       canCall: false,
       canRequest: true,
     };
+    state.previewEnabled = [];
+    state.callRequestPreview = {
+      data: {
+        preview: {
+          family: 'wings_formatacao_pedir_ligacao',
+          version: 'wings_formatacao_pedir_ligacao',
+          language: 'pt_BR',
+          category: 'MARKETING',
+          sendAs: 'template',
+          charged: true,
+          reason: null,
+          windowExpiresAt: null,
+          text: 'Olá, Elena! Aqui é Eric, da Wings Company. Posso te ligar por aqui?',
+          footer: null,
+          buttons: [],
+          withArt: false,
+          notices: [],
+          fields: [
+            { index: 1, role: 'lead', label: 'Nome do lead', value: 'Elena', locked: false },
+            { index: 2, role: 'seller', label: 'Seu nome', value: 'Eric', locked: false },
+          ],
+          usesCompanyArticle: false,
+          ready: true,
+        },
+      },
+      error: null,
+    };
     render(
       <WhatsAppCallProvider>
         <Section />
       </WhatsAppCallProvider>,
     );
     expect(screen.queryByRole('button', { name: 'Pedir permissão para ligar' })).toBeNull();
-    expect(screen.getByText(/Fora das 24 h: o pedido de ligação vai por um modelo/)).toBeTruthy();
+    // Nothing is asked of the server before the click.
+    expect(state.previewEnabled.every((enabled) => !enabled)).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Pedir pelo modelo' }));
+    expect(screen.getByLabelText('Prévia da mensagem').textContent).toContain('da Wings Company');
+    expect(screen.getByText(/cobrado pela Meta/)).toBeTruthy();
+    expect(ask).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar pedido' }));
+    expect(ask).toHaveBeenCalledWith(
+      {
+        template: {
+          params: ['Elena', 'Eric'],
+          expect: { sendAs: 'template', charged: true },
+        },
+      },
+      expect.anything(),
+    );
+  });
+
+  it('outside the window, says why when the template cannot go (not approved yet)', () => {
+    state.thread = thread({ window: { open: false, expiresAt: null } });
+    state.permission = null;
+    state.callRequestPreview = {
+      data: undefined,
+      error: new ApiError(422, {
+        error: 'template_unknown',
+        message:
+          'O modelo de pedido de ligação ainda não foi aprovado pela Meta. Nada foi enviado.',
+      }),
+    };
+    render(
+      <WhatsAppCallProvider>
+        <Section />
+      </WhatsAppCallProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Pedir pelo modelo' }));
+    expect(screen.getByText(/ainda não foi aprovado pela Meta/)).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: 'Enviar pedido' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 
   it('says why, and does not stay on "Carregando…", when the conversation did not load', () => {
