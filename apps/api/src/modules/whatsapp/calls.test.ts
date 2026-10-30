@@ -968,6 +968,34 @@ describe('asking for the call permission by template, outside the 24 h (d-t033)'
     expect(posts).toHaveLength(0);
   });
 
+  it('the free request inside the 24 h counts too, and a refusal sends nothing, not even later', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977300005', owner.id);
+    await deliver(
+      {
+        contacts: [{ profile: { name: 'Elena' }, wa_id: '5521977300005' }],
+        messages: [
+          {
+            from: '5521977300005',
+            id: 'wamid.T033W',
+            timestamp: unix(new Date()),
+            type: 'text',
+            text: { body: 'Pode me ligar' },
+          },
+        ],
+      },
+      'messages',
+    );
+    expect((await ask(owner.cookies, leadId, {})).statusCode).toBe(201);
+    const sent = posts.length;
+    const again = await ask(owner.cookies, leadId, {});
+    expect(again.statusCode).toBe(429);
+    expect(again.json()).toMatchObject({ error: 'call_request_limit' });
+    // The refusal ends the request: nothing reaches Meta after the answer either.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(posts).toHaveLength(sent);
+  });
+
   it('a brand’s lead gets the Expansão template, not yet approved here: refused, nothing sent', async () => {
     const owner = await sessionFor('admin_master');
     const leadId = await deal('5521977300004', owner.id);

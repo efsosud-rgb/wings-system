@@ -800,11 +800,13 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     return reply.status(refused.status).send(refused.body);
   };
 
-  /** Meta's 1 a day and 2 a week (call-request-limit.ts): refused before anything goes. */
-  const overCallLimit = async (reply: FastifyReply, contactId: string | null) => {
-    const why = await callRequestRefusal(db, contactId);
-    return why ? reply.status(429).send({ error: 'call_request_limit', message: why }) : null;
-  };
+  /**
+   * Meta's 1 a day and 2 a week (call-request-limit.ts), refused before anything goes. The
+   * caller awaits the reason and returns this reply itself: an async helper returning the reply
+   * hands back undefined once awaited (a FastifyReply is thenable), and the send went on to Meta.
+   */
+  const callLimitReply = (reply: FastifyReply, why: string) =>
+    reply.status(429).send({ error: 'call_request_limit', message: why });
 
   type Outgoing =
     | { kind: 'text'; text: string }
@@ -925,8 +927,8 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
           message:
             'Fora das 24 horas: o pedido de ligação vai pelo modelo aprovado ("Pedir pelo modelo", no painel de ligação).',
         });
-      const limited = await overCallLimit(reply, target.contact?.id ?? null);
-      if (limited) return limited;
+      const overLimit = await callRequestRefusal(db, target.contact?.id ?? null);
+      if (overLimit) return callLimitReply(reply, overLimit);
       shown = callPermissionText(voice);
       payload = callPermissionPayload(shown);
       content = { callPermissionRequest: true };
@@ -1077,8 +1079,8 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
             error: 'number_no_calls',
             message: 'O pedido de ligação vai só pelo número oficial.',
           });
-        const limited = await overCallLimit(reply, target.contact?.id ?? null);
-        if (limited) return limited;
+        const overLimit = await callRequestRefusal(db, target.contact?.id ?? null);
+        if (overLimit) return callLimitReply(reply, overLimit);
       }
       let mediaId: string | null = null;
       if (plan.needsArt) {
@@ -1465,8 +1467,8 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     if (!params.success) return notFound(reply);
     const target = await targetOf(request, 'lead', params.data.id);
     if (!target) return notFound(reply);
-    const limited = await overCallLimit(reply, target.contact?.id ?? null);
-    if (limited) return limited;
+    const overLimit = await callRequestRefusal(db, target.contact?.id ?? null);
+    if (overLimit) return callLimitReply(reply, overLimit);
     const name = await callRequestTemplate(params.data.id);
     const context = await templateContextOf(
       db,
