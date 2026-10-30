@@ -65,11 +65,54 @@ export const waArticleSchema = z.object({
  */
 export type WaNameForm = 'plain' | 'article' | 'of';
 
+type Article = 'o' | 'a' | 'os' | 'as';
+
+/**
+ * "A Cabana da Barra" → `{ own: 'a', rest: 'Cabana da Barra' }`: a name that
+ * already starts with an article. Only when a real word follows (a number, or
+ * two letters on): "A J Silva", "A & B" and "A e B" are names, not articles;
+ * nor are initials in capitals before a common word ("AS Construtora").
+ */
+function leadingArticle(name: string): { own: Article; rest: string } | null {
+  const match =
+    /^(o|a|os|as)\s+(?!(?:e|de|do|da|dos|das)\s)((?:\p{N}|\p{L}[\p{L}\p{N}]).*)$/iu.exec(name);
+  if (!match) return null;
+  const word = match[1]!;
+  const rest = match[2]!;
+  const next = rest.split(' ')[0]!;
+  if (word.length === 2 && word === word.toUpperCase() && next !== next.toUpperCase()) return null;
+  return { own: word.toLowerCase() as Article, rest };
+}
+
+const OF: Record<Article, string> = { o: 'do', a: 'da', os: 'dos', as: 'das' };
+
+const tidy = (name: string) => name.normalize('NFC').trim().replace(/\s+/g, ' ');
+
+/**
+ * A name that already starts with an article ("A Cabana da Barra", "O
+ * Boticário") keeps its own: "a Cabana da Barra", "da Cabana da Barra" —
+ * never "a A Cabana" or "da A Cabana". The name's article wins over the
+ * stored one, since it is what the name says.
+ */
 export function withArticle(name: string, article: BrandArticle, form: WaNameForm): string {
-  const clean = name.trim();
+  const clean = tidy(name);
   if (!clean || form === 'plain') return clean;
+  const own = leadingArticle(clean);
+  if (own) return form === 'article' ? `${own.own} ${own.rest}` : `${OF[own.own]} ${own.rest}`;
   if (form === 'article') return `${article} ${clean}`;
-  return `${article === 'o' ? 'do' : 'da'} ${clean}`;
+  return `${OF[article]} ${clean}`;
+}
+
+/**
+ * A name for a text that already carries the article ("expansão da {{3}}"):
+ * without the name's own when the two agree, so "A Cabana da Barra" reads "da
+ * Cabana da Barra". When they disagree ("da" before "O Bar do Zé") the name
+ * stays whole: cutting it would only leave the wrong article in front.
+ */
+export function withoutArticle(name: string, carried: Article): string {
+  const clean = tidy(name);
+  const own = leadingArticle(clean);
+  return own && own.own === carried ? own.rest : clean;
 }
 
 // --- what each field of our templates is -------------------------------------------------
@@ -155,6 +198,30 @@ export function waFieldForm(body: string | null, index: number, spec: WaFieldSpe
   const at = body.search(new RegExp(`\\{\\{\\s*${index}\\s*\\}\\}`));
   if (at < 0) return form;
   return ARTICLE_BEFORE.test(body.slice(0, at)) ? 'plain' : form;
+}
+
+const DEFINITE_BEFORE = /(?:^|[\s(])(da|do|das|dos|a|o|as|os)\s*$/i;
+const CARRIED: Record<string, Article> = {
+  da: 'a',
+  a: 'a',
+  do: 'o',
+  o: 'o',
+  das: 'as',
+  as: 'as',
+  dos: 'os',
+  os: 'os',
+};
+
+/**
+ * The article the words just before `{{n}}` already carry ("expansão da
+ * {{3}}" → `a`, "transformar o {{3}}" → `o`), for `withoutArticle`. Null after
+ * a bare "de" or anything else: then the name keeps its own article.
+ */
+export function waArticleBefore(body: string | null, index: number): Article | null {
+  if (!body) return null;
+  const at = body.search(new RegExp(`\\{\\{\\s*${index}\\s*\\}\\}`));
+  const word = at >= 0 ? DEFINITE_BEFORE.exec(body.slice(0, at))?.[1] : undefined;
+  return word ? (CARRIED[word.toLowerCase()] ?? null) : null;
 }
 
 /** The fields of a template with `count` placeholders: the listed ones, or free ones. */

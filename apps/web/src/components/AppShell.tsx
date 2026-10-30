@@ -6,7 +6,7 @@ import {
   type NavModule,
   type NavSubmodule,
 } from '@wings/shared';
-import { useState } from 'react';
+import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useSession } from '../api/auth.js';
 import { SidebarLogo } from '../brand/SidebarLogo.js';
@@ -27,7 +27,17 @@ import { WhatsAppCallProvider } from '../pages/crm/WhatsAppCalls.js';
  * viewer's role cannot reach is absent entirely, and one without a backend yet
  * is shown but marked, so the shape of the system is visible without
  * pretending it is done.
+ *
+ * On a phone (700 px or less) the sidebar is a drawer: closed by default so
+ * the screen comes first, opened by the ☰ button in the top bar, and closed
+ * again by choosing a screen, Escape, the × or a tap outside it. While it is
+ * open the page behind does not scroll and cannot take focus. Above 700 px
+ * nothing of this shows: the button and the × are hidden by the stylesheet.
  */
+const SIDEBAR_ID = 'app-sidebar';
+/** The phone breakpoint, the same as the stylesheet's. */
+const PHONE = '(max-width: 700px)';
+
 export function AppShell() {
   const session = useSession();
   const { pathname } = useLocation();
@@ -35,6 +45,59 @@ export function AppShell() {
 
   // The module containing the current screen starts open; the rest collapsed.
   const [openModules, setOpenModules] = useState<Record<string, boolean>>({});
+
+  // The phone drawer. A new screen closes it: the state is reset during render
+  // when the path changes, so a closed menu never flashes open on the way back.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPath, setMenuPath] = useState(pathname);
+  if (menuPath !== pathname) {
+    setMenuPath(pathname);
+    setMenuOpen(false);
+  }
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  // Closed by Escape, the ×, the backdrop or choosing an entry, focus goes back
+  // to ☰ (the entry itself is hidden with the drawer, so the browser would
+  // drop focus on the page body).
+  const returnFocus = useRef(false);
+  const closeMenu = () => {
+    returnFocus.current = true;
+    setMenuOpen(false);
+  };
+
+  useEffect(() => {
+    if (!menuOpen) {
+      if (returnFocus.current) {
+        returnFocus.current = false;
+        toggleRef.current?.focus();
+      }
+      return;
+    }
+    closeRef.current?.focus({ preventScroll: true });
+    const { overflow } = document.body.style;
+    document.body.style.overflow = 'hidden';
+    const onKey = (event: KeyboardEvent) => {
+      // Ctrl K opens the search in the top bar: the drawer gives way to it in
+      // the same render, so the page is no longer inert when the search focuses.
+      const search = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k';
+      if (event.key !== 'Escape' && !search) return;
+      returnFocus.current = !search;
+      setMenuOpen(false);
+    };
+    // Turning a tablet or widening the window past 700 px leaves no drawer to
+    // close, so it closes on its own and the page scrolls again.
+    const phone = typeof window.matchMedia === 'function' ? window.matchMedia(PHONE) : null;
+    const onWidth = () => {
+      if (phone && !phone.matches) setMenuOpen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    phone?.addEventListener('change', onWidth);
+    return () => {
+      document.body.style.overflow = overflow;
+      document.removeEventListener('keydown', onKey);
+      phone?.removeEventListener('change', onWidth);
+    };
+  }, [menuOpen]);
 
   if (!user) return null;
 
@@ -104,16 +167,49 @@ export function AppShell() {
     );
   };
 
+  // Choosing an entry closes the drawer even when it is the screen already open.
+  const onMenuClick = (event: MouseEvent<HTMLElement>) => {
+    if (menuOpen && (event.target as Element).closest('a')) closeMenu();
+  };
+
+  const menuButton = (
+    <button
+      ref={toggleRef}
+      type="button"
+      className="topbar-icon-btn topbar-menu-toggle"
+      aria-label="Menu"
+      aria-expanded={menuOpen}
+      aria-controls={SIDEBAR_ID}
+      onClick={() => setMenuOpen((open) => !open)}
+    >
+      <Icon name="menu" size={20} />
+    </button>
+  );
+
   return (
-    <div className="shell">
-      <aside className="sidebar">
+    <div className={menuOpen ? 'shell is-menu-open' : 'shell'}>
+      <aside
+        className="sidebar"
+        id={SIDEBAR_ID}
+        // Open on a phone it covers the page like a dialog, and says so.
+        {...(menuOpen ? { role: 'dialog', 'aria-modal': true, 'aria-label': 'Menu' } : {})}
+      >
         <div className="sidebar-brand">
           <div className="sidebar-logo" id="wings-logo-slot">
             <SidebarLogo />
           </div>
+          <button
+            ref={closeRef}
+            type="button"
+            className="topbar-icon-btn sidebar-close"
+            aria-label="Fechar menu"
+            onClick={() => closeMenu()}
+          >
+            <Icon name="x" size={20} />
+          </button>
         </div>
 
-        <nav className="sidebar-menu" aria-label="Módulos">
+        <nav className="sidebar-menu" aria-label="Módulos" onClick={onMenuClick}>
           {NAV_GROUPS.map((group) => {
             const members = modules.filter((module) => module.group === group);
             if (members.length === 0) return null;
@@ -126,9 +222,13 @@ export function AppShell() {
           })}
         </nav>
       </aside>
+      {menuOpen && (
+        <div className="sidebar-backdrop" aria-hidden="true" onClick={() => closeMenu()} />
+      )}
 
-      <div className="shell-main">
-        <Topbar />
+      {/* inert while the drawer is open: Tab stays in the menu, as in a dialog. */}
+      <div className="shell-main" inert={menuOpen || undefined}>
+        <Topbar leading={menuButton} />
         <main className="content">
           <WhatsAppCallProvider>
             <Outlet />

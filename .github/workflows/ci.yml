@@ -7,7 +7,10 @@ on:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    # Release stage 1 (30/10/2026): the self-hosted runner setup of #51 and the non-blocking
+    # format:check of #32, without the quality-gate steps that need scripts this cut does not have.
+    runs-on: [self-hosted, linux, x64, wings]
+    timeout-minutes: 40
 
     services:
       postgres:
@@ -17,12 +20,13 @@ jobs:
           POSTGRES_PASSWORD: wings_ci
           POSTGRES_DB: wings_system
         ports:
-          - 5432:5432
+          - "127.0.0.1:5432:5432"
         options: >-
           --health-cmd "pg_isready -U wings -d wings_system"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+          --tmpfs /var/lib/postgresql/data
 
     env:
       DATABASE_URL: postgresql://wings:wings_ci@127.0.0.1:5432/wings_system
@@ -41,7 +45,6 @@ jobs:
       - run: pnpm build
       - run: pnpm typecheck
       - run: pnpm lint
-      - run: pnpm format:check
 
       # Migrations and seeds must stay runnable from scratch. These run before
       # the tests because the API integration tests create their own throwaway
@@ -51,4 +54,9 @@ jobs:
       # Re-running the seed must be a no-op, not a duplicate-key error.
       - run: pnpm --filter @wings/api db:seed
 
-      - run: pnpm test
+      # One package at a time: the web timing tests fail under load on the shared runner.
+      - run: pnpm -r --workspace-concurrency=1 test
+
+      # Runs last and does not block the job while the general Prettier pass is pending.
+      - run: pnpm format:check
+        continue-on-error: true

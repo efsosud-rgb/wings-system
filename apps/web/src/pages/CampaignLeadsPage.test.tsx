@@ -44,6 +44,7 @@ const response = (overrides: Partial<CampaignLeadsResponse> = {}): CampaignLeads
       city: null,
       platform: 'meta',
       campaignName: 'META | Formatação | 28Set',
+      adSetName: 'Conjunto Jimmy',
       adName: 'Vídeo Jimmy',
       attribution: 'utm',
       utmCampaign: 'formatacao_jimmyogro_set26',
@@ -88,6 +89,7 @@ describe('Leads das Campanhas', () => {
     const row = (await screen.findByText('Lead Um')).closest('tr')!;
     expect(within(row).getByText('META | Formatação | 28Set')).toBeTruthy();
     expect(within(row).getByText(/Vídeo Jimmy/)).toBeTruthy();
+    expect(within(row).getByText(/conjunto Conjunto Jimmy/)).toBeTruthy();
     expect(within(row).getByText('3 min').className).toContain('status-active');
     expect(within(row).getByText('Quente')).toBeTruthy();
     expect(screen.getByText('Amostra pequena')).toBeTruthy();
@@ -146,6 +148,6 @@ describe('Leads das Campanhas', () => {
   it('tells a salesperson they see only their own leads', async () => {
     get.mockResolvedValue(response({ scope: 'own' }));
     renderPage();
-    expect(await screen.findByText('Você vê só os leads que o RD atribui a você.')).toBeTruthy();
+    expect(await screen.findByText('Você vê só os leads que estão com você.')).toBeTruthy();
   });
 });

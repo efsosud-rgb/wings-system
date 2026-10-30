@@ -1,7 +1,14 @@
 import { normalizeBrazilianPhone, normalizeEmail, type LeadPipeline } from '@wings/shared';
 import { and, asc, eq, isNotNull, lt, lte, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
-import { leadEvents, leadSourceRules, leads, metaLeadgenEvents } from '../../db/schema/index.js';
+import {
+  crmDistributionMembers,
+  employees,
+  leadEvents,
+  leadSourceRules,
+  leads,
+  metaLeadgenEvents,
+} from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { RdCrm, type CrmMap, type NewDeal } from '../expansion/rd.js';
 import { shapeOf } from '../media/kairogen-adapter.js';
@@ -12,11 +19,11 @@ import {
   type MetaLeadDetails,
   type MetaLeadgenEvent,
 } from './meta-leads.js';
-import { entryStageOf } from './crm.js';
+import { ensureFirstContactTask, entryStageOf } from './crm.js';
 import { classifyUnruledForm, noticeUnclassifiedForm } from './meta-form-routing.js';
 import { POLL_EVERY_MS, pollMetaLeadsLocked } from './meta-poll.js';
-import { announceBackfill, type BackfillTally } from './crm-alerts.js';
-import { resolveMetaSource, upsertLead, answersPhone } from './service.js';
+import { announceBackfill, announceLeadArrival, type BackfillTally } from './crm-alerts.js';
+import { resolveMetaSource, upsertLead, answersPhone, isWorkableLead } from './service.js';
 
 /**
  * Meta Lead Ads → Funil → RD CRM (docs/leads/meta-lead-ads.md).
@@ -131,7 +138,12 @@ export async function processMetaLeadgenEvents(deps: MetaIntakeDeps): Promise<Me
       .select()
       .from(metaLeadgenEvents)
       .where(
-        and(eq(metaLeadgenEvents.status, 'pending'), lte(metaLeadgenEvents.nextAttemptAt, now)),
+        and(
+          eq(metaLeadgenEvents.status, 'pending'),
+          // The column keeps microseconds and a JS date stops at the millisecond: an event written
+          // in this very millisecond (the webhook's kick) is due too, not "in the future".
+          lte(metaLeadgenEvents.nextAttemptAt, new Date(now.getTime() + 1)),
+        ),
       )
       .orderBy(asc(metaLeadgenEvents.receivedAt))
       .limit(BATCH);
@@ -363,6 +375,9 @@ async function processOne(
     if (client.pipeline) await ensureEntryStage(deps.db, client.pipeline);
     const upserted = await upsertLead(deps.db, {
       source: 'meta_lead_ads',
+      // A person whose lead is closed, or has neither owner nor stage, gets a
+      // deal of their own (Eric, 09/10): a form lead always reaches a seller.
+      reopenClosed: true,
       name: details.name,
       email,
       phone,
@@ -417,6 +432,7 @@ async function processOne(
         pipeline: client.pipeline,
         leadgenEventId: row.id,
         assignedTo: upserted.assignedTo ?? null,
+        ...(upserted.reopenedFromLeadId ? { reopenedFrom: upserted.reopenedFromLeadId } : {}),
       },
     });
     leadId = upserted.lead.id;
@@ -668,6 +684,257 @@ async function recordDeal(
     kind,
     detail: { rdDealId: dealId, pipeline, via },
   });
+}
+
+// --- reprocessing one event ---------------------------------------------------
+
+/** What `reprocessMetaLeadgenEvent` found and did: ids, statuses and first names only. */
+export interface MetaReprocessReport {
+  mode: 'estado' | 'simular' | 'aplicar';
+  event: {
+    id: string;
+    leadgenId: string;
+    status: string;
+    leadId: string | null;
+    leadCreated: boolean;
+    rdOutcome: string | null;
+    rdDealId: string | null;
+    createdTime: string | null;
+  };
+  /** The lead the event is tied to today, if any. */
+  attachedTo: {
+    id: string;
+    source: string;
+    pipeline: string | null;
+    stage: string | null;
+    owner: string | null;
+    closed: boolean;
+    workable: boolean;
+    rdDealId: string | null;
+  } | null;
+  /** Why nothing can be done, when so. */
+  refusal: string | null;
+  /** What a run would do (simular) or did (aplicar). */
+  plan: {
+    opensNewLead: boolean;
+    pipeline: string | null;
+    entryStage: string | null;
+    nextInRotation: string | null;
+    rd: 'would_create' | 'would_link_open_deal' | 'disabled' | 'no_pipeline' | 'unknown';
+    openRdDealId: string | null;
+  } | null;
+  /** aplicar only. */
+  result: {
+    newLeadId: string | null;
+    owner: string | null;
+    stage: string | null;
+    task: boolean;
+    rdOutcome: string | null;
+    rdDealId: string | null;
+  } | null;
+}
+
+/**
+ * Runs one processed event again under today's rules (`reopenClosed`), for a
+ * form lead that was only attached to a closed or unworked lead and so never
+ * reached a seller. `estado` reads; `simular` also reads the Graph API, the
+ * rotation and RD (no write anywhere); `aplicar` clears the event's outcome
+ * and processes it like a new arrival, then gives the new lead its
+ * first-contact task and arrival notice however old the form is. Only an
+ * event that is `done` and did not create its lead is accepted.
+ */
+export async function reprocessMetaLeadgenEvent(
+  deps: MetaIntakeDeps,
+  leadgenId: string,
+  mode: MetaReprocessReport['mode'],
+): Promise<MetaReprocessReport> {
+  const now = deps.now?.() ?? new Date();
+  const row = await deps.db.query.metaLeadgenEvents.findFirst({
+    where: eq(metaLeadgenEvents.leadgenId, leadgenId),
+  });
+  if (!row) throw new IntakeRefusal('event_missing', true);
+  const attached = row.leadId
+    ? await deps.db.query.leads.findFirst({ where: eq(leads.id, row.leadId) })
+    : undefined;
+  const ownerName = async (id: string | null) =>
+    id
+      ? ((
+          await deps.db.query.employees.findFirst({
+            where: eq(employees.id, id),
+            columns: { fullName: true },
+          })
+        )?.fullName.split(' ')[0] ?? null)
+      : null;
+  const report: MetaReprocessReport = {
+    mode,
+    event: {
+      id: row.id,
+      leadgenId: row.leadgenId,
+      status: row.status,
+      leadId: row.leadId,
+      leadCreated: row.leadCreated === true,
+      rdOutcome: row.rdOutcome,
+      rdDealId: row.rdDealId,
+      createdTime: row.createdTime?.toISOString() ?? null,
+    },
+    attachedTo: attached
+      ? {
+          id: attached.id,
+          source: attached.source,
+          pipeline: attached.pipeline,
+          stage: attached.stage,
+          owner: await ownerName(attached.ownerEmployeeId),
+          closed: attached.won !== null || attached.closedAt !== null,
+          workable: isWorkableLead(attached),
+          rdDealId: attached.rdDealId,
+        }
+      : null,
+    refusal: null,
+    plan: null,
+    result: null,
+  };
+  if (row.status !== 'done') report.refusal = `evento ${row.status}, não done`;
+  else if (row.leadCreated) report.refusal = 'o evento criou o próprio lead: nada a reabrir';
+  else if (!attached) report.refusal = 'o evento não está ligado a lead nenhum';
+  else if (isWorkableLead(attached))
+    report.refusal = 'o lead ligado está aberto e com dono ou etapa: fica anexado';
+  if (mode === 'estado' || report.refusal || !attached) return report;
+
+  // simular: the same reads the queue would make, and nothing written.
+  if (!deps.accessToken) throw new IntakeRefusal('no_token', false);
+  const answer = await fetchMetaLead(row.leadgenId, {
+    accessToken: deps.accessToken,
+    fetchImpl: deps.graphFetch,
+  });
+  const details = answer.details;
+  const phone = normalizeBrazilianPhone(details.phone ?? answersPhone(details.answers));
+  const email = normalizeEmail(details.email);
+  if (!phone && !email) throw new IntakeRefusal('no_contact_data', true);
+  const formId = details.formId ?? row.formId;
+  let client = await resolveMetaSource(deps.db, { formId, campaignId: details.campaignId ?? null });
+  if (!client.ruleId) {
+    const guess = await classifyUnruledForm(deps.db, formId);
+    client = { ...client, pipeline: guess.pipeline, brand: guess.brand };
+  }
+  const pipeline = client.pipeline;
+  const [next] = pipeline
+    ? await deps.db
+        .select({ employeeId: crmDistributionMembers.employeeId })
+        .from(crmDistributionMembers)
+        .innerJoin(employees, eq(employees.id, crmDistributionMembers.employeeId))
+        .where(
+          and(
+            eq(crmDistributionMembers.pipeline, pipeline),
+            eq(crmDistributionMembers.active, true),
+            eq(employees.status, 'active'),
+          ),
+        )
+        .orderBy(
+          sql`${crmDistributionMembers.lastAssignedAt} asc nulls first`,
+          asc(crmDistributionMembers.updatedAt),
+        )
+        .limit(1)
+    : [];
+  const crm =
+    deps.rdCopyEnabled && deps.rdCrmToken ? new RdCrm(deps.rdCrmToken, deps.rdFetch) : null;
+  let rd: NonNullable<MetaReprocessReport['plan']>['rd'];
+  let openRdDealId: string | null = null;
+  if (!crm) rd = 'disabled';
+  else if (!pipeline) rd = 'no_pipeline';
+  else {
+    try {
+      const contact = await crm.findContact(email, phone);
+      const open = contact?.deals.find((deal) => deal.win === null);
+      openRdDealId = open?.id ?? null;
+      rd = open ? 'would_link_open_deal' : 'would_create';
+    } catch {
+      rd = 'unknown';
+    }
+  }
+  report.plan = {
+    opensNewLead: true,
+    pipeline,
+    entryStage: pipeline ? RD_TARGETS[pipeline].stage : null,
+    nextInRotation: await ownerName(next?.employeeId ?? null),
+    rd,
+    openRdDealId,
+  };
+  if (mode === 'simular') return report;
+
+  // aplicar: the event forgets its outcome and goes through the queue's own path.
+  const [cleared] = await deps.db
+    .update(metaLeadgenEvents)
+    .set({
+      leadId: null,
+      leadCreated: false,
+      rdDealId: null,
+      rdOutcome: null,
+      lastError: null,
+      processedAt: null,
+      attempts: row.attempts + 1,
+    })
+    .where(and(eq(metaLeadgenEvents.id, row.id), eq(metaLeadgenEvents.leadId, attached.id)))
+    .returning();
+  if (!cleared) throw new IntakeRefusal('event_changed', true);
+  let rdMap: CrmMap | null = null;
+  if (crm) {
+    try {
+      rdMap = await crm.map();
+    } catch {
+      rdMap = null;
+    }
+  }
+  const backfill: BackfillTally = new Map();
+  try {
+    await processOne(deps, cleared, crm, rdMap, now, backfill);
+  } catch (error) {
+    // Nothing was made: the event is tied back to the lead it had.
+    await deps.db
+      .update(metaLeadgenEvents)
+      .set({
+        leadId: attached.id,
+        leadCreated: false,
+        rdDealId: row.rdDealId,
+        rdOutcome: row.rdOutcome,
+        processedAt: row.processedAt,
+        lastError: 'reprocess_failed',
+      })
+      .where(and(eq(metaLeadgenEvents.id, row.id), sql`${metaLeadgenEvents.leadId} is null`));
+    throw error;
+  }
+  const after = await deps.db.query.metaLeadgenEvents.findFirst({
+    where: eq(metaLeadgenEvents.id, row.id),
+  });
+  const lead = after?.leadId
+    ? await deps.db.query.leads.findFirst({ where: eq(leads.id, after.leadId) })
+    : undefined;
+  // The form is old, so the queue made no task and no notice: the seller gets both now.
+  let task = false;
+  if (lead && after?.leadCreated && lead.ownerEmployeeId) {
+    await ensureFirstContactTask(deps.db, lead, null, now, { force: true });
+    await announceLeadArrival(deps.db, lead);
+    task = true;
+  }
+  await writeAudit(deps.db, {
+    action: 'lead.meta_reprocessed',
+    entity: 'lead',
+    entityId: lead?.id ?? row.leadId ?? row.id,
+    metadata: {
+      leadgenEventId: row.id,
+      previousLeadId: row.leadId,
+      newLeadId: after?.leadCreated ? (after.leadId ?? null) : null,
+      rdOutcome: after?.rdOutcome ?? null,
+    },
+  });
+  report.result = {
+    newLeadId: after?.leadCreated ? (after.leadId ?? null) : null,
+    owner: await ownerName(lead?.ownerEmployeeId ?? null),
+    stage: lead?.stage ?? null,
+    task,
+    rdOutcome: after?.rdOutcome ?? null,
+    rdDealId: after?.rdDealId ?? null,
+  };
+  return report;
 }
 
 /** Drops the raw payload of events older than the retention; the row (ids) stays so a re-send is still a no-op. */

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { LeadPipeline } from './leads.js';
 import type { WaConversationItem, DealWhatsApp } from './whatsapp.js';
+import { withArticle, type BrandArticle } from './whatsapp-art.js';
 
 /**
  * Sofia, the virtual SDR (docs/whatsapp/sofia.md). Every new WhatsApp
@@ -169,20 +170,25 @@ export type SofiaQuestion = z.infer<typeof sofiaQuestionSchema>;
  * Wings Company's. She always says she is a virtual assistant.
  *
  * Her texts say who she is with placeholders, never with the name itself:
- * `{quem}` → "da Wings Company" | "do time de expansão da <marca>";
+ * `{quem}` → "da Wings Company" | "do time de expansão da/do <marca>";
  * `{empresa}` → "Wings Company" | "<marca>"; `{marca}` → the brand.
  */
 export const SOFIA_WINGS_NAME = 'Wings Company';
 
-export function sofiaVoice(brand: string | null) {
+export function sofiaVoice(brand: string | null, article: BrandArticle | null = null) {
   return brand
-    ? { quem: `do time de expansão da ${brand}`, empresa: brand }
+    ? // The brand's own article ("do Casal do Churros", "da Cabana da Barra"); "da" while nobody said.
+      { quem: `do time de expansão ${withArticle(brand, article ?? 'a', 'of')}`, empresa: brand }
     : { quem: `da ${SOFIA_WINGS_NAME}`, empresa: SOFIA_WINGS_NAME };
 }
 
 /** A text of Sofia's with its placeholders filled for this conversation. */
-export function sofiaWords(text: string, brand: string | null): string {
-  const voice = sofiaVoice(brand);
+export function sofiaWords(
+  text: string,
+  brand: string | null,
+  article: BrandArticle | null = null,
+): string {
+  const voice = sofiaVoice(brand, article);
   return text
     .replaceAll('{quem}', voice.quem)
     .replaceAll('{empresa}', voice.empresa)

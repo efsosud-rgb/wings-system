@@ -44,7 +44,8 @@ Mesmo ciclo, depois das regras (`crm-alerts.ts`). Avisos em `crm_notifications`,
 
 Um aviso por condição e pessoa (`dedupe_key`: não repete a cada ciclo; novo prazo = novo aviso).
 O texto diz o problema, nunca o nome do lead. Negociação ganha ou perdida não gera aviso.
-Sem WhatsApp nem e-mail por enquanto.
+Sem WhatsApp. Por e-mail, só o dono e só dois avisos (lead novo e 1º contato atrasado):
+`docs/crm/avisos-por-email.md`.
 
 ## E-mail
 

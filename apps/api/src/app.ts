@@ -31,7 +31,7 @@ import { expansionRoutes } from './modules/expansion/routes.js';
 import { kairogenRoutes } from './modules/integrations/kairogen/routes.js';
 import { landingPageRoutes } from './modules/leads/landing-pages.js';
 import { rdUserRoutes } from './modules/leads/rd-users.js';
-import { configureCrm, onStageEnteredHook } from './modules/leads/crm.js';
+import { configureCrm, onStageEnteredHook, trackingStartOf } from './modules/leads/crm.js';
 import { onStageEntered } from './modules/leads/automations.js';
 import { crmMailOf } from './modules/leads/crm-mail.js';
 import { crmRoutes } from './modules/leads/crm-routes.js';
@@ -161,6 +161,9 @@ export async function buildApp(deps: {
 
   if (deps.env.CRM_FIRST_CONTACT_SLA_HOURS) {
     configureCrm({ firstContactSlaHours: Number(deps.env.CRM_FIRST_CONTACT_SLA_HOURS) });
+  }
+  if (deps.env.CRM_TRACKING_START) {
+    configureCrm({ trackingStart: trackingStartOf(deps.env.CRM_TRACKING_START) });
   }
   // Lead arrival checks (docs/leads/formularios.md). Off in tests unless a test brings its stubs.
   {

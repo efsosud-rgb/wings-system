@@ -14,14 +14,14 @@ import { and, desc, eq, gte, inArray, type SQL } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { Database } from '../../db/client.js';
-import { adAds, adCampaigns, campaignLeads } from '../../db/schema/index.js';
+import { adAds, adCampaigns, adSets, campaignLeads } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { createSecretBox } from '../../lib/secret-box.js';
 
 /**
  * Dashboard → Leads das Campanhas. Diretoria and Gerente Comercial see every
- * lead, a Vendedor Formatação only the ones RD assigns to them; everyone else
- * gets 403. Phone and e-mail leave the server masked; the real value only
+ * lead, a Vendedor Formatação only the ones assigned to them (in the Wings CRM,
+ * or by RD); everyone else gets 403. Phone and e-mail leave the server masked; the real value only
  * through the audited reveal, by POST so it never sits in a URL.
  */
 
@@ -130,8 +130,20 @@ export const campaignLeadsRoutes: FastifyPluginAsync = async (app) => {
           : [],
         adIds.length ? db.query.adAds.findMany({ where: inArray(adAds.id, adIds) }) : [],
       ]);
+      const adSetIds = [
+        ...new Set(adRows.map((row) => row.adSetId).filter((id): id is string => Boolean(id))),
+      ];
+      const adSetRows = adSetIds.length
+        ? await db.query.adSets.findMany({ where: inArray(adSets.id, adSetIds) })
+        : [];
       const campaignName = new Map(campaignRows.map((row) => [row.id, row.name]));
       const adName = new Map(adRows.map((row) => [row.id, row.name]));
+      const adSetNameOfAd = new Map(
+        adRows.map((row) => [
+          row.id,
+          adSetRows.find((adSet) => adSet.id === row.adSetId)?.name ?? null,
+        ]),
+      );
       const leads: CampaignLeadRow[] = listed.map((row) => ({
         id: row.id,
         enteredAt: row.enteredAt.toISOString(),
@@ -141,6 +153,7 @@ export const campaignLeadsRoutes: FastifyPluginAsync = async (app) => {
         city: row.city,
         platform: row.platform as AdPlatform | null,
         campaignName: campaignName.get(row.campaignId!) ?? null,
+        adSetName: row.adId ? (adSetNameOfAd.get(row.adId) ?? null) : null,
         adName: row.adId ? (adName.get(row.adId) ?? null) : null,
         attribution: row.attribution as AttributionMethod | null,
         utmCampaign: row.utmCampaign,

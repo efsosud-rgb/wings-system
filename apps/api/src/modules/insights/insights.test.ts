@@ -848,7 +848,8 @@ describe('campaign suggestions', () => {
             googleSuggestion(),
             {
               ...metaSuggestion(),
-              proposal: { ...metaSuggestion().proposal, dailyBudgetCents: 60_000 },
+              // More than the month's whole cap: refused even on the last day of the month.
+              proposal: { ...metaSuggestion().proposal, dailyBudgetCents: 300_000 },
             },
           ],
         }),

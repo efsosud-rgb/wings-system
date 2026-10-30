@@ -8,7 +8,23 @@ import {
 } from '../lib/enrichment.js';
 import { baseContext } from '../test/context.js';
 import { createTestDatabase, type TestDatabase } from '../test/db.js';
-import { runEnrichLeadJob, type EnrichLeadOutput } from './enrich-lead.js';
+import { researchFailureReasonOf, runEnrichLeadJob, type EnrichLeadOutput } from './enrich-lead.js';
+
+describe('researchFailureReasonOf', () => {
+  it('tells a refused key, no credit, a rate limit, another status and no answer apart, naming none of them by key', () => {
+    expect(researchFailureReasonOf('OpenRouter answered 401')).toMatch(/recusou a chave do worker \(401\/403\)/);
+    expect(researchFailureReasonOf('OpenRouter answered 403')).toMatch(/recusou a chave/);
+    expect(researchFailureReasonOf('OpenRouter answered 402')).toMatch(/sem crédito \(402\)/);
+    expect(researchFailureReasonOf('OpenRouter answered 429')).toMatch(/limitou as chamadas \(429\)/);
+    expect(researchFailureReasonOf('OpenRouter answered 503')).toMatch(/respondeu com erro \(503\)/);
+    expect(researchFailureReasonOf('OpenRouter did not answer (TimeoutError)')).toBe(
+      'A pesquisa não terminou (o provedor não respondeu); nada foi inventado',
+    );
+    expect(researchFailureReasonOf('OpenRouter answered without the JSON that was asked for')).toMatch(
+      /não no formato pedido/,
+    );
+  });
+});
 
 const WINGS_CLIENT_ID = '00000000-0000-4000-8000-0000000000c1';
 // A valid CNPJ (check digits computed): 11.222.333/0001-81.
@@ -281,7 +297,7 @@ describe('the company research step of enrich_lead', () => {
     expect(output.costUsdMicro).toBe(60_000);
     expect(await researchOf(leadId)).toMatchObject({
       status: 'failed',
-      reason: 'A pesquisa não terminou (o provedor não respondeu); nada foi inventado',
+      reason: 'A pesquisa não terminou: o OpenRouter respondeu com erro (500); nada foi inventado',
       fields: [],
       sources: [],
     });

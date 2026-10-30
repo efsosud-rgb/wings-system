@@ -19,7 +19,7 @@ import {
   type SalesSellerRow,
 } from '@wings/shared';
 import { sql, type SQL } from 'drizzle-orm';
-import { listStages, type Executor } from './crm.js';
+import { crmConfig, listStages, type Executor } from './crm.js';
 
 /**
  * Dashboard › Vendas v1: the executive row, the diagnosis and the actions,
@@ -210,6 +210,7 @@ export async function salesDashboardOf(
         sql`select count(distinct l.id)::int as total
               from leads l join lead_tasks t on t.lead_id = l.id
              where ${where} and l.won is null and t.kind = 'first_contact'
+               and (l.entered_at >= ${crmConfig().trackingStart} or t.created_at >= ${crmConfig().trackingStart})
                and t.done_at is null and t.due_at < ${now}`,
       ),
       rows<{ total: number }>(

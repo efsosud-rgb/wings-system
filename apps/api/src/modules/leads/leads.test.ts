@@ -6,7 +6,7 @@ import {
   type LeadListItem,
   type LeadTrackingLink,
 } from '@wings/shared';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
@@ -14,17 +14,25 @@ import type { Database } from '../../db/client.js';
 import {
   auditLog,
   clients,
+  crmDistributionMembers,
   expansionIntakeLedger,
   jobs,
+  leadContacts,
   leadEvents,
   leadSourceRules,
+  leadTasks,
   leadTrackingLinks,
   leads,
   metaLeadgenEvents,
 } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
-import { processMetaLeadgenEvents, purgeMetaLeadgenPayloads } from './meta-intake.js';
+import {
+  processMetaLeadgenEvents,
+  purgeMetaLeadgenPayloads,
+  reprocessMetaLeadgenEvent,
+} from './meta-intake.js';
+import { upsertLead } from './service.js';
 import {
   clientRegister,
   createEmployee,
@@ -1090,6 +1098,216 @@ describe('Meta Lead Ads webhook', () => {
       rdDealId: 'deal-open-9',
     });
     expect(rdCalls.some((call) => call.method === 'POST')).toBe(false);
+  });
+
+  it('opens a deal of its own for a form whose phone belongs to a lost deal nobody works, and reprocesses one the old rule only attached', async () => {
+    // A seller in the Formatação rotation, so the new deal gets an owner.
+    const seller = await createEmployee(db, { role: 'vendedor_formatacao', sector: 'comercial' });
+    await db
+      .insert(crmDistributionMembers)
+      .values({ pipeline: 'formatacao', employeeId: seller.id, active: true });
+    // The person's old deal: an RD mirror, lost, with neither owner nor stage (the 08/10 case).
+    const old = await upsertLead(db, {
+      source: 'rd_crm',
+      name: 'Teste Antigo',
+      phone: '+5561977770001',
+      clientId: WINGS_CLIENT_ID,
+      clientMapped: true,
+      pipeline: 'expansao',
+      importBatchId: 'rd-crm-test',
+      skipResearch: true,
+      event: { kind: 'lead.imported.rd_crm' },
+    });
+    await db
+      .update(leads)
+      .set({
+        won: false,
+        closedAt: new Date('2025-03-01T12:00:00Z'),
+        lostReason: 'sem retorno',
+        rdDealId: 'deal-lost-1',
+      })
+      .where(eq(leads.id, old.lead.id));
+    expect(old.lead.ownerEmployeeId).toBeNull();
+    expect(old.lead.stageId).toBeNull();
+    const untouchedEnteredAt = old.lead.enteredAt;
+
+    rdMapAnswers();
+    rdCalls.length = 0;
+    rdAnswers.set('GET /contacts', {
+      status: 200,
+      body: { contacts: [{ _id: 'c-old', deals: [{ _id: 'deal-lost-1', win: false }] }] },
+    });
+    rdAnswers.set('POST /deals', { status: 200, body: { _id: 'deal-new-2' } });
+    graphAnswers.set('900040', {
+      status: 200,
+      body: {
+        id: '900040',
+        created_time: '2026-10-08T04:18:53+0000',
+        field_data: [
+          { name: 'full_name', values: ['Teste Antigo'] },
+          { name: 'phone_number', values: ['+5561977770001'] },
+          { name: 'faturamento', values: ['até 100 mil'] },
+        ],
+        campaign_id: '120252401895850076',
+        campaign_name: 'Form 5 perguntas',
+        ad_id: '120252401896000076',
+        form_id: '1538007113903398',
+        platform: 'ig',
+      },
+    });
+    await deliver(
+      leadgenBody({ leadgen_id: '900040', form_id: '1538007113903398', page_id: '555' }),
+    );
+    const run = await runQueue({ rd: true });
+    expect(run).toMatchObject({ processed: 1, done: 1, rdCreated: 1 });
+    const event = await eventOf('900040');
+    expect(event).toMatchObject({
+      status: 'done',
+      leadCreated: true,
+      rdOutcome: 'created',
+      rdDealId: 'deal-new-2',
+    });
+    expect(event?.leadId).not.toBe(old.lead.id);
+    const fresh = await db.query.leads.findFirst({ where: eq(leads.id, event?.leadId as string) });
+    // Its own row: the form's arrival time and ad ids, and the new RD deal
+    // (Leads das Campanhas attributes by these, and drops entered_at before 28/09).
+    expect(fresh).toMatchObject({
+      pipeline: 'formatacao',
+      stage: 'Sem contato',
+      ownerEmployeeId: seller.id,
+      managedBy: 'wings',
+      rdDealId: 'deal-new-2',
+      adPlatform: 'meta',
+      adCampaignExternalId: '120252401895850076',
+      adExternalId: '120252401896000076',
+      enteredAt: new Date('2026-10-08T04:18:53Z'),
+      enteredAtSource: 'meta_created_time',
+      formAnswers: { faturamento: 'até 100 mil' },
+    });
+    expect(fresh?.enteredAt?.getTime()).not.toBe(untouchedEnteredAt.getTime());
+    // The old deal is as it was; the two are tied on both timelines.
+    const untouched = await db.query.leads.findFirst({ where: eq(leads.id, old.lead.id) });
+    expect(untouched).toMatchObject({ rdDealId: 'deal-lost-1', ownerEmployeeId: null, won: false });
+    const freshEvents = await db.select().from(leadEvents).where(eq(leadEvents.leadId, fresh!.id));
+    expect(freshEvents.find((e) => e.kind === 'lead.received.meta_lead_ads')?.detail).toMatchObject(
+      { matched: 'reopened', reopenedFrom: old.lead.id },
+    );
+    const oldEvents = await db.select().from(leadEvents).where(eq(leadEvents.leadId, old.lead.id));
+    expect(oldEvents.find((e) => e.kind === 'lead.reopened_as')?.detail).toMatchObject({
+      newLeadId: fresh!.id,
+      reason: 'closed',
+    });
+    // One person, one contact: both leads point at it.
+    const links = await db
+      .select({ leadId: leadContacts.leadId, contactId: leadContacts.contactId })
+      .from(leadContacts);
+    const oldLink = links.find((l) => l.leadId === old.lead.id);
+    const freshLink = links.find((l) => l.leadId === fresh!.id);
+    expect(oldLink?.contactId).toBeDefined();
+    expect(freshLink?.contactId).toBe(oldLink?.contactId);
+    // Fresh enough for the first-contact task (created_time is within a day of the fake clock? no: it is old) —
+    // the queue treats an old form as a backfill: owner yes, task no.
+    expect(
+      await db.query.leadTasks.findFirst({ where: eq(leadTasks.leadId, fresh!.id) }),
+    ).toBeUndefined();
+
+    // An open lead with an owner still only gets the form attached (today's rule).
+    graphAnswers.set('900041', {
+      status: 200,
+      body: {
+        id: '900041',
+        created_time: '2026-10-08T05:00:00+0000',
+        field_data: [{ name: 'phone_number', values: ['+5561977770001'] }],
+        form_id: '1538007113903398',
+      },
+    });
+    await deliver(
+      leadgenBody({ leadgen_id: '900041', form_id: '1538007113903398', page_id: '555' }),
+    );
+    await runQueue({ rd: true });
+    const attached = await eventOf('900041');
+    expect(attached).toMatchObject({ leadCreated: false, leadId: fresh!.id, rdOutcome: 'existing_deal' });
+
+    // The reprocess command: that attached event, once its lead is lost and dropped by its owner.
+    await db
+      .update(leads)
+      .set({ won: false, closedAt: new Date('2026-10-09T12:00:00Z'), ownerEmployeeId: null, stageId: null, stage: null })
+      .where(eq(leads.id, fresh!.id));
+    const deps = {
+      db,
+      accessToken: 'fake-leads-token',
+      rdCrmToken: 'rd-token',
+      expansionOwnerId: null,
+      rdCopyEnabled: true,
+      graphFetch: app.wings.platformFetch,
+      rdFetch,
+      log: () => undefined,
+    };
+    const estado = await reprocessMetaLeadgenEvent(deps, '900041', 'estado');
+    expect(estado).toMatchObject({
+      refusal: null,
+      plan: null,
+      attachedTo: { id: fresh!.id, closed: true, workable: false },
+    });
+    rdAnswers.set('GET /contacts', {
+      status: 200,
+      body: { contacts: [{ _id: 'c-old', deals: [{ _id: 'deal-new-2', win: false }] }] },
+    });
+    rdAnswers.set('POST /deals', { status: 200, body: { _id: 'deal-new-3' } });
+    rdCalls.length = 0;
+    const leadsBefore = (await db.select({ id: leads.id }).from(leads)).length;
+    const simulado = await reprocessMetaLeadgenEvent(deps, '900041', 'simular');
+    expect(simulado.plan).toMatchObject({
+      opensNewLead: true,
+      pipeline: 'formatacao',
+      entryStage: 'Sem contato',
+      rd: 'would_create',
+    });
+    expect(simulado.result).toBeNull();
+    expect((await db.select({ id: leads.id }).from(leads)).length).toBe(leadsBefore);
+    expect(await eventOf('900041')).toMatchObject({ leadCreated: false, leadId: fresh!.id });
+    expect(rdCalls.some((call) => call.method === 'POST')).toBe(false);
+
+    const aplicado = await reprocessMetaLeadgenEvent(deps, '900041', 'aplicar');
+    expect(aplicado.result).toMatchObject({
+      owner: expect.any(String),
+      stage: 'Sem contato',
+      task: true,
+      rdOutcome: 'created',
+      rdDealId: 'deal-new-3',
+    });
+    const reopened = await eventOf('900041');
+    expect(reopened).toMatchObject({ status: 'done', leadCreated: true, rdDealId: 'deal-new-3' });
+    expect(reopened?.leadId).not.toBe(fresh!.id);
+    const third = await db.query.leads.findFirst({ where: eq(leads.id, reopened?.leadId as string) });
+    expect(third).toMatchObject({ pipeline: 'formatacao', stage: 'Sem contato', ownerEmployeeId: seller.id });
+    // Old form, but asked for by hand: the seller gets the task anyway.
+    expect(
+      await db.query.leadTasks.findFirst({ where: eq(leadTasks.leadId, third!.id) }),
+    ).toMatchObject({ kind: 'first_contact' });
+    const audit = await db.select().from(auditLog).where(eq(auditLog.action, 'lead.meta_reprocessed'));
+    expect(audit.at(-1)?.metadata).toMatchObject({ previousLeadId: fresh!.id, newLeadId: third!.id });
+    // Run again: nothing to reopen.
+    expect((await reprocessMetaLeadgenEvent(deps, '900041', 'estado')).refusal).toContain('criou o próprio lead');
+  });
+
+  it('takes an event written in the same millisecond as the run (microseconds in the column)', async () => {
+    await db.insert(metaLeadgenEvents).values({
+      leadgenId: '900099',
+      nextAttemptAt: sql`'2020-01-01 00:00:00.000500+00'::timestamptz`,
+    });
+    const run = await processMetaLeadgenEvents({
+      db,
+      accessToken: 'fake-leads-token',
+      rdCrmToken: null,
+      expansionOwnerId: 'rd-user-fernando',
+      rdCopyEnabled: false,
+      graphFetch: app.wings.platformFetch,
+      rdFetch,
+      log: () => undefined,
+      now: () => new Date('2020-01-01T00:00:00.000Z'),
+    });
+    expect(run.processed).toBe(1);
   });
 
   it('puts the lead in the Wings System even when RD CRM is down, and copies it on a later try', async () => {

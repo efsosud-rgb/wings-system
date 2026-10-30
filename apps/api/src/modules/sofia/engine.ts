@@ -12,6 +12,7 @@ import {
   sofiaWords,
   WA_MEDIA_KINDS,
   WA_WINDOW_HOURS,
+  type BrandArticle,
   type SofiaCloseReason,
   type SofiaHandoffReason,
   type SofiaQuestion,
@@ -227,9 +228,14 @@ class Turn {
 
   /** The brand Sofia speaks for (Expansão with a known brand), or null for Wings Company. */
   private voice: string | null = null;
+  /** Its article, for "do time de expansão do/da …"; null while nobody said. */
+  private voiceArticle: BrandArticle | null = null;
 
   private async decideVoice() {
-    this.voice = this.segment === 'expansao' && this.brandClientId ? await this.brandName() : null;
+    const brand =
+      this.segment === 'expansao' && this.brandClientId ? await this.brandRecord() : null;
+    this.voice = brand?.name ?? null;
+    this.voiceArticle = brand?.article ?? null;
   }
 
   async run() {
@@ -435,6 +441,7 @@ class Turn {
     await this.decideVoice();
     const result = await readTurn(llm, {
       speaksFor: this.voice,
+      speaksForArticle: this.voiceArticle,
       segment: this.segment,
       brandName: await this.brandName(),
       current: questions.find((q) => q.key === this.facts.step) ?? null,
@@ -513,13 +520,21 @@ class Turn {
     return hit && fold(hit.name).length >= 3 ? hit.id : null;
   }
 
-  private async brandName(): Promise<string | null> {
+  private async brandRecord(): Promise<{ name: string; article: BrandArticle | null } | null> {
     if (!this.brandClientId) return null;
     const row = await this.db.query.clients.findFirst({
       where: eq(clients.id, this.brandClientId),
-      columns: { name: true },
+      columns: { name: true, article: true },
     });
-    return row?.name ?? null;
+    if (!row) return null;
+    return {
+      name: row.name,
+      article: row.article === 'o' || row.article === 'a' ? row.article : null,
+    };
+  }
+
+  private async brandName(): Promise<string | null> {
+    return (await this.brandRecord())?.name ?? null;
   }
 
   // --- the next step ------------------------------------------------------------------------
@@ -550,11 +565,14 @@ class Turn {
     if (
       outgoing.kind === 'interactive' &&
       this.parts.length > 0 &&
-      sofiaWords(body(''), this.voice).length + 40 > INTERACTIVE_BODY_MAX
+      sofiaWords(body(''), this.voice, this.voiceArticle).length + 40 > INTERACTIVE_BODY_MAX
     ) {
       const preface = this.parts.join('\n\n');
       this.parts = [];
-      return { ...this.compose(step, body, texts), preface: sofiaWords(preface, this.voice) };
+      return {
+        ...this.compose(step, body, texts),
+        preface: sofiaWords(preface, this.voice, this.voiceArticle),
+      };
     }
     return outgoing;
   }
@@ -587,7 +605,7 @@ class Turn {
     const { question } = step;
     this.facts.step = question.key;
     if (question.kind === 'choice') {
-      const shown = sofiaWords(body(question.text), this.voice);
+      const shown = sofiaWords(body(question.text), this.voice, this.voiceArticle);
       const rows = question.options.map((title, i) => ({
         id: `sofia:q:${question.key}:${i}`,
         title,
@@ -603,7 +621,7 @@ class Turn {
   }
 
   private text(raw: string): Outgoing {
-    const shown = sofiaWords(raw, this.voice);
+    const shown = sofiaWords(raw, this.voice, this.voiceArticle);
     return {
       shown,
       payload: textPayload(shown),
@@ -613,7 +631,7 @@ class Turn {
   }
 
   private buttons(raw: string, buttons: readonly { id: string; title: string }[]): Outgoing {
-    const shown = sofiaWords(raw, this.voice);
+    const shown = sofiaWords(raw, this.voice, this.voiceArticle);
     return {
       shown: `${shown}\n\n${buttons.map((b) => `[${b.title}]`).join(' ')}`,
       payload: buttonsPayload(shown, buttons),

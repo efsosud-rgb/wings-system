@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import type { SessionUser } from '@wings/shared';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -143,5 +143,159 @@ describe('the brand', () => {
     const slot = document.getElementById('wings-logo-slot');
     expect(slot).not.toBeNull();
     expect(within(slot as HTMLElement).getByRole('img', { name: /Wings/ })).toBeTruthy();
+  });
+});
+
+describe('on a phone, the menu is a drawer behind ☰', () => {
+  const toggle = () => screen.getByRole('button', { name: 'Menu' });
+  const shell = () => document.querySelector('.shell') as HTMLElement;
+  const main = () => document.querySelector('.shell-main') as HTMLElement;
+
+  afterEach(() => {
+    document.body.style.overflow = '';
+    vi.unstubAllGlobals();
+  });
+
+  it('starts closed, with the button pointing at the menu it opens', () => {
+    renderShell();
+    expect(toggle().getAttribute('aria-expanded')).toBe('false');
+    const sidebar = document.getElementById(toggle().getAttribute('aria-controls') ?? '');
+    expect(sidebar?.tagName).toBe('ASIDE');
+    expect(
+      within(sidebar as HTMLElement).getByRole('navigation', { name: 'Módulos' }),
+    ).toBeTruthy();
+    expect(shell().classList.contains('is-menu-open')).toBe(false);
+    expect(main().hasAttribute('inert')).toBe(false);
+    expect(document.querySelector('.sidebar-backdrop')).toBeNull();
+  });
+
+  it('opens over the page: focus in the menu, the page neither scrolls nor takes focus', () => {
+    renderShell();
+    fireEvent.click(toggle());
+
+    expect(toggle().getAttribute('aria-expanded')).toBe('true');
+    expect(shell().classList.contains('is-menu-open')).toBe(true);
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Fechar menu' }));
+    expect(document.body.style.overflow).toBe('hidden');
+    expect(main().hasAttribute('inert')).toBe(true);
+    expect(document.querySelector('.sidebar-backdrop')).not.toBeNull();
+  });
+
+  it('closes on Escape and gives focus back to ☰', () => {
+    renderShell();
+    fireEvent.click(toggle());
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(toggle().getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(toggle());
+    expect(document.body.style.overflow).toBe('');
+    expect(main().hasAttribute('inert')).toBe(false);
+  });
+
+  it('closes on × and on a tap outside it', () => {
+    renderShell();
+    fireEvent.click(toggle());
+    fireEvent.click(screen.getByRole('button', { name: 'Fechar menu' }));
+    expect(toggle().getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(toggle());
+
+    fireEvent.click(toggle());
+    fireEvent.click(document.querySelector('.sidebar-backdrop') as HTMLElement);
+    expect(toggle().getAttribute('aria-expanded')).toBe('false');
+    expect(document.querySelector('.sidebar-backdrop')).toBeNull();
+  });
+
+  it('closes when a screen is chosen and gives focus back to ☰', () => {
+    renderShell();
+    fireEvent.click(toggle());
+    fireEvent.click(screen.getByRole('link', { name: /Copywriter/ }));
+
+    expect(toggle().getAttribute('aria-expanded')).toBe('false');
+    expect(document.body.style.overflow).toBe('');
+    // The entry is hidden with the drawer; focus must not fall to the page body.
+    expect(document.activeElement).toBe(toggle());
+  });
+
+  it('closes when the screen changes by other means (the browser back button)', () => {
+    let go: ((to: string) => void) | null = null;
+    function Page() {
+      const navigate = useNavigate();
+      go = (to) => void navigate(to);
+      return null;
+    }
+    render(
+      <MemoryRouter initialEntries={['/marketing/trafego-pago-wings']}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="*" element={<Page />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+    fireEvent.click(toggle());
+    expect(toggle().getAttribute('aria-expanded')).toBe('true');
+
+    act(() => go?.('/inicio'));
+
+    expect(toggle().getAttribute('aria-expanded')).toBe('false');
+    expect(document.body.style.overflow).toBe('');
+    expect(main().hasAttribute('inert')).toBe(false);
+  });
+
+  it('is announced as a dialog only while open', () => {
+    renderShell();
+    const sidebar = () => document.getElementById('app-sidebar') as HTMLElement;
+    expect(sidebar().getAttribute('role')).toBeNull();
+    fireEvent.click(toggle());
+    expect(sidebar().getAttribute('role')).toBe('dialog');
+    expect(sidebar().getAttribute('aria-modal')).toBe('true');
+    expect(screen.getByRole('dialog', { name: 'Menu' })).toBe(sidebar());
+  });
+
+  it('gives way to the search (Ctrl K) without pulling focus to ☰', () => {
+    renderShell();
+    fireEvent.click(toggle());
+    fireEvent.keyDown(document, { key: 'k', ctrlKey: true });
+
+    expect(toggle().getAttribute('aria-expanded')).toBe('false');
+    expect(main().hasAttribute('inert')).toBe(false);
+    expect(document.activeElement).not.toBe(toggle());
+  });
+
+  it('closes when the entry chosen is the screen already open', () => {
+    renderShell();
+    fireEvent.click(toggle());
+    fireEvent.click(screen.getByRole('link', { name: /Agente de Tráfego Pago — Wings/ }));
+    expect(toggle().getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('closes on its own when the window grows past the phone width', () => {
+    const listeners = new Set<() => void>();
+    const query = {
+      matches: true,
+      addEventListener: (_: string, listener: () => void) => listeners.add(listener),
+      removeEventListener: (_: string, listener: () => void) => listeners.delete(listener),
+    };
+    const matchMedia = vi.fn(() => query);
+    vi.stubGlobal('matchMedia', matchMedia);
+    renderShell();
+    fireEvent.click(toggle());
+    expect(matchMedia).toHaveBeenCalledWith('(max-width: 700px)');
+    expect(listeners.size).toBe(1);
+
+    query.matches = false;
+    act(() => listeners.forEach((listener) => listener()));
+
+    expect(toggle().getAttribute('aria-expanded')).toBe('false');
+    expect(document.body.style.overflow).toBe('');
+    expect(listeners.size).toBe(0);
+  });
+
+  it('gives the page its scroll back when the shell goes away with the menu open', () => {
+    renderShell();
+    fireEvent.click(toggle());
+    expect(document.body.style.overflow).toBe('hidden');
+    cleanup();
+    expect(document.body.style.overflow).toBe('');
   });
 });
