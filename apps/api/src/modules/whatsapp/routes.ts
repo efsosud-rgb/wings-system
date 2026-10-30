@@ -1,4 +1,5 @@
 import {
+  grantedScope,
   brazilianPhoneVariants,
   normalizeBrazilianPhone,
   mentionsWings,
@@ -14,6 +15,9 @@ import {
   waSendKindOf,
   waSendMediaSchema,
   waSendTextSchema,
+  waVoiceRecordingType,
+  WA_VOICE_MAX_SECONDS,
+  WA_VOICE_UPLOAD_MAX_BYTES,
   WA_ART_SUFFIX,
   WA_INBOX_PAGE,
   WA_TEXT_SEARCH_MIN,
@@ -64,7 +68,8 @@ import {
 import { leadInScope, leadOwnerFilter } from '../leads/access.js';
 import { dealRouteAccessOf } from '../drive/access.js';
 import { DriveError, fileFor } from '../drive/service.js';
-import { leadHasFile } from '../leads/files.js';
+import { leadHasFile, storeLeadFile } from '../leads/files.js';
+import { toVoiceNote, voiceFileName } from './voice.js';
 import { contactBlock, noteContactBlocked } from '../leads/contact-block.js';
 import { storageOf } from '../../lib/storage/index.js';
 import {
@@ -811,6 +816,8 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
   type Outgoing =
     | { kind: 'text'; text: string }
     | { kind: 'media'; fileId: string; caption: string }
+    /** A recording made in the conversation: converted, kept in the deal's files, sent as voice. */
+    | { kind: 'voice'; recording: Buffer }
     | { kind: 'call_permission' }
     | {
         kind: 'template';
@@ -820,6 +827,82 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
         companyArticle: 'a' | 'o';
         expect?: { sendAs: 'free' | 'template'; charged: boolean };
       };
+
+  const VOICE_REFUSALS = {
+    unreadable: [422, 'Não deu para ler a gravação. Nada foi enviado; grave de novo.'],
+    too_long: [
+      413,
+      `O áudio passa de ${WA_VOICE_MAX_SECONDS / 60} minutos. Nada foi enviado; grave um mais curto.`,
+    ],
+    too_large: [
+      413,
+      'O áudio ficou grande demais para o WhatsApp. Nada foi enviado; grave um mais curto.',
+    ],
+    unavailable: [503, 'A conversão de áudio não está instalada no servidor. Nada foi enviado.'],
+  } as const;
+
+  /**
+   * A recording turned into a voice note and kept in the deal's files, the way a file the person
+   * attaches gets there: only by who may edit the deal (`leads.write` in scope, the upload route's
+   * rule). Nothing is kept when the recording is refused.
+   */
+  async function keepVoice(
+    request: FastifyRequest,
+    leadId: string,
+    recording: Buffer,
+  ): Promise<
+    | { ok: true; fileId: string; seconds: number }
+    | { ok: false; status: number; body: { error: string; message: string } }
+  > {
+    const actor = request.session.actor;
+    // leadInScope filters by owner only: the permission itself is asked here, as a route would.
+    const lead = grantedScope(actor, 'leads.write')
+      ? await leadInScope(db, actor, leadId, 'leads.write')
+      : null;
+    const access = dealRouteAccessOf(actor);
+    if (!lead || !access.write)
+      return {
+        ok: false,
+        status: 403,
+        body: {
+          error: 'files_forbidden',
+          message:
+            'Para gravar áudio, é preciso poder editar a negociação: o áudio fica nos arquivos dela.',
+        },
+      };
+    const note = await toVoiceNote(recording);
+    if (!note.ok) {
+      const [status, message] = VOICE_REFUSALS[note.why];
+      return { ok: false, status, body: { error: `voice_${note.why}`, message } };
+    }
+    try {
+      const file = await storeLeadFile(
+        { ...artDeps(), maxFileBytes: env.DRIVE_MAX_FILE_BYTES },
+        access,
+        lead,
+        { name: voiceFileName(now()), mimeType: 'audio/ogg', bytes: note.bytes },
+      );
+      await writeAudit(db, {
+        actorEmployeeId: actor.employeeId,
+        action: 'lead.file_added',
+        entity: 'lead',
+        entityId: lead.id,
+        ip: request.ip,
+        metadata: { fileId: file.fileId, voice: true },
+      });
+      return { ok: true, fileId: file.fileId, seconds: note.seconds };
+    } catch (error) {
+      if (!(error instanceof DriveError)) throw error;
+      return {
+        ok: false,
+        status: error.code === 'storage_unavailable' ? 503 : 409,
+        body: {
+          error: error.code,
+          message: 'Não deu para guardar o áudio nos arquivos da negociação. Nada foi enviado.',
+        },
+      };
+    }
+  }
 
   async function send(
     request: FastifyRequest,
@@ -898,8 +981,13 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     } | null = null;
     let sentFile: { fileId: string; kind: WaSendKind; mediaId: string } | null = null;
     // A template or a call request starts a contact: the "não me contate" register decides first,
-    // on any of our numbers. A typed reply or a file inside the window keeps the rules above.
-    if (outgoing.kind === 'template' || outgoing.kind === 'call_permission') {
+    // on any of our numbers. A typed reply or a file inside the window keeps the rules above. A
+    // recorded voice note is refused too (the safer reading of t084, docs/whatsapp/cloud-api.md).
+    if (
+      outgoing.kind === 'template' ||
+      outgoing.kind === 'call_permission' ||
+      outgoing.kind === 'voice'
+    ) {
       const block = await contactBlock(db, 'whatsapp', {
         leadId: target.leadId,
         phone: target.contact?.phone ?? target.phone,
@@ -912,7 +1000,12 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
             target.leadId,
             {
               channel: 'whatsapp',
-              path: outgoing.kind === 'template' ? 'modelo' : 'pedido_ligacao',
+              path:
+                outgoing.kind === 'template'
+                  ? 'modelo'
+                  : outgoing.kind === 'voice'
+                    ? 'audio_gravado'
+                    : 'pedido_ligacao',
               origin: block.origin,
             },
             request.session.actor.employeeId,
@@ -943,23 +1036,32 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       if (refused) return refused;
       payload = textPayload(outgoing.text);
       shown = outgoing.text;
-    } else if (outgoing.kind === 'media') {
+    } else if (outgoing.kind === 'media' || outgoing.kind === 'voice') {
       if (!window.open)
         return reply.status(409).send({
           error: 'window_closed',
-          message:
-            'Fora das 24 horas desde a última mensagem da pessoa: arquivo só vai dentro da janela. Escolha um modelo aprovado.',
+          message: `Fora das 24 horas desde a última mensagem da pessoa: ${
+            outgoing.kind === 'voice' ? 'áudio' : 'arquivo'
+          } só vai dentro da janela. Escolha um modelo aprovado.`,
         });
       // The file goes up to the deal's files first: a conversation no deal took yet has none.
       if (!target.leadId)
         return reply.status(422).send({ error: 'no_deal', message: NO_DEAL_FOR_FILES });
+      // A recording becomes one of the deal's files here, then goes like any other.
+      const kept =
+        outgoing.kind === 'voice'
+          ? await keepVoice(request, target.leadId, outgoing.recording)
+          : null;
+      if (kept && !kept.ok) return reply.status(kept.status).send(kept.body);
+      const fileId = kept ? kept.fileId : (outgoing as { fileId: string }).fileId;
+      const caption = outgoing.kind === 'media' ? outgoing.caption : '';
       // One of the deal's files, and one the sender may open: the deal's link route asks the
       // same, so a file of another department attached to the deal never leaves through here.
-      const file = (await leadHasFile(db, target.leadId, outgoing.fileId))
+      const file = (await leadHasFile(db, target.leadId, fileId))
         ? await fileFor(
             { ...artDeps(), maxFileBytes: env.DRIVE_MAX_FILE_BYTES },
             dealRouteAccessOf(request.session.actor),
-            outgoing.fileId,
+            fileId,
           ).then(
             ({ file: found }) => (found.trashedAt ? undefined : found),
             (error: unknown) => {
@@ -979,14 +1081,14 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
           error: 'too_large',
           message: 'O WhatsApp aceita arquivos de até 100 MB.',
         });
-      if (outgoing.caption && goes.kind === 'audio')
+      if (caption && goes.kind === 'audio')
         return reply.status(422).send({
           error: 'caption_not_allowed',
           message: 'Áudio vai sem legenda: mande o texto numa mensagem à parte.',
         });
       // The name can reach the person (a document shows it): the voice covers it too.
       const refused =
-        offBrand(outgoing.caption) ??
+        offBrand(caption) ??
         offBrand(file.name, 'o nome do arquivo cita a Wings; envie com outro nome');
       if (refused) return refused;
       const media = await driveFileMediaId({ ...artDeps(), fetchImpl: fetchImpl(), config }, file, {
@@ -1013,12 +1115,13 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
         });
       }
       sentFile = { fileId: file.id, kind: goes.kind, mediaId: media.mediaId };
-      payload = filePayload(goes.kind, media.mediaId, outgoing.caption, file.name);
-      shown = outgoing.caption || null;
+      payload = filePayload(goes.kind, media.mediaId, caption, file.name, kept !== null);
+      shown = caption || null;
       // The bubble opens the Drive file (this version) by `file`; Meta's id is the fallback.
       content = {
         media: { id: media.mediaId, mimeType: file.mimeType, filename: file.name },
         file: { fileId: file.id, version: file.version },
+        ...(kept ? { voice: { seconds: kept.seconds } } : {}),
       };
     } else {
       // Who asked not to receive messages gets no template, not even as a common message, by any
@@ -1153,7 +1256,7 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       author: 'employee',
       employeeId: actor.employeeId,
       kind:
-        outgoing.kind === 'media'
+        outgoing.kind === 'media' || outgoing.kind === 'voice'
           ? sentFile!.kind
           : outgoing.kind === 'call_permission'
             ? 'interactive'
@@ -1214,6 +1317,7 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
           : {}),
         // By id only: a file's name is never written to the audit.
         ...(sentFile ? { fileId: sentFile.fileId, sentAs: sentFile.kind } : {}),
+        ...(outgoing.kind === 'voice' ? { voice: true } : {}),
         ...(numberId ? { numberId } : {}),
         outcome,
         ...(delivered.errorCode === null ? {} : { errorCode: delivered.errorCode }),
@@ -1223,6 +1327,26 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     // Written either way: the bubble shows whether it went, and why not.
     return reply.status(201).send({ message: toMessage(saved, authors) });
   }
+
+  // A recording comes as the raw body (scoped to this plugin: the rest keeps refusing non-JSON).
+  app.addContentTypeParser(
+    /^audio\//,
+    { parseAs: 'buffer', bodyLimit: WA_VOICE_UPLOAD_MAX_BYTES },
+    (_request, body, done) => done(null, body),
+  );
+
+  type Refusal = { status: number; error: string; message: string };
+
+  const voiceOf = (request: FastifyRequest): Outgoing | Refusal =>
+    waVoiceRecordingType(request.headers['content-type']) && Buffer.isBuffer(request.body)
+      ? request.body.length > 0
+        ? { kind: 'voice', recording: request.body }
+        : { status: 400, error: 'invalid', message: 'A gravação chegou vazia. Grave de novo.' }
+      : {
+          status: 415,
+          error: 'unsupported_audio',
+          message: 'Formato de gravação que o sistema não lê (aceita WebM, OGG e MP4 de áudio).',
+        };
 
   const outgoingOf = (kind: 'text' | 'template' | 'media', body: unknown): Outgoing | string => {
     if (kind === 'text') {
@@ -1243,15 +1367,28 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       : (parsed.error.issues[0]?.message ?? 'Modelo inválido.');
   };
 
-  for (const kind of ['text', 'template', 'media'] as const) {
+  const parsedOutgoing = (
+    kind: 'text' | 'template' | 'media' | 'voice',
+    request: FastifyRequest,
+  ): Outgoing | Refusal => {
+    if (kind === 'voice') return voiceOf(request);
+    const outgoing = outgoingOf(kind, request.body);
+    return typeof outgoing === 'string'
+      ? { status: 400, error: 'invalid', message: outgoing }
+      : outgoing;
+  };
+
+  for (const kind of ['text', 'template', 'media', 'voice'] as const) {
     app.post(`/leads/:id/whatsapp/${kind}`, use, async (request, reply) => {
       const params = idParams.safeParse(request.params);
       if (!params.success) return notFound(reply);
       const lead = await leadInScope(db, request.session.actor, params.data.id, 'leads.whatsapp');
       if (!lead) return notFound(reply);
-      const outgoing = outgoingOf(kind, request.body);
-      if (typeof outgoing === 'string')
-        return reply.status(400).send({ error: 'invalid', message: outgoing });
+      const outgoing = parsedOutgoing(kind, request);
+      if ('status' in outgoing)
+        return reply
+          .status(outgoing.status)
+          .send({ error: outgoing.error, message: outgoing.message });
       if (!lead.phone)
         return reply
           .status(422)
@@ -1267,9 +1404,11 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       // conversation's own number (a deal's contact may not be its main phone).
       const found = await visibleConversation(request, params.data.id);
       if (!found) return notFound(reply);
-      const outgoing = outgoingOf(kind, request.body);
-      if (typeof outgoing === 'string')
-        return reply.status(400).send({ error: 'invalid', message: outgoing });
+      const outgoing = parsedOutgoing(kind, request);
+      if ('status' in outgoing)
+        return reply
+          .status(outgoing.status)
+          .send({ error: outgoing.error, message: outgoing.message });
       return send(
         request,
         reply,
