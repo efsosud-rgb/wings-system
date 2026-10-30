@@ -253,3 +253,34 @@ describe('the history entries of a meeting', () => {
     expect(within(list).queryByText('Resumo gerado pela IA')).toBeNull();
   });
 });
+
+describe('Timeline — an e-mail sent from the deal', () => {
+  it('shows the subject, who sent it and the attachments’ names and sizes', () => {
+    render(
+      <Timeline
+        data={loaded([
+          event({
+            id: 'm1',
+            kind: 'lead.email_sent',
+            detail: {
+              subject: 'Proposta da Wings',
+              by: 'Daniele Teste',
+              attachments: [{ name: 'proposta.pdf', byteSize: 2048 }],
+            },
+          }),
+        ])}
+      />,
+    );
+    const list = screen.getByRole('list');
+    expect(within(list).getByText('E-mail ao lead')).toBeTruthy();
+    expect(within(list).getByText(/Daniele Teste/)).toBeTruthy();
+    const body = list.querySelector('.crm-tl-body')!.textContent!;
+    expect(body).toContain('Proposta da Wings');
+    expect(body).toMatch(/Anexos: proposta\.pdf \(2([,.]0)? KB\)/);
+  });
+
+  it('adds nothing to an older e-mail event that carried neither', () => {
+    render(<Timeline data={loaded([event({ id: 'm2', kind: 'lead.email_sent' })])} />);
+    expect(screen.getByRole('list').querySelector('.crm-tl-body')).toBeNull();
+  });
+});

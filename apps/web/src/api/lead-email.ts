@@ -1,11 +1,13 @@
-import type { LeadEmailSent } from '@wings/shared';
+import type { LeadEmailComposeInput, LeadEmailSent } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client.js';
 
-/** E-mail to the lead from the deal's page (templates only; test mode records, nothing leaves). */
+/** E-mail to the lead from the deal's page (written there, or from a template; test mode records, nothing leaves). */
 
 export interface LeadEmails {
   to: string | null;
+  /** Where "Escrever e-mail" may send to: the deal's e-mail first, then its other contacts'. */
+  addresses: { email: string; name: string | null; primary: boolean }[];
   /** Expansão with a brand: no e-mail leaves (the lead must not see the Wings). */
   hidden: boolean;
   /** A "não me contate" by e-mail: why nothing can be sent, or null. */
@@ -34,10 +36,8 @@ export function useEmailPreview(id: string) {
 export function useSendEmail(id: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (templateId: string) =>
-      api.post<{ outboxId: string; mode: 'test' | 'smtp' | 'gmail' }>(`/leads/${id}/emails`, {
-        templateId,
-      }),
+    mutationFn: (input: LeadEmailComposeInput) =>
+      api.post<{ outboxId: string; mode: 'test' | 'smtp' | 'gmail' }>(`/leads/${id}/emails`, input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['leads', 'emails', id] });
       void queryClient.invalidateQueries({ queryKey: ['leads', 'one', id] });
