@@ -28,6 +28,7 @@ Um índice único parcial (tenant, canal, chave, valor) onde `revoked_at` é nul
 | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
 | Modelo de WhatsApp (pela negociação ou pela conversa), por qualquer número da Central (oficial ou de trabalho) | `apps/api/src/modules/whatsapp/routes.ts` (`send`)                 | 409 `contact_blocked` com o motivo; `opted_out` continua para quem disse SAIR. Conversa sem negociação: conferida pelo telefone |
 | Pedido de permissão para ligar, manual                                                                         | idem                                                               | 409 `contact_blocked`                                                                                                           |
+| Áudio gravado na conversa (t084), por qualquer número da Central | `apps/api/src/modules/whatsapp/routes.ts` (`send`) | 409 `contact_blocked`, SAIR incluído; nada fica nos arquivos nem vai para a Meta |
 | Pedido de permissão para ligar, automático ("Prefiro uma ligação")                                             | `apps/api/src/modules/whatsapp/intake.ts` (`answerCallRequest`)    | nada sai; a tarefa de ligar para o dono continua                                                                                |
 | Ligação pelo WhatsApp                                                                                          | `apps/api/src/modules/whatsapp/call-routes.ts`                     | canal WhatsApp **ou** telefone; 409 `contact_blocked`                                                                           |
 | E-mail ao lead: manual (modelo ou texto livre), regra de automação e passo de sequência                          | `apps/api/src/modules/leads/automations.ts` (`sendToLead`, também no endereço escolhido) | manual 409 `contact_blocked`; automação e sequência ficam `skipped` com `reason: contact_blocked`; nada no outbox               |
@@ -39,7 +40,7 @@ Todo bloqueio deixa `lead.contact_blocked` na linha do tempo (canal, caminho, or
 
 **Fica como está:**
 
-- Resposta digitada por uma pessoa dentro da janela de 24 h (a pessoa escreveu primeiro), e arquivo da negociação enviado pela Central, que também só vai dentro da janela: só a trava atual da prospecção (`whatsapp_no_opt_in`) e a janela, sem mudança.
+- Resposta digitada por uma pessoa dentro da janela de 24 h (a pessoa escreveu primeiro), e arquivo da negociação enviado pela Central, que também só vai dentro da janela: só a trava atual da prospecção (`whatsapp_no_opt_in`) e a janela, sem mudança. O áudio gravado na tela é a exceção (t084, opção mais segura): bloqueia mesmo dentro da janela.
 - Ligação pelo celular do vendedor e e-mail fora do sistema: o sistema não controla; o selo avisa.
 - Resumo de reunião ao franqueador (`meetings/routes.ts`): vai para um cliente, não para um lead.
 
@@ -67,4 +68,4 @@ Só gerência e diretoria (`leads.assign` com escopo todos: Admin Master, Direto
 
 ## Testes
 
-`contact-block.test.ts` (normalização, idempotência, canais, fontes antigas, regra da prospecção, revogação); `whatsapp.test.ts`, `central-contact-block.test.ts` (número de trabalho e conversa sem negociação), `calls.test.ts`, `lead-email.test.ts`, `automations.test.ts`, `sofia.test.ts`, `prospecting.test.ts`, `maps-prospecting.test.ts` (um por caminho); na web, `ContactOptOutStrip.test.tsx` e `LeadEmailTab.test.tsx`.
+`contact-block.test.ts` (normalização, idempotência, canais, fontes antigas, regra da prospecção, revogação); `whatsapp.test.ts`, `central-contact-block.test.ts` (número de trabalho e conversa sem negociação), `voice-send.test.ts` (áudio gravado), `calls.test.ts`, `lead-email.test.ts`, `automations.test.ts`, `sofia.test.ts`, `prospecting.test.ts`, `maps-prospecting.test.ts` (um por caminho); na web, `ContactOptOutStrip.test.tsx` e `LeadEmailTab.test.tsx`.
