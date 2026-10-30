@@ -297,7 +297,6 @@ export function fakeGoogle(options: FakeGoogleOptions = {}) {
             : {}),
           historyId: String(historyPoint),
           ...(offset + size < after.length ? { nextPageToken: String(offset + size) } : {}),
-
         });
       }
       if (u.pathname === '/gmail/v1/users/me/messages') {

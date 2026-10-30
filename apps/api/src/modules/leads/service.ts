@@ -40,7 +40,20 @@ import {
   type LeadSourceRuleKind,
   type ScoreCriterion,
 } from '@wings/shared';
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, notInArray, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  notInArray,
+  or,
+  sql,
+} from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   adAds,
