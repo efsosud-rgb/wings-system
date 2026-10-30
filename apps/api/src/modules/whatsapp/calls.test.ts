@@ -1,17 +1,20 @@
 import { createHmac } from 'node:crypto';
 import { SESSION_COOKIE, type DealWhatsApp, type RoleKey, type WaCall } from '@wings/shared';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
 import {
+  clients,
   leadActivities,
   leadEvents,
   leads,
   leadTasks,
   waCalls,
   waContacts,
+  waMessages,
+  waTemplates,
 } from '../../db/schema/index.js';
 import { recordContactOptOut } from '../leads/contact-block.js';
 import { loadEnv } from '../../env.js';
@@ -813,6 +816,172 @@ describe('"Prefiro uma ligação" on a template (Eric, 26/10)', () => {
     const second = await deal('5521977200003', owner.id);
     await tap('5521977200003', 'wamid.CALLME4');
     expect(await callTasks(second)).toHaveLength(1);
+    expect(posts).toHaveLength(0);
+  });
+});
+
+describe('asking for the call permission by template, outside the 24 h (d-t033)', () => {
+  const body = (text: string) => [{ type: 'BODY', text }, { type: 'CALL_PERMISSION_REQUEST' }];
+  beforeAll(async () => {
+    await db
+      .insert(waTemplates)
+      .values({
+        name: 'wings_formatacao_pedir_ligacao',
+        language: 'pt_BR',
+        category: 'MARKETING',
+        status: 'APPROVED',
+        components: body(
+          'Olá, {{1}}! Aqui é {{2}}, da Wings Company. Posso te ligar por aqui, pelo WhatsApp, para conversarmos sobre a formatação da sua franquia? Se puder, é só autorizar no botão abaixo.',
+        ),
+      })
+      .onConflictDoNothing();
+  });
+  const preview = (cookies: Record<string, string>, leadId: string) =>
+    app.inject({
+      method: 'POST',
+      url: `/leads/${leadId}/whatsapp/call-permission/preview`,
+      cookies,
+    });
+  const ask = (cookies: Record<string, string>, leadId: string, payload: unknown) =>
+    app.inject({
+      method: 'POST',
+      url: `/leads/${leadId}/whatsapp/call-permission`,
+      cookies,
+      payload: payload as Record<string, unknown>,
+    });
+  async function previewed(cookies: Record<string, string>, leadId: string) {
+    const response = await preview(cookies, leadId);
+    expect(response.statusCode).toBe(200);
+    const { preview: shown } = response.json<{
+      preview: { sendAs: 'free' | 'template'; charged: boolean; fields: { value: string }[] };
+    }>();
+    return {
+      shown,
+      template: {
+        params: shown.fields.map((f) => f.value),
+        expect: { sendAs: shown.sendAs, charged: shown.charged },
+      },
+    };
+  }
+
+  it('previews the Wings template, sends it once, marks it requested, and takes the reply', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977300001', owner.id);
+    const { shown, template } = await previewed(owner.cookies, leadId);
+    expect(shown).toMatchObject({
+      sendAs: 'template',
+      charged: true,
+      version: 'wings_formatacao_pedir_ligacao',
+    });
+    expect(posts).toHaveLength(0); // a preview sends nothing
+
+    const sent = await ask(owner.cookies, leadId, { template });
+    expect(sent.statusCode).toBe(201);
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toMatchObject({
+      to: '5521977300001',
+      type: 'template',
+      template: { name: 'wings_formatacao_pedir_ligacao', language: { code: 'pt_BR' } },
+    });
+    let thread = (
+      await app.inject({ method: 'GET', url: `/leads/${leadId}/whatsapp`, cookies: owner.cookies })
+    ).json<DealWhatsApp>();
+    expect(thread.callPermission.status).toBe('requested');
+
+    // Meta's 1 a day: neither a second preview nor a second send, and nothing reaches Meta.
+    for (const again of [
+      await preview(owner.cookies, leadId),
+      await ask(owner.cookies, leadId, { template }),
+    ]) {
+      expect(again.statusCode).toBe(429);
+      expect(again.json()).toMatchObject({ error: 'call_request_limit' });
+    }
+    expect(posts).toHaveLength(1);
+
+    await deliver(
+      {
+        contacts: [{ profile: { name: 'Elena' }, wa_id: '5521977300001' }],
+        messages: [
+          {
+            from: '5521977300001',
+            id: 'wamid.T033R',
+            timestamp: unix(new Date()),
+            type: 'interactive',
+            interactive: {
+              type: 'call_permission_reply',
+              call_permission_reply: {
+                response: 'accept',
+                is_permanent: true,
+                response_source: 'user_action',
+              },
+            },
+          },
+        ],
+      },
+      'messages',
+    );
+    thread = (
+      await app.inject({ method: 'GET', url: `/leads/${leadId}/whatsapp`, cookies: owner.cookies })
+    ).json<DealWhatsApp>();
+    expect(thread.callPermission.status).toBe('permanent');
+  });
+
+  it('refuses the third request of the week, even a day apart', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977300002', owner.id);
+    const { template } = await previewed(owner.cookies, leadId);
+    expect((await ask(owner.cookies, leadId, { template })).statusCode).toBe(201);
+    // Both requests of this week moved back two days: past the daily limit, inside the weekly one.
+    const [contact] = await db
+      .select()
+      .from(waContacts)
+      .where(eq(waContacts.phone, '5521977300002'));
+    await db
+      .update(waMessages)
+      .set({ createdAt: sql`now() - interval '2 days'` })
+      .where(eq(waMessages.contactId, contact!.id));
+    expect((await ask(owner.cookies, leadId, { template })).statusCode).toBe(201);
+    await db
+      .update(waMessages)
+      .set({ createdAt: sql`now() - interval '2 days'` })
+      .where(eq(waMessages.contactId, contact!.id));
+    const third = await ask(owner.cookies, leadId, { template });
+    expect(third.statusCode).toBe(429);
+    expect(third.json().message).toContain('2 vezes por semana');
+    expect(posts).toHaveLength(2);
+  });
+
+  it('a "não me contate" stops the template request before Meta', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977300003', owner.id);
+    const { template } = await previewed(owner.cookies, leadId);
+    await recordContactOptOut(db, {
+      leadId,
+      channels: ['whatsapp'],
+      origin: 'crm',
+      reason: 'Pediu',
+      createdBy: owner.id,
+    });
+    const refused = await ask(owner.cookies, leadId, { template });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({ error: 'contact_blocked' });
+    expect(posts).toHaveLength(0);
+  });
+
+  it('a brand’s lead gets the Expansão template, not yet approved here: refused, nothing sent', async () => {
+    const owner = await sessionFor('admin_master');
+    const leadId = await deal('5521977300004', owner.id);
+    const [brand] = await db
+      .insert(clients)
+      .values({ name: 'Marca T033', slug: 'marca-t033', number: 933, relationship: 'expansao' })
+      .returning({ id: clients.id });
+    await db
+      .update(leads)
+      .set({ pipeline: 'expansao', clientId: brand!.id })
+      .where(eq(leads.id, leadId));
+    const response = await preview(owner.cookies, leadId);
+    expect(response.statusCode).toBe(422);
+    expect(response.json().message).toContain('expansao_pedir_ligacao');
     expect(posts).toHaveLength(0);
   });
 });
