@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import type { LeadEmailAttachment } from '@wings/shared';
 import {
   boolean,
   check,
@@ -171,6 +172,10 @@ export const crmEmailOutbox = pgTable(
     /** Gmail's own ids, to find the thread the lead answers in. */
     gmailMessageId: text('gmail_message_id'),
     gmailThreadId: text('gmail_thread_id'),
+    /** Who it went to (the lead or another contact of the deal); null on rows from before 30/10/2026. */
+    toEmail: text('to_email'),
+    /** The deal's files that went with it: id, name and size; never the bytes. */
+    attachments: jsonb('attachments').$type<LeadEmailAttachment[]>().notNull().default([]),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index('crm_email_outbox_lead_idx').on(table.leadId, table.createdAt)],

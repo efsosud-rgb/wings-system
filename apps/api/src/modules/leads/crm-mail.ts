@@ -3,7 +3,7 @@ import type { Database } from '../../db/client.js';
 import { employees } from '../../db/schema/index.js';
 import type { Env } from '../../env.js';
 import { createMailer, type Mailer } from '../../lib/mailer.js';
-import { newMessageId, sendGmail } from '../google-workspace/gmail.js';
+import { newMessageId, sendGmail, type MailAttachment } from '../google-workspace/gmail.js';
 import { GoogleOAuthError } from '../google-workspace/oauth.js';
 import {
   accessTokenFor,
@@ -47,6 +47,7 @@ export interface CrmMailTransport {
     senderEmployeeId: string | null;
     threadId?: string | null;
     inReplyTo?: string | null;
+    attachments?: MailAttachment[];
   }): Promise<CrmMailSent>;
   /** The address a message of this person would leave from; null in test mode or with nobody able to send. */
   senderOf(employeeId: string | null): Promise<string | null>;
@@ -103,7 +104,12 @@ export function createCrmMailTransport(
   const domain = domainOf(settings);
   const companyFrom = settings.SMTP_FROM ?? null;
 
-  const viaSmtp = async (mail: { to: string; subject: string; text: string }) => {
+  const viaSmtp = async (mail: {
+    to: string;
+    subject: string;
+    text: string;
+    attachments?: MailAttachment[];
+  }) => {
     if (!smtp.enabled) throw new Error('smtp_not_configured');
     const messageId = newMessageId(domain);
     await smtp.send({
@@ -111,6 +117,7 @@ export function createCrmMailTransport(
       subject: mail.subject,
       text: mail.text,
       html: htmlOf(mail.text),
+      attachments: mail.attachments,
     });
     return {
       mode: 'smtp' as const,
@@ -167,6 +174,7 @@ export function createCrmMailTransport(
         messageId,
         threadId: mail.threadId ?? null,
         inReplyTo: mail.inReplyTo ?? null,
+        attachments: mail.attachments,
       });
       return { mode: 'gmail', fromEmail: sender.email, messageId, ...sent };
     },
