@@ -1053,7 +1053,7 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
           ? await keepVoice(request, target.leadId, outgoing.recording)
           : null;
       if (kept && !kept.ok) return reply.status(kept.status).send(kept.body);
-      const fileId = kept ? kept.fileId : (outgoing as { fileId: string }).fileId;
+      const fileId = outgoing.kind === 'media' ? outgoing.fileId : kept!.fileId;
       const caption = outgoing.kind === 'media' ? outgoing.caption : '';
       // One of the deal's files, and one the sender may open: the deal's link route asks the
       // same, so a file of another department attached to the deal never leaves through here.
