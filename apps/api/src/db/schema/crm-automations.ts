@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import type { LeadEmailAttachment } from '@wings/shared';
+import type { LeadEmailAttachment, LeadEmailReceivedAttachment } from '@wings/shared';
 import {
   boolean,
   check,
@@ -181,6 +181,51 @@ export const crmEmailOutbox = pgTable(
   (table) => [index('crm_email_outbox_lead_idx').on(table.leadId, table.createdAt)],
 );
 
+/**
+ * A lead's e-mail read from a seller's Gmail (t083): a reply to an e-mail the system sent (same
+ * thread, or citing our Message-ID), or one from a contact of the deal. Nothing else of the mailbox
+ * is kept. The text lives only here, in the deal: never in a log, a report or the dw (`wings_ro`
+ * has no grant on this table).
+ */
+export const crmEmailInbound = pgTable(
+  'crm_email_inbound',
+  {
+    tenantId: tenantId(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    leadId: uuid('lead_id')
+      .notNull()
+      .references(() => leads.id),
+    /** Whose Gmail it was read from: Gmail's ids below are of that mailbox. */
+    mailboxEmployeeId: uuid('mailbox_employee_id')
+      .notNull()
+      .references(() => employees.id),
+    gmailMessageId: text('gmail_message_id').notNull(),
+    gmailThreadId: text('gmail_thread_id').notNull(),
+    /** Its own RFC 5322 Message-ID: our answer cites it in In-Reply-To. */
+    messageId: text('message_id'),
+    /** The system's e-mail it answers, when it answers one. */
+    outboxId: uuid('outbox_id').references(() => crmEmailOutbox.id),
+    /** thread | in_reply_to | contact: why it came in. */
+    matchedBy: text('matched_by').notNull(),
+    fromEmail: text('from_email').notNull(),
+    fromName: text('from_name'),
+    subject: text('subject').notNull(),
+    body: text('body').notNull(),
+    receivedAt: timestamp('received_at', { withTimezone: true }).notNull(),
+    attachments: jsonb('attachments').$type<LeadEmailReceivedAttachment[]>().notNull().default([]),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // A message read twice (a repeated pass, the same page again) is kept once.
+    uniqueIndex('crm_email_inbound_gmail_uq').on(table.mailboxEmployeeId, table.gmailMessageId),
+    // The same reply in two sellers' mailboxes (copied to both) is kept once per deal.
+    uniqueIndex('crm_email_inbound_message_uq')
+      .on(table.leadId, table.messageId)
+      .where(sql`message_id is not null`),
+    index('crm_email_inbound_lead_idx').on(table.leadId, table.receivedAt),
+  ],
+);
+
 /** The panel's notices to a person: the message is the rule's own text, never the lead's data. */
 export const crmNotifications = pgTable(
   'crm_notifications',
@@ -191,7 +236,7 @@ export const crmNotifications = pgTable(
       .notNull()
       .references(() => employees.id),
     leadId: uuid('lead_id').references(() => leads.id),
-    /** automation | first_contact_overdue | task_overdue | stage_stuck | new_lead | lead_unassigned | lead_whatsapp | backfill_assigned | backfill_unassigned | meeting_soon */
+    /** automation | first_contact_overdue | task_overdue | stage_stuck | new_lead | lead_unassigned | lead_whatsapp | lead_email | backfill_assigned | backfill_unassigned | meeting_soon */
     kind: text('kind').notNull(),
     message: text('message').notNull(),
     /** One notice per condition and person: a later pass finding the same overdue task adds nothing. */

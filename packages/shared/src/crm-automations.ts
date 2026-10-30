@@ -189,6 +189,33 @@ export interface LeadEmailSent {
   /** Who it went to; null on messages recorded before free-text e-mail (they went to the lead). */
   toEmail: string | null;
   attachments: LeadEmailAttachment[];
+  /** The conversation it belongs to (one Gmail thread); replies with the same key show under it. */
+  conversation: string;
+}
+
+/** An attachment of a reply: in the deal's files (`fileId`), or refused and not kept (`refused`). */
+export interface LeadEmailReceivedAttachment {
+  fileId: string | null;
+  name: string;
+  byteSize: number;
+  /** Why it was not kept: a program or script, past the 20 MB (or 10 files), or storage off. */
+  refused: 'file_type' | 'too_large' | 'unavailable' | null;
+}
+
+/** A lead's e-mail read from the seller's Gmail (t083): a reply to the system's e-mail, or from a contact of the deal. */
+export interface LeadEmailReceived {
+  id: string;
+  /** Who wrote it: the name in the From header, and the address. */
+  fromName: string | null;
+  fromEmail: string;
+  subject: string;
+  /** The text without the quoted older messages, when they could be told apart. */
+  body: string;
+  at: string;
+  attachments: LeadEmailReceivedAttachment[];
+  conversation: string;
+  /** Whose Gmail it was read from. */
+  mailboxName: string | null;
 }
 
 // --- free-text e-mail from the deal (t081, Eric 30/10/2026) --------------------------------
@@ -235,6 +262,8 @@ export const leadEmailComposeSchema = z.object({
     .array(z.uuid())
     .max(EMAIL_ATTACHMENTS_MAX_COUNT, `No máximo ${EMAIL_ATTACHMENTS_MAX_COUNT} anexos`)
     .default([]),
+  /** The lead's e-mail this one answers (t083): it goes in the same conversation. */
+  replyToId: z.uuid().nullable().default(null),
 });
 export type LeadEmailComposeInput = z.input<typeof leadEmailComposeSchema>;
 

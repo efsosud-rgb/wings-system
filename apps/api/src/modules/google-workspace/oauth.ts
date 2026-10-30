@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { GMAIL_READ_SCOPE } from '@wings/shared';
 
 /**
  * Google's OAuth 2.0 code flow for one person (docs/integracoes/google-workspace.md).
@@ -6,7 +7,9 @@ import { createHash, randomBytes } from 'node:crypto';
  * Plain `fetch` against Google's endpoints, like the Google Ads and GA4 clients:
  * no library. The scopes are the smallest set that creates events with a Meet
  * on any calendar the person can write to, finds the shared Wings Company
- * calendar, sends mail as the person and names the account that consented.
+ * calendar, sends mail as the person, reads the leads' replies in their
+ * mailbox (`gmail.readonly`, the narrowest scope that reaches a message's
+ * text and attachments; t083) and names the account that consented.
  * Nothing here logs a token, a code or an address.
  */
 
@@ -20,6 +23,7 @@ export const GOOGLE_WORKSPACE_SCOPES = [
   'https://www.googleapis.com/auth/calendar.events',
   'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
   'https://www.googleapis.com/auth/gmail.send',
+  GMAIL_READ_SCOPE,
 ] as const;
 
 export class GoogleOAuthError extends Error {

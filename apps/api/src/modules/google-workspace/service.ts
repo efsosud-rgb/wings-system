@@ -1,4 +1,4 @@
-import type { GoogleWorkspaceStatus } from '@wings/shared';
+import { GMAIL_READ_SCOPE, type GoogleWorkspaceStatus } from '@wings/shared';
 import { eq, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { googleWorkspaceConnections } from '../../db/schema/index.js';
@@ -248,6 +248,20 @@ export async function accessTokenFor(
   });
 }
 
+/** Whether the leads' replies are read from this mailbox, or the person must connect once more to allow it. */
+export const mailReadOf = (deps: GoogleWorkspaceDeps | null, scopes: string[]) =>
+  deps?.env.CRM_EMAIL_REPLIES_ENABLED !== 'true'
+    ? ('off' as const)
+    : scopes.includes(GMAIL_READ_SCOPE)
+      ? ('on' as const)
+      : ('reconnect' as const);
+
+/** `mailReadOf` for one person, from their stored consent (no call to Google). */
+export async function mailReadFor(deps: GoogleWorkspaceDeps | null, employeeId: string) {
+  const row = deps ? await connectionOf(deps, employeeId) : undefined;
+  return row?.state === 'connected' ? mailReadOf(deps, row.scopes) : ('off' as const);
+}
+
 /** What the account page shows: connected as whom, and which calendars events may go to. */
 export async function statusFor(
   deps: GoogleWorkspaceDeps | null,
@@ -261,6 +275,7 @@ export async function statusFor(
     calendars: { mine: null, wings: null },
     wingsCalendarConfigured: Boolean(deps?.env.GOOGLE_WORKSPACE_WINGS_CALENDAR_ID),
     lastError: null,
+    mailRead: 'off',
   };
   if (!deps) return base;
   const row = await connectionOf(deps, employeeId);
@@ -268,6 +283,7 @@ export async function statusFor(
   base.lastError = row.lastError;
   base.email = row.googleEmail;
   base.scopes = row.scopes;
+  base.mailRead = mailReadOf(deps, row.scopes);
   if (row.state === 'needs_reconnect') return { ...base, state: 'needs_reconnect' };
   if (row.state !== 'connected' || !row.refreshTokenEnc) {
     return { ...base, state: row.pending ? 'pending' : 'disconnected' };

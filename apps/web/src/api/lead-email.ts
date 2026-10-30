@@ -1,4 +1,4 @@
-import type { LeadEmailComposeInput, LeadEmailSent } from '@wings/shared';
+import type { LeadEmailComposeInput, LeadEmailReceived, LeadEmailSent } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client.js';
 
@@ -17,6 +17,10 @@ export interface LeadEmails {
   from: string | null;
   templates: { id: string; name: string }[];
   sent: LeadEmailSent[];
+  /** The lead's e-mails read from the sellers' Gmail (t083), each in the conversation it answers. */
+  received: LeadEmailReceived[];
+  /** `reconnect`: this person must connect their Google account once more for the replies to come in. */
+  mailRead: 'on' | 'reconnect' | 'off';
 }
 
 export function useLeadEmails(id: string) {

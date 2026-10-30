@@ -1,6 +1,7 @@
 import {
   endOfBusinessDay,
   LEAD_PIPELINE_LABELS,
+  type EmailReplyPopup,
   type LeadPipeline,
   type NewLeadPopups,
 } from '@wings/shared';
@@ -22,6 +23,7 @@ import {
 } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { LEAD_ADMIN_ROLE_KEYS } from './access.js';
+import { contactBlock } from './contact-block.js';
 import { firstContactOverdueSql, inEntryStageSql, LEADS_ID, trackedTaskSql } from './crm.js';
 import { originOf } from './crm-notice-mail.js';
 import {
@@ -482,7 +484,8 @@ export async function newLeadPopupsOf(
     .orderBy(desc(crmNotifications.createdAt))
     .limit(POPUP_LIMIT);
   const earlierCount = earlier?.total ?? 0;
-  if (rows.length === 0) return { leads: [], earlierCount };
+  const emailReplies = await emailReplyPopupsOf(db, employeeId, recentSince);
+  if (rows.length === 0) return { leads: [], earlierCount, emailReplies };
   const due = new Map(
     (
       await db
@@ -510,7 +513,46 @@ export async function newLeadPopupsOf(
     firstContactDueAt: due.get(row.leadId)?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
   }));
-  return { leads: popups, earlierCount };
+  return { leads: popups, earlierCount, emailReplies };
+}
+
+/**
+ * The same pop-up for a lead's e-mail reply (t083): this person's unread `lead_email` notices of the
+ * last `POPUP_RECENT_MS`, with the deal's "não me contate" by e-mail when it has one. First name only.
+ */
+async function emailReplyPopupsOf(
+  db: Database,
+  employeeId: string,
+  recentSince: Date,
+): Promise<EmailReplyPopup[]> {
+  const rows = await db
+    .select({
+      noticeId: crmNotifications.id,
+      createdAt: crmNotifications.createdAt,
+      leadId: leads.id,
+      name: leads.name,
+    })
+    .from(crmNotifications)
+    .innerJoin(leads, eq(leads.id, crmNotifications.leadId))
+    .where(
+      and(
+        eq(crmNotifications.recipientEmployeeId, employeeId),
+        eq(crmNotifications.kind, 'lead_email'),
+        isNull(crmNotifications.readAt),
+        gte(crmNotifications.createdAt, recentSince),
+      ),
+    )
+    .orderBy(desc(crmNotifications.createdAt))
+    .limit(POPUP_LIMIT);
+  return Promise.all(
+    rows.map(async (row) => ({
+      noticeId: row.noticeId,
+      leadId: row.leadId,
+      firstName: firstNameOf(row.name),
+      createdAt: row.createdAt.toISOString(),
+      blocked: (await contactBlock(db, 'email', { leadId: row.leadId })).reason,
+    })),
+  );
 }
 
 export async function markRead(db: Database, employeeId: string, ids: string[] | 'all') {

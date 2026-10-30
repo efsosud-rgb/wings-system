@@ -26,6 +26,8 @@ const base: LeadEmails = {
   from: 'daniele@wingscompany.com.br',
   templates: [{ id: 't1', name: 'Boas-vindas' }],
   sent: [],
+  received: [],
+  mailRead: 'on',
 };
 
 const state = {
@@ -113,6 +115,7 @@ describe('LeadEmailTab', () => {
         text: 'Segue a tabela.',
         templateId: null,
         fileIds: ['f2'],
+        replyToId: null,
       },
       expect.anything(),
     );
@@ -184,6 +187,7 @@ describe('LeadEmailTab', () => {
           fromEmail: 'daniele@wingscompany.com.br',
           toEmail: 'socio@exemplo.com.br',
           attachments: [{ fileId: 'f1', name: 'proposta.pdf', byteSize: 2048 }],
+          conversation: 't:thr1',
         },
       ],
     };
@@ -191,6 +195,95 @@ describe('LeadEmailTab', () => {
     expect(screen.getByText(/Proposta · .* · Daniele · Enviado · 1 anexo/)).toBeTruthy();
     expect(screen.getByText('Para: socio@exemplo.com.br')).toBeTruthy();
     expect(screen.getByText(/Anexos: proposta\.pdf \(2/)).toBeTruthy();
+  });
+
+  it('shows the lead’s reply in the conversation of the e-mail sent, and answers it there', () => {
+    state.emails = {
+      ...base,
+      sent: [
+        {
+          id: 'o1',
+          subject: 'Proposta',
+          body: 'Segue.',
+          mode: 'gmail',
+          status: 'sent',
+          at: '2026-10-30T12:00:00.000Z',
+          templateName: null,
+          sentByName: 'Daniele',
+          fromEmail: 'daniele@wingscompany.com.br',
+          toEmail: 'paula@exemplo.com.br',
+          attachments: [],
+          conversation: 't:thr1',
+        },
+        {
+          id: 'o2',
+          subject: 'Outro assunto',
+          body: 'Outro.',
+          mode: 'gmail',
+          status: 'sent',
+          at: '2026-10-30T09:00:00.000Z',
+          templateName: null,
+          sentByName: 'Daniele',
+          fromEmail: 'daniele@wingscompany.com.br',
+          toEmail: 'paula@exemplo.com.br',
+          attachments: [],
+          conversation: 't:thr0',
+        },
+      ],
+      received: [
+        {
+          id: 'r1',
+          fromName: 'Paula',
+          fromEmail: 'paula@exemplo.com.br',
+          subject: 'Re: Proposta',
+          body: 'Gostei, vamos conversar.',
+          at: '2026-10-30T13:00:00.000Z',
+          attachments: [
+            { fileId: 'f9', name: 'contrato.pdf', byteSize: 2048, refused: null },
+            { fileId: null, name: 'setup.exe', byteSize: 10, refused: 'file_type' },
+          ],
+          conversation: 't:thr1',
+          mailboxName: 'Daniele',
+        },
+      ],
+    };
+    render(<LeadEmailTab leadId="l1" />);
+    const conversations = within(screen.getByRole('list', { name: 'Conversas' }))
+      .getAllByRole('listitem')
+      .filter((li) => li.querySelector('strong'));
+    // The conversation with the reply is on top, the reply under the e-mail it answers.
+    expect(conversations[0]!.querySelector('strong')!.textContent).toBe('Conversa: Proposta');
+    expect(
+      within(conversations[0]!).getByText(/Re: Proposta · .* · Recebido de Paula/),
+    ).toBeTruthy();
+    expect(within(conversations[0]!).getByText('Gostei, vamos conversar.')).toBeTruthy();
+    expect(
+      within(conversations[0]!).getByText(
+        /contrato\.pdf \(2.*setup\.exe .* não guardado: programa/,
+      ),
+    ).toBeTruthy();
+    expect(conversations[1]!.querySelector('strong')!.textContent).toBe('Conversa: Outro assunto');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Responder' }));
+    expect(screen.getByText(/Respondendo a “Re: Proposta”/)).toBeTruthy();
+    type('Texto', 'Combinado.');
+    fireEvent.submit(screen.getByRole('form', { name: 'Escrever e-mail' }));
+    expect(state.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: 'paula@exemplo.com.br',
+        subject: 'Re: Proposta',
+        replyToId: 'r1',
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('asks a person connected before the reading to connect again', () => {
+    state.emails = { ...base, mailRead: 'reconnect' };
+    render(<LeadEmailTab leadId="l1" />);
+    expect(
+      screen.getByText(/Reconecte sua conta Google para receber os e-mails dos leads/),
+    ).toBeTruthy();
   });
 
   it('a "não me contate" by e-mail disables the send and says why', () => {

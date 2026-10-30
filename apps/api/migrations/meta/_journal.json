@@ -715,6 +715,13 @@
       "when": 1793371241535,
       "tag": "0103_crm_email_free_text",
       "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1793384110170,
+      "tag": "0104_crm_email_inbound",
+      "breakpoints": true
     }
   ]
 }

@@ -1,12 +1,23 @@
-import { leadEmailComposeSchema, leadHidesWings, type LeadEmailSent } from '@wings/shared';
+import {
+  leadEmailComposeSchema,
+  leadHidesWings,
+  type LeadEmailReceived,
+  type LeadEmailSent,
+} from '@wings/shared';
 import { and, desc, eq } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import { crmEmailOutbox, crmEmailTemplates, employees } from '../../db/schema/index.js';
+import {
+  crmEmailInbound,
+  crmEmailOutbox,
+  crmEmailTemplates,
+  employees,
+} from '../../db/schema/index.js';
 import { contactBlock } from './contact-block.js';
 import { writeAudit } from '../../lib/audit.js';
 import { storageOf } from '../../lib/storage/index.js';
 import { dealRouteAccessOf } from '../drive/access.js';
+import { googleWorkspaceDepsOf, mailReadFor } from '../google-workspace/service.js';
 import { leadInScope, type LeadPermission } from './access.js';
 import { renderForLead, sendTemplateToLead, sendToLead } from './automations.js';
 import { crmMailOf } from './crm-mail.js';
@@ -15,6 +26,10 @@ import { attachmentsFor, dealAddressesOf } from './lead-email.js';
 const idParam = z.object({ id: z.uuid() });
 const bodySchema = z.object({ templateId: z.uuid() });
 const invalid = { error: 'invalid_request', message: 'Dados inválidos' };
+/** One Gmail thread is one conversation; a message without a thread is a conversation of its own. */
+const conversationOf = (threadId: string | null, outboxId: string) =>
+  threadId ? `t:${threadId}` : `o:${outboxId}`;
+
 const notFound = (what = 'Negociação') => ({
   error: 'not_found',
   message: `${what} não encontrada.`,
@@ -34,6 +49,7 @@ const SEND_ERRORS = {
   file_not_found: [404, 'Anexo não encontrado nos arquivos desta negociação.'],
   file_type: [415, 'Programas e scripts não vão como anexo.'],
   too_large: [413, 'Os anexos passam de 20 MB juntos. Tire algum antes de enviar.'],
+  reply_not_found: [404, 'O e-mail respondido não é desta negociação.'],
 } as const;
 type SendError = keyof typeof SEND_ERRORS;
 
@@ -68,7 +84,7 @@ export const leadEmailRoutes: FastifyPluginAsync = async (app) => {
     if (!params.success) return reply.status(400).send(invalid);
     const lead = await visibleLead(request, params.data.id, 'leads.read');
     if (!lead) return reply.status(404).send(notFound());
-    const [templates, rows] = await Promise.all([
+    const [templates, rows, inbound] = await Promise.all([
       db
         .select({ id: crmEmailTemplates.id, name: crmEmailTemplates.name })
         .from(crmEmailTemplates)
@@ -87,12 +103,25 @@ export const leadEmailRoutes: FastifyPluginAsync = async (app) => {
           fromEmail: crmEmailOutbox.fromEmail,
           toEmail: crmEmailOutbox.toEmail,
           attachments: crmEmailOutbox.attachments,
+          gmailThreadId: crmEmailOutbox.gmailThreadId,
         })
         .from(crmEmailOutbox)
         .leftJoin(crmEmailTemplates, eq(crmEmailTemplates.id, crmEmailOutbox.templateId))
         .leftJoin(employees, eq(employees.id, crmEmailOutbox.sentBy))
         .where(eq(crmEmailOutbox.leadId, lead.id))
         .orderBy(desc(crmEmailOutbox.createdAt))
+        .limit(50),
+      db
+        .select({
+          inbound: crmEmailInbound,
+          mailboxName: employees.fullName,
+          outboxThread: crmEmailOutbox.gmailThreadId,
+        })
+        .from(crmEmailInbound)
+        .leftJoin(employees, eq(employees.id, crmEmailInbound.mailboxEmployeeId))
+        .leftJoin(crmEmailOutbox, eq(crmEmailOutbox.id, crmEmailInbound.outboxId))
+        .where(eq(crmEmailInbound.leadId, lead.id))
+        .orderBy(desc(crmEmailInbound.receivedAt))
         .limit(50),
     ]);
     const sent: LeadEmailSent[] = rows.map((r) => ({
@@ -107,7 +136,24 @@ export const leadEmailRoutes: FastifyPluginAsync = async (app) => {
       fromEmail: r.fromEmail,
       toEmail: r.toEmail,
       attachments: r.attachments,
+      conversation: conversationOf(r.gmailThreadId, r.id),
     }));
+    // The leads' e-mails read from the sellers' Gmail (t083), in the conversation they answer.
+    const received: LeadEmailReceived[] = inbound.map(
+      ({ inbound: r, mailboxName, outboxThread }) => ({
+        id: r.id,
+        fromName: r.fromName,
+        fromEmail: r.fromEmail,
+        subject: r.subject,
+        body: r.body,
+        at: r.receivedAt.toISOString(),
+        attachments: r.attachments,
+        conversation: r.outboxId
+          ? conversationOf(outboxThread, r.outboxId)
+          : `t:${r.gmailThreadId}`,
+        mailboxName,
+      }),
+    );
     const transport = crmMailOf(app.wings);
     return reply.send({
       to: lead.email,
@@ -122,6 +168,12 @@ export const leadEmailRoutes: FastifyPluginAsync = async (app) => {
       from: await transport.senderOf(request.session.actor.employeeId),
       templates,
       sent,
+      received,
+      // Reading the replies: `reconnect` asks this person to connect their Google account once more.
+      mailRead: await mailReadFor(
+        googleWorkspaceDepsOf(app.wings),
+        request.session.actor.employeeId,
+      ),
     });
   });
 
@@ -177,6 +229,14 @@ export const leadEmailRoutes: FastifyPluginAsync = async (app) => {
       body.fileIds,
     );
     if (!files.ok) return files;
+    // An answer goes in the lead's conversation: the thread is the sender's own mailbox's.
+    const answered = body.replyToId
+      ? await db.query.crmEmailInbound.findFirst({
+          where: and(eq(crmEmailInbound.id, body.replyToId), eq(crmEmailInbound.leadId, lead.id)),
+        })
+      : null;
+    if (body.replyToId && !answered)
+      return { ok: false as const, reason: 'reply_not_found' as const };
     return sendToLead(db, {
       lead,
       to,
@@ -187,6 +247,12 @@ export const leadEmailRoutes: FastifyPluginAsync = async (app) => {
       transport,
       runId: null,
       sentBy: actor,
+      reply: answered
+        ? {
+            threadId: answered.mailboxEmployeeId === actor ? answered.gmailThreadId : null,
+            inReplyTo: answered.messageId,
+          }
+        : undefined,
     });
   };
 
@@ -216,6 +282,7 @@ export const leadEmailRoutes: FastifyPluginAsync = async (app) => {
         templateId: body.data.templateId,
         composed: 'to' in body.data,
         fileIds,
+        replyToId: 'replyToId' in body.data ? body.data.replyToId : null,
         ...(outcome.ok
           ? { mode: outcome.mode, outboxId: outcome.outboxId }
           : { reason: outcome.reason }),

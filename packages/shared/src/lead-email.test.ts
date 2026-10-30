@@ -29,6 +29,7 @@ describe('leadEmailComposeSchema', () => {
       text: 'Texto',
       templateId: null,
       fileIds: [],
+      replyToId: null,
     });
     expect(leadEmailComposeSchema.safeParse({ to: 'x', subject: 'a', text: 'b' }).success).toBe(
       false,

@@ -40,6 +40,11 @@ export const googleWorkspaceConnections = pgTable(
     /** A code, never a provider message that could quote a credential. */
     lastError: text('last_error'),
     connectedAt: timestamp('connected_at', { withTimezone: true }),
+    /** Where the reading of the leads' replies stopped in this mailbox (Gmail's historyId); null before the first read. */
+    gmailHistoryId: text('gmail_history_id'),
+    gmailReadAt: timestamp('gmail_read_at', { withTimezone: true }),
+    /** The last read's failure as a code (history_expired, gmail_403…), never Google's text. */
+    gmailReadError: text('gmail_read_error'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
