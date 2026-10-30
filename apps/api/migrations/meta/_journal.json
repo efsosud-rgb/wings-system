@@ -575,6 +575,20 @@
       "when": 1791568313516,
       "tag": "0083_youtube_channel",
       "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1791572533254,
+      "tag": "0084_campaign_leads_from_wings_leads",
+      "breakpoints": true
+    },
+    {
+      "idx": 85,
+      "version": "7",
+      "when": 1791577144820,
+      "tag": "0085_crm_notification_email",
+      "breakpoints": true
     }
   ]
 }

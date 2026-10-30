@@ -26,7 +26,7 @@ O webhook continua como caminho rápido opcional. Cartão **Administração → 
 3. A **fila** (`modules/leads/meta-intake.ts`) roda no processo da API: acionada logo depois do webhook e a cada 60 s (retentativas). Para cada evento pendente:
    - lê o lead na Graph API (`GET /{leadgen_id}?fields=…`, token no header, nunca na URL) com `META_LEADS_ACCESS_TOKEN` (ou `META_WRITE_TOKEN`, se tiver `leads_retrieval`);
    - acha a regra do formulário (`lead_source_rules.kind = meta_form`, padrão = id do formulário), senão a da campanha (`meta_campaign`) → cliente, marca e funil. Sem regra: o lead entra "sem regra" na Wings Company e **não** vai ao RD (`rd_outcome = no_pipeline`);
-   - cria o lead ou **junta** ao que já tem o mesmo telefone ou e-mail (`upsertLead`), com a origem inteira: `campaign_id`/nome, `adset_id`, `ad_id`, `form_id`, `platform` (em `ad_platform = meta`, `ad_campaign_external_id`, `ad_set_external_id`, `ad_external_id`, `utm_source = meta:<plataforma>`), cidade e as outras respostas do formulário (`leads.city`, `leads.form_answers`; aparecem na tela do lead, nunca em evento ou log);
+   - cria o lead ou **junta** ao que já tem o mesmo telefone ou e-mail (`upsertLead`) — desde que esse lead esteja aberto e com dono ou etapa. Se o lead da pessoa está fechado (ganho ou perdido) ou ninguém o trabalha (sem dono e sem etapa, como um espelho antigo do RD), o formulário **abre uma negociação nova** no funil do formulário, na etapa de entrada, pelo rodízio, com a tarefa de primeiro contato e a cópia no RD; o contato é o mesmo (sem duplicar), e as duas linhas do tempo se apontam (`matched: reopened` + `reopenedFrom` na nova, `lead.reopened_as` na antiga). Entre vários leads do mesmo telefone, o mais antigo que alguém trabalha é o escolhido (`reopenClosed`, Eric 09/10: todo lead do formulário chega a um vendedor) — com a origem inteira: `campaign_id`/nome, `adset_id`, `ad_id`, `form_id`, `platform` (em `ad_platform = meta`, `ad_campaign_external_id`, `ad_set_external_id`, `ad_external_id`, `utm_source = meta:<plataforma>`), cidade e as outras respostas do formulário (`leads.city`, `leads.form_answers`; aparecem na tela do lead, nunca em evento ou log);
    - o lead já está no Wings aqui (o evento guarda `lead_id`); o que vem depois não desfaz isso;
    - **cópia no RD CRM**: Formatação → funil "Formatação", etapa "Sem contato"; Expansão → "Expansão", "Novo Contato" (dono = `EXPANSION_OWNER_RD_USER_ID`). Falha antes do POST (RD fora, leitura do mapa ou do contato) → `rd_outcome = failed`, `last_error = rd_failed`, e **só a cópia** é tentada de novo (sem reler a Graph), nos mesmos intervalos abaixo. Antes, procura o contato no RD por e-mail e telefone: com negócio **aberto**, só liga (`rd.deal_linked`), não cria outro. Origem do negócio: a primeira que existir no RD entre "Meta Lead Ads", "Facebook Lead Ads", "Lead Ads", "Facebook Ads" (nenhuma é criada); campanha do RD com o mesmo nome da campanha da Meta, se houver; campo OBS com plataforma, formulário, campanha, conjunto e anúncio (nunca a pessoa). **Um POST, nunca repetido**: se a chamada falhar depois de sair, fica `rd_outcome = unknown` para uma pessoa conferir.
 4. **Retentativas**: leitura da Graph que falha (5xx, 429, rede) volta em 1, 5, 15, 60, 180, 360, 720 e 1440 min; 4xx é definitivo (`failed`, `last_error = graph_4xx`). Sem token, os eventos esperam na fila (`no_token`), nada se perde. Lead sem telefone **e** sem e-mail não é criado (`no_contact_data`): não há como deduplicar nem contatar.
@@ -60,3 +60,22 @@ Referências: portfólio empresarial **795770645342879**; ativo do Leads Center 
 8. **Produção**: as mesmas variáveis no api de produção e a assinatura da Página apontando para `https://wingssystem.online/api/integrations/meta/leadgen/webhook`, só na janela de produção combinada.
 
 Enquanto o passo 3 não estiver feito, a fila guarda os eventos (`no_token`) e processa quando o token entrar: nenhum lead que chegou pelo webhook se perde. Leads que a Meta não entregar pelo webhook (webhook fora do ar) **não** são buscados nesta entrega; a leitura periódica `GET /{form_id}/leads` fica como rede de segurança da Fase 3 do plano.
+
+## Reprocessar um evento que ficou anexado a um lead fechado
+
+Antes da regra acima (09/10/2026), um formulário cujo telefone casava com um lead perdido ou sem dono era só anexado
+a ele e não chegava a vendedor nenhum. `leads-meta-reopen` passa um desses eventos de novo pelo caminho da fila:
+
+```
+node dist/scripts/leads-meta-reopen.js estado  --leadgen=<leadgen id>   # lê a fila e o lead ligado
+node dist/scripts/leads-meta-reopen.js simular --leadgen=<leadgen id>   # + Graph API, rodízio e RD; não grava nada
+node dist/scripts/leads-meta-reopen.js aplicar --leadgen=<leadgen id>   # grava; pede PRODUCAO digitado
+```
+
+Roda dentro do container da API (precisa do ambiente dela: `META_LEADS_ACCESS_TOKEN`, `RD_CRM_API_TOKEN`). Só aceita
+evento `done` que não criou o próprio lead e cujo lead ligado está fechado ou sem dono e sem etapa; qualquer outro
+devolve o motivo e não faz nada. `aplicar` limpa o resultado do evento, processa como chegada nova (negociação nova pelo
+rodízio, cópia no RD — negócio novo se o contato não tem negócio aberto no RD) e, como o formulário é antigo, cria a tarefa
+de primeiro contato e o aviso ao dono que a fila não criaria; grava `lead.meta_reprocessed` na auditoria. Se o
+processamento falhar, o evento volta a apontar para o lead que tinha. A saída traz ids, status e primeiro nome do
+vendedor, nunca a pessoa.

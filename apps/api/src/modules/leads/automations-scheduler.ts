@@ -3,10 +3,12 @@ import type { Database } from '../../db/client.js';
 import { processDueRuns } from './automations.js';
 import { runCrmAlerts } from './crm-alerts.js';
 import type { CrmMailTransport } from './crm-mail.js';
+import { sendPendingNoticeMails, type NoticeMailDeps, type NoticeMailResult } from './crm-notice-mail.js';
 
 /**
  * The CRM cycle, run by the API process: what is due in the automations, then
- * the deadline alerts. One cycle at a time in this process (`busy`) and across
+ * the deadline alerts, then the e-mail copy of the notices owed to the deal
+ * owners. One cycle at a time in this process (`busy`) and across
  * replicas (a transaction-level advisory lock held for the cycle: a replica
  * that does not get it simply skips this tick). Failures are logged by kind
  * only, never with a lead's data, and the next tick tries again.
@@ -26,6 +28,8 @@ export interface CycleDeps {
   db: Database;
   mail: CrmMailTransport;
   stageStuckDays: number;
+  /** The e-mail copy of the owner's notices; absent (older callers, tests) means none is sent. */
+  noticeMail?: NoticeMailDeps;
   log: (facts: Record<string, unknown>) => void;
 }
 
@@ -33,6 +37,7 @@ export interface CycleResult {
   ran: boolean;
   automations?: { done: number; skipped: number; failed: number };
   alerts?: { written: number };
+  noticeMails?: NoticeMailResult;
 }
 
 export async function runCrmCycle(deps: CycleDeps, now = new Date()): Promise<CycleResult> {
@@ -43,7 +48,10 @@ export async function runCrmCycle(deps: CycleDeps, now = new Date()): Promise<Cy
     if (!lock.rows[0]?.got) return { ran: false };
     const automations = await processDueRuns(deps.db, { mail: deps.mail, now: () => now });
     const alerts = await runCrmAlerts(deps.db, { stageStuckDays: deps.stageStuckDays }, now);
-    return { ran: true, automations, alerts };
+    const noticeMails = deps.noticeMail
+      ? await sendPendingNoticeMails(deps.db, deps.noticeMail, now)
+      : undefined;
+    return { ran: true, automations, alerts, noticeMails };
   });
 }
 
@@ -55,7 +63,12 @@ export function startCrmAutomationsScheduler(deps: CycleDeps & { cron?: string; 
     try {
       const result = await runCrmCycle(deps);
       if (result.ran)
-        deps.log({ job: 'crm-automations', ...result.automations, alerts: result.alerts?.written });
+        deps.log({
+          job: 'crm-automations',
+          ...result.automations,
+          alerts: result.alerts?.written,
+          mails: result.noticeMails,
+        });
     } catch (error) {
       deps.log({
         job: 'crm-automations',

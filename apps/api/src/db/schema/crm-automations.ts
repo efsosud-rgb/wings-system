@@ -191,6 +191,14 @@ export const crmNotifications = pgTable(
     dedupeKey: text('dedupe_key'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     readAt: timestamp('read_at', { withTimezone: true }),
+    /**
+     * The e-mail copy of this notice (crm-notice-mail.ts): `none` (the panel only, the default),
+     * `pending` (owed to the lead's owner), `sent`, `skipped` (with the reason) or `failed`.
+     */
+    emailState: text('email_state').notNull().default('none'),
+    emailedAt: timestamp('emailed_at', { withTimezone: true }),
+    /** Why it was skipped, or the failure as a code — never the address or the message. */
+    emailError: text('email_error'),
   },
   (table) => [
     uniqueIndex('crm_notifications_dedupe_uq').on(table.dedupeKey),
@@ -199,6 +207,9 @@ export const crmNotifications = pgTable(
       table.readAt,
       table.createdAt,
     ),
+    index('crm_notifications_email_pending_idx')
+      .on(table.createdAt)
+      .where(sql`email_state = 'pending'`),
   ],
 );
 

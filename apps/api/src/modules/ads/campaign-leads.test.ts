@@ -8,6 +8,7 @@ import {
   adAds,
   adCampaignDrafts,
   adCampaigns,
+  adSets,
   auditLog,
   campaignLeads,
 } from '../../db/schema/index.js';
@@ -177,9 +178,19 @@ beforeAll(async () => {
     payload: { utms: { utm_campaign: 'formatacao_jimmyogro_set26' } },
     campaignId: metaCampaign!.id,
   });
+  const [jimmySet] = await db
+    .insert(adSets)
+    .values({
+      campaignId: metaCampaign!.id,
+      externalId: 'as-1',
+      name: 'Conjunto Jimmy',
+      status: 'ACTIVE',
+    })
+    .returning();
   await db.insert(adAds).values({
     adAccountId: meta,
     campaignId: metaCampaign!.id,
+    adSetId: jimmySet!.id,
     externalId: 'ad-1',
     name: 'Vídeo Jimmy',
     status: 'ACTIVE',
@@ -361,6 +372,7 @@ describe('the list', () => {
     const one = body.leads.find((lead) => lead.name === 'Lead Um')!;
     expect(one).toMatchObject({
       campaignName: 'META | Formatação | 28Set',
+      adSetName: 'Conjunto Jimmy',
       adName: 'Vídeo Jimmy',
       attribution: 'utm',
       company: 'Padaria Um',

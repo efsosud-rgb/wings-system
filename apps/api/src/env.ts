@@ -175,6 +175,17 @@ const schema = z.object({
     (value) => value === undefined || /^\d{1,3}$/.test(value),
     'must be a whole number of hours',
   ),
+  /**
+   * CRM start of use, as YYYY-MM-DD (00:00 São Paulo). Only deals that entered on or after it count as
+   * "novas sem contato", get the first-contact task and raise its overdue alert; older ones are RD history.
+   * 2026-10-09 when unset (Eric, 09/10/2026).
+   */
+  CRM_TRACKING_START: optionalString.refine(
+    (value) =>
+      value === undefined ||
+      (/^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T03:00:00Z`))),
+    'must be a real day as YYYY-MM-DD',
+  ),
   /** CRM phase 1: the hourly ingestion follows RD CRM into the Funil (writes leads). Off until Eric approves the first import. */
   /** RD user ids whose deals keep their owner in the Funil (Eric, 05/10: Eric, Thais, Fernando); unset keeps every linked one. */
   CRM_RD_OWNER_USER_IDS: optionalString.refine(
@@ -206,6 +217,16 @@ const schema = z.object({
   CRM_STAGE_STUCK_DAYS: optionalString.refine(
     (value) => value === undefined || /^\d{1,3}$/.test(value),
     'must be a whole number of days',
+  ),
+  /**
+   * E-mail copy of two panel notices to the deal's owner, through the company
+   * SMTP (SMTP_*): a new lead that is theirs, and a first contact past the
+   * 1-business-hour SLA (docs/crm/avisos-por-email.md). Off when unset: the
+   * notices are marked skipped, never kept for the day it is switched on.
+   */
+  CRM_NOTICE_EMAIL_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
   ),
   CRM_RD_FOLLOW_ENABLED: optionalString.refine(
     (value) => value === undefined || value === 'true' || value === 'false',

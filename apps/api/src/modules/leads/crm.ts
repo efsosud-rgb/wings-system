@@ -50,18 +50,43 @@ const iso = (date: Date | null | undefined) => date?.toISOString() ?? null;
 export interface CrmConfig {
   /** Working hours a seller has to make the first contact after a lead lands on them; the auto task's due time. */
   firstContactSlaHours: number;
+  /**
+   * Start of use: only deals that ENTERED (`leads.entered_at`) on or after this moment count as "novas sem
+   * contato", carry a first-contact task and raise its overdue alert. Older deals are RD history and stay out.
+   */
+  trackingStart: Date;
 }
 
 /** Eric, 05/10/2026: one working hour (Mon–Fri, 9h–18h São Paulo); CRM_FIRST_CONTACT_SLA_HOURS overrides the number. */
 export const DEFAULT_FIRST_CONTACT_SLA_HOURS = 1;
 
-let config: CrmConfig = { firstContactSlaHours: DEFAULT_FIRST_CONTACT_SLA_HOURS };
+/**
+ * Eric, 09/10/2026: the team starts working on the system today. 00:00 São Paulo (UTC-3, no summer time since 2019);
+ * CRM_TRACKING_START (YYYY-MM-DD) moves it.
+ */
+export const DEFAULT_TRACKING_START = new Date('2026-10-09T03:00:00.000Z');
+
+let config: CrmConfig = {
+  firstContactSlaHours: DEFAULT_FIRST_CONTACT_SLA_HOURS,
+  trackingStart: DEFAULT_TRACKING_START,
+};
+
+/** The São Paulo midnight of a `YYYY-MM-DD` day, as an instant. */
+export const trackingStartOf = (day: string): Date => new Date(`${day}T03:00:00.000Z`);
 
 export function configureCrm(next: Partial<CrmConfig>): void {
   config = { ...config, ...next };
 }
 
 export const crmConfig = (): CrmConfig => config;
+
+/**
+ * SQL for a task counted by the counters, the lists and the alerts: a first-contact task only counts on a deal
+ * that entered since the start of use, or that was made since then by hand (`force`, see `ensureFirstContactTask`);
+ * every other kind (a person's own follow-up) always counts. Needs `leads` joined.
+ */
+export const trackedTaskSql = () =>
+  sql`(${leadTasks.kind} <> 'first_contact' or ${leads.enteredAt} >= ${config.trackingStart} or ${leadTasks.createdAt} >= ${config.trackingStart})`;
 
 /** Runs the hook for a lead that has just entered its stage (by a move or at birth); never throws. */
 export async function announceStageEntered(lead: typeof leads.$inferSelect): Promise<void> {
@@ -598,9 +623,9 @@ export async function listTasks(
   if (input.assigneeEmployeeId)
     conditions.push(eq(leadTasks.assigneeEmployeeId, input.assigneeEmployeeId));
   if (input.kind) conditions.push(eq(leadTasks.kind, input.kind));
-  if (input.status === 'open') conditions.push(isNull(leadTasks.doneAt));
+  if (input.status === 'open') conditions.push(isNull(leadTasks.doneAt), trackedTaskSql());
   if (input.status === 'overdue')
-    conditions.push(and(isNull(leadTasks.doneAt), lt(leadTasks.dueAt, now)));
+    conditions.push(and(isNull(leadTasks.doneAt), lt(leadTasks.dueAt, now), trackedTaskSql()));
   if (input.status === 'done') conditions.push(sql`${leadTasks.doneAt} is not null`);
   return taskRows(db, conditions.length > 0 ? and(...conditions) : undefined, 500);
 }
@@ -685,9 +710,11 @@ export async function updateTask(
 /** The SLA task: one open "Primeiro contato" per lead, for its owner, due in `firstContactSlaHours`. */
 export async function ensureFirstContactTask(
   db: Executor,
-  lead: { id: string; ownerEmployeeId: string | null },
+  lead: { id: string; ownerEmployeeId: string | null; enteredAt?: Date },
   actorEmployeeId: string | null,
   now = new Date(),
+  /** `force`: a person asked for this deal by hand (the reopen command), so RD history gets its task too. */
+  options: { force?: boolean } = {},
 ): Promise<void> {
   if (!lead.ownerEmployeeId) return;
   const open = await db.query.leadTasks.findFirst({
@@ -705,6 +732,15 @@ export async function ensureFirstContactTask(
         .where(eq(leadTasks.id, open.id));
     }
     return;
+  }
+  // RD history (entered before the start of use) gets no SLA task: nobody can act on it as a new lead.
+  if (!options.force) {
+    const enteredAt =
+      lead.enteredAt ??
+      (
+        await db.select({ at: leads.enteredAt }).from(leads).where(eq(leads.id, lead.id)).limit(1)
+      )[0]?.at;
+    if (!enteredAt || enteredAt < config.trackingStart) return;
   }
   const [row] = await db
     .insert(leadTasks)
@@ -1014,11 +1050,14 @@ export async function boardColumn(
   return rows.map(toCard);
 }
 
-/** The three numbers at the top of Negociações: new deals nobody touched, today's and overdue tasks. */
+/**
+ * The three numbers at the top of Negociações: new deals nobody touched, today's and overdue tasks. Only deals
+ * that entered since `trackingStart` (the start of use) count; `since` tells the screen which day that is.
+ */
 export async function boardCounters(
   db: Executor,
   input: { pipeline: LeadPipeline; ownerEmployeeId?: string; now?: Date },
-): Promise<{ untouched: number; today: number; overdue: number }> {
+): Promise<{ untouched: number; today: number; overdue: number; since: string }> {
   const now = input.now ?? new Date();
   const dayStart = new Date(now);
   dayStart.setUTCHours(dayStart.getUTCHours() - 3);
@@ -1037,6 +1076,7 @@ export async function boardCounters(
         eq(leads.pipeline, input.pipeline),
         isNull(leads.won),
         scope,
+        sql`${leads.enteredAt} >= ${config.trackingStart}`,
         sql`not exists (select 1 from lead_activities a where a.lead_id = ${leads.id})`,
         sql`not exists (select 1 from lead_notes n where n.lead_id = ${leads.id})`,
         sql`not exists (select 1 from lead_stage_history h where h.lead_id = ${leads.id} and h.source = 'wings')`,
@@ -1049,11 +1089,14 @@ export async function boardCounters(
     })
     .from(leadTasks)
     .innerJoin(leads, eq(leads.id, leadTasks.leadId))
-    .where(and(eq(leads.pipeline, input.pipeline), isNull(leadTasks.doneAt), scope));
+    .where(
+      and(eq(leads.pipeline, input.pipeline), isNull(leadTasks.doneAt), trackedTaskSql(), scope),
+    );
   return {
     untouched: untouched?.count ?? 0,
     today: tasks?.today ?? 0,
     overdue: tasks?.overdue ?? 0,
+    since: config.trackingStart.toISOString(),
   };
 }
 

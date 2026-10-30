@@ -1,6 +1,8 @@
 import {
   SOFIA_MODEL,
   SOFIA_PROMPT_VERSION,
+  withArticle,
+  type BrandArticle,
   type SofiaQuestion,
   type SofiaSegment,
 } from '@wings/shared';
@@ -42,6 +44,8 @@ export interface SofiaTurnLine {
 export interface SofiaBrainInput {
   /** The brand whose expansion team she speaks for, or null for Wings Company. */
   speaksFor: string | null;
+  /** Its article ("do time de expansão do Casal do Churros"); "da" when unknown. */
+  speaksForArticle?: BrandArticle | null;
   segment: SofiaSegment | null;
   brandName: string | null;
   /** The question waiting for an answer, if one. */
@@ -158,7 +162,9 @@ export function guardReply(reply: string): string {
 
 function userContent(input: SofiaBrainInput) {
   return JSON.stringify({
-    fala_por: input.speaksFor ? `time de expansão da ${input.speaksFor}` : 'Wings Company',
+    fala_por: input.speaksFor
+      ? `time de expansão ${withArticle(input.speaksFor, input.speaksForArticle ?? 'a', 'of')}`
+      : 'Wings Company',
     funil_atual: input.segment,
     marca_de_interesse: input.brandName,
     pergunta_atual: input.current

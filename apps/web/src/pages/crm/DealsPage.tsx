@@ -135,6 +135,10 @@ export function DealsPage() {
   const sellers = useSellers();
   const brands = useBrands();
   const counters = useDealCounters(pipeline);
+  // The counters only count what entered since the start of use; the tooltip says which day.
+  const sinceDay = counters.data?.since
+    ? new Date(counters.data.since).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+    : null;
   const [creating, setCreating] = useState(false);
   useCreateFromQuery(() => setCreating(true));
   const [importing, setImporting] = useState(false);
@@ -183,7 +187,7 @@ export function DealsPage() {
             type="button"
             className="crm-counter is-new"
             onClick={() => update({ activityDays: undefined, visao: 'board', sort: 'oldest' })}
-            title="Negociações em andamento em que ninguém ainda registrou contato"
+            title={`Negociações em andamento em que ninguém ainda registrou contato${sinceDay ? `. Conta só as que entraram a partir de ${sinceDay}` : ''}`}
           >
             <strong>{counters.data?.untouched ?? '–'}</strong> novas sem contato
           </button>
@@ -198,6 +202,7 @@ export function DealsPage() {
             type="button"
             className={`crm-counter${(counters.data?.overdue ?? 0) > 0 ? ' is-alert' : ''}`}
             onClick={() => update({ visao: 'activities' })}
+            title={`Tarefas vencidas${sinceDay ? ` (o primeiro contato conta só para negociações que entraram a partir de ${sinceDay})` : ''}`}
           >
             <strong>{counters.data?.overdue ?? '–'}</strong> atrasadas
           </button>
