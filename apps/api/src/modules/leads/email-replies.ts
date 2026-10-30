@@ -370,6 +370,7 @@ export async function readMailbox(
     // A margin over the last pass: the search only narrows, the history's ids decide.
     const since = new Date((connection.gmailReadAt ?? google.now()).getTime() - 2 * 86_400_000);
     let pageToken: string | null = null;
+    let searches = 0;
     pages: do {
       spend();
       const page = await gmailInboxHistory(google.transport, token, cursor, pageToken);
@@ -401,6 +402,7 @@ export async function readMailbox(
         const addresses = [...(await contacts()).keys()];
         for (let i = 0; i < addresses.length; i += SEARCH_CHUNK) {
           spend();
+          searches += 1;
           for (const id of await gmailSearchFrom(
             google.transport,
             token,
@@ -411,7 +413,8 @@ export async function readMailbox(
         }
       }
       for (const record of page.records) {
-        if (result.calls >= MAX_CALLS_PER_MAILBOX) break pages;
+        // The searches do not count here: with many deals they alone must not stall the reading.
+        if (result.calls - searches >= MAX_CALLS_PER_MAILBOX) break pages;
         for (const { id, threadId } of record.messages) {
           if (done.has(id)) continue;
           done.add(id);

@@ -30,7 +30,12 @@ import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
 import { fakeGoogle } from '../google-workspace/fake-google.js';
 import { googleWorkspaceDepsOf } from '../google-workspace/service.js';
-import { mailboxesToRead, readMailbox, type RepliesDeps } from './email-replies.js';
+import {
+  MAX_CALLS_PER_MAILBOX,
+  mailboxesToRead,
+  readMailbox,
+  type RepliesDeps,
+} from './email-replies.js';
 import { listLeadFiles } from './files.js';
 import { upsertLead } from './service.js';
 
@@ -431,6 +436,20 @@ describe('reading the leads’ replies', () => {
       cookies: seller.cookies,
     });
     expect(popups.json<NewLeadPopups>().emailReplies[0]!.blocked).toMatch(/não ser contatado/);
+  });
+
+  it('stops at the call ceiling and the next pass goes on from there, losing nothing', async () => {
+    const seller = await connectedSeller();
+    const lead = await arrive(seller.id);
+    for (let n = 0; n < 70; n++)
+      google.deliver({ headers: { From: lead.email!, Subject: `E-mail ${n}` }, text: 'Oi' });
+    const first = await readFor(seller);
+    expect(first.kept).toBeGreaterThan(0);
+    expect(first.kept).toBeLessThan(70);
+    expect(first.calls).toBeLessThanOrEqual(MAX_CALLS_PER_MAILBOX + 2);
+    const second = await readFor(seller);
+    expect(first.kept + second.kept).toBe(70);
+    expect(await keptFor(lead.id)).toHaveLength(70);
   });
 
   it('starts again from now when Gmail forgot the history point', async () => {

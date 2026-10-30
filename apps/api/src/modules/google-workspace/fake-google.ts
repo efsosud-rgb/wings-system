@@ -277,7 +277,6 @@ export function fakeGoogle(options: FakeGoogleOptions = {}) {
     }
 
     if (u.pathname.startsWith('/gmail/v1/users/me/') && method === 'GET') {
-      const fields = u.searchParams.get('fields');
       if (u.pathname === '/gmail/v1/users/me/profile')
         return json(200, { historyId: String(historyPoint) });
       if (u.pathname === '/gmail/v1/users/me/history') {
