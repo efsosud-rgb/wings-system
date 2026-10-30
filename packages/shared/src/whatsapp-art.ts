@@ -192,7 +192,20 @@ export const WA_TEMPLATE_FIELDS: Readonly<Record<string, readonly WaFieldSpec[]>
   wings_formatacao_retomar_contato_arte: [lead, company('article')],
   sofia_formatacao_retomar_atendimento: [lead],
   sofia_formatacao_retomar_atendimento_arte: [lead],
+  // Made on 30/10 with Meta's call-permission request (docs/whatsapp/modelos.md).
+  expansao_pedir_ligacao: [lead, seller, brand('plain')],
+  wings_formatacao_pedir_ligacao: [lead, seller],
 };
+
+/**
+ * The approved template that asks for the call permission outside the 24-hour window: a brand's
+ * lead hears the brand's expansion team, anyone else Wings Company.
+ */
+export const WA_CALL_REQUEST_TEMPLATES = {
+  brand: 'expansao_pedir_ligacao',
+  wings: 'wings_formatacao_pedir_ligacao',
+} as const;
+export const WA_CALL_REQUEST_LANGUAGE = 'pt_BR';
 
 const ARTICLE_BEFORE = /(?:^|[\s(])(?:da|do|das|dos|de|a|o|as|os)\s*$/i;
 
@@ -260,6 +273,15 @@ export const waTemplateSendSchema = z.object({
   expect: z.object({ sendAs: z.enum(['free', 'template']), charged: z.boolean() }).optional(),
 });
 export type WaTemplateSend = z.input<typeof waTemplateSendSchema>;
+
+/**
+ * "Pedir permissão para ligar": empty inside the window (Meta's free request); outside it, the
+ * fields and what the preview showed, sent by the call-request template the server picks.
+ */
+export const waCallPermissionRequestSchema = z.object({
+  template: waTemplateSendSchema.pick({ params: true, expect: true }).optional(),
+});
+export type WaCallPermissionRequest = z.input<typeof waCallPermissionRequestSchema>;
 
 export interface WaTemplateField {
   /** 1 for `{{1}}`. */
