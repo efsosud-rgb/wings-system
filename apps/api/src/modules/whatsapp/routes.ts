@@ -8,6 +8,9 @@ import {
   templateParamCount,
   waTemplateFamily,
   waTemplateSendSchema,
+  waCallPermissionRequestSchema,
+  WA_CALL_REQUEST_LANGUAGE,
+  WA_CALL_REQUEST_TEMPLATES,
   waSendKindOf,
   waSendMediaSchema,
   waSendTextSchema,
@@ -122,6 +125,7 @@ import { factListOf } from '../sofia/state.js';
 import { adoptUnmatched, conversationFor, openConversation } from './intake.js';
 import { syncNumberTemplates, syncTemplates } from './templates.js';
 import { inboxSummaryOf } from './inbox.js';
+import { callRequestRefusal } from './call-request-limit.js';
 import { notifyInboxChanged } from './inbox-signal.js';
 import {
   payloadOf,
@@ -796,6 +800,14 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     return reply.status(refused.status).send(refused.body);
   };
 
+  /**
+   * Meta's 1 a day and 2 a week (call-request-limit.ts), refused before anything goes. The
+   * caller awaits the reason and returns this reply itself: an async helper returning the reply
+   * hands back undefined once awaited (a FastifyReply is thenable), and the send went on to Meta.
+   */
+  const callLimitReply = (reply: FastifyReply, why: string) =>
+    reply.status(429).send({ error: 'call_request_limit', message: why });
+
   type Outgoing =
     | { kind: 'text'; text: string }
     | { kind: 'media'; fileId: string; caption: string }
@@ -913,8 +925,10 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
         return reply.status(409).send({
           error: 'window_closed',
           message:
-            'Fora das 24 horas: o pedido de ligação vai por um modelo de pedido de ligação (em "Usar modelo").',
+            'Fora das 24 horas: o pedido de ligação vai pelo modelo aprovado ("Pedir pelo modelo", no painel de ligação).',
         });
+      const overLimit = await callRequestRefusal(db, target.contact?.id ?? null);
+      if (overLimit) return callLimitReply(reply, overLimit);
       shown = callPermissionText(voice);
       payload = callPermissionPayload(shown);
       content = { callPermissionRequest: true };
@@ -1058,6 +1072,16 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       // The voice covers every word that leaves: the text, the buttons, the footer, the header.
       const refused = offBrand(`${preview.text} ${JSON.stringify(plan.version.components ?? [])}`);
       if (refused) return refused;
+      const asksCall = asksCallPermission(plan.version);
+      if (asksCall) {
+        if (numberId)
+          return reply.status(409).send({
+            error: 'number_no_calls',
+            message: 'O pedido de ligação vai só pelo número oficial.',
+          });
+        const overLimit = await callRequestRefusal(db, target.contact?.id ?? null);
+        if (overLimit) return callLimitReply(reply, overLimit);
+      }
       let mediaId: string | null = null;
       if (plan.needsArt) {
         if (!context.art)
@@ -1091,6 +1115,8 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
           ? { fromTemplate: { ...sent, family: preview.family } }
           : { template: sent }),
         ...(planned.artFileId ? { art: { fileId: planned.artFileId, mediaId } } : {}),
+        // Counted for Meta's limit, free request or template alike.
+        ...(asksCall ? { callPermissionRequest: true } : {}),
       };
     }
 
@@ -1396,23 +1422,79 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     } satisfies WaCallPermissionLive);
   });
 
-  /** Sends Meta's "may we call you?" message (inside the 24-hour window). */
+  /** The call-request template of this deal's voice: the brand's expansion team, or Wings. */
+  const callRequestTemplate = async (leadId: string) =>
+    WA_CALL_REQUEST_TEMPLATES[(await brandOf(db, leadId, null)) ? 'brand' : 'wings'];
+
+  /**
+   * Sends Meta's "may we call you?": with no body, the free request (inside the 24-hour window);
+   * with `template`, the approved call-request template of the deal's voice, as its preview showed.
+   */
   app.post('/leads/:id/whatsapp/call-permission', use, async (request, reply) => {
     const params = idParams.safeParse(request.params);
     if (!params.success) return notFound(reply);
     const lead = await leadInScope(db, request.session.actor, params.data.id, 'leads.whatsapp');
     if (!lead) return notFound(reply);
+    const body = waCallPermissionRequestSchema.safeParse(request.body ?? {});
+    if (!body.success)
+      return reply.status(400).send({ error: 'invalid', message: 'Pedido inválido.' });
     if (!lead.phone)
       return reply
         .status(422)
         .send({ error: 'no_phone', message: 'A negociação não tem telefone.' });
     const contact = await contactOfPhone(db, lead.phone);
+    const template = body.data.template;
     return send(
       request,
       reply,
       { leadId: lead.id, phone: lead.phone, contact },
-      { kind: 'call_permission' },
+      template
+        ? {
+            kind: 'template',
+            name: await callRequestTemplate(lead.id),
+            language: WA_CALL_REQUEST_LANGUAGE,
+            params: template.params,
+            companyArticle: 'a',
+            expect: template.expect,
+          }
+        : { kind: 'call_permission' },
     );
+  });
+
+  /** What the call-request template becomes for this deal, before it goes. Nothing is sent. */
+  app.post('/leads/:id/whatsapp/call-permission/preview', use, async (request, reply) => {
+    const params = idParams.safeParse(request.params);
+    if (!params.success) return notFound(reply);
+    const target = await targetOf(request, 'lead', params.data.id);
+    if (!target) return notFound(reply);
+    const overLimit = await callRequestRefusal(db, target.contact?.id ?? null);
+    if (overLimit) return callLimitReply(reply, overLimit);
+    const name = await callRequestTemplate(params.data.id);
+    const context = await templateContextOf(
+      db,
+      { ...target, senderEmployeeId: request.session.actor.employeeId },
+      now(),
+    );
+    const plan = await planTemplateFor(db, context, {
+      name,
+      language: WA_CALL_REQUEST_LANGUAGE,
+      params: [],
+      companyArticle: 'a',
+    });
+    if (!plan.ok)
+      return reply.status(plan.status).send({
+        error: plan.error,
+        message:
+          plan.error === 'template_unknown'
+            ? `O modelo de pedido de ligação (${name}) ainda não foi aprovado pela Meta. Nada foi enviado.`
+            : plan.message,
+      });
+    if (!asksCallPermission(plan.version))
+      return reply.status(422).send({
+        error: 'template_no_call_request',
+        message: `O modelo ${name} aprovado na Meta não tem o pedido de ligação. Nada foi enviado.`,
+      });
+    return reply.header('Cache-Control', 'no-store').send({ preview: plan.preview });
   });
 
   // --- templates ----------------------------------------------------------------------

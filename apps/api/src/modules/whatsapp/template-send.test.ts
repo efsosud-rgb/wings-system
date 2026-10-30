@@ -4,6 +4,7 @@ import {
   ART_MISSING_WINGS,
   ART_VERSION_PENDING,
   ARTICLE_MISSING,
+  CALL_REQUEST_FREE,
   payloadOf,
   planTemplate,
   toFreeMessage,
@@ -665,14 +666,14 @@ describe('a template written on the Modelos screen', () => {
     expect(plan.preview.text).toContain('transformar a sua empresa em franquia');
   });
 
-  it('with the call-permission request, goes as the template even inside the window', () => {
+  it('with the call-permission request, goes as Meta’s free request inside the window', () => {
     const asking = {
       ...custom,
       components: [...(custom.components as object[]), { type: 'CALL_PERMISSION_REQUEST' }],
     };
     const plan = ok({ ...input, templates: [asking], window: { open: true, expiresAt: null } });
-    expect(plan.preview.sendAs).toBe('template');
-    expect(plan.preview.reason).toMatch(/permissão para ligar/);
+    expect(plan.preview).toMatchObject({ sendAs: 'free', charged: false, buttons: [] });
+    expect(plan.preview.notices).toContain(CALL_REQUEST_FREE);
   });
 });
 
@@ -721,5 +722,92 @@ describe('a template with a part the system does not fill yet (auditoria, item 4
       { type: 'BUTTONS', buttons: [{ type: 'URL', text: 'Ver', url: 'https://exemplo.com.br/p' }] },
     );
     expect(unsupportedOf(fixed)).toBeNull();
+  });
+});
+
+describe('the call-request templates of 30/10 (call_permission_request)', () => {
+  const ask = { type: 'CALL_PERMISSION_REQUEST' };
+  const expansao = row(
+    'expansao_pedir_ligacao',
+    'MARKETING',
+    'Olá, {{1}}! Aqui é {{2}}, do time de expansão da {{3}}. Posso te ligar por aqui, pelo WhatsApp, para conversarmos sobre a franquia? Se puder, é só autorizar no botão abaixo.',
+    ask,
+  );
+  const wings = row(
+    'wings_formatacao_pedir_ligacao',
+    'MARKETING',
+    'Olá, {{1}}! Aqui é {{2}}, da Wings Company. Posso te ligar por aqui, pelo WhatsApp, para conversarmos sobre a formatação da sua franquia? Se puder, é só autorizar no botão abaixo.',
+    ask,
+  );
+  const request = (name: string) => ({
+    name,
+    language: 'pt_BR',
+    params: [],
+    companyArticle: 'a' as const,
+  });
+
+  it('outside the window, the brand template goes as the approved template, with the brand plain', () => {
+    const plan = ok(
+      base({
+        request: request('expansao_pedir_ligacao'),
+        templates: [expansao],
+        voice: { name: 'A Cabana da Barra', article: 'a' },
+      }),
+    );
+    expect(plan.preview).toMatchObject({ sendAs: 'template', charged: true, ready: true });
+    expect(plan.preview.fields.map((f) => f.role)).toEqual(['lead', 'seller', 'brand']);
+    expect(plan.preview.text).toContain('do time de expansão da Cabana da Barra.');
+    expect(payloadOf(plan, null)).toEqual({
+      type: 'template',
+      template: {
+        name: 'expansao_pedir_ligacao',
+        language: { code: 'pt_BR' },
+        components: [
+          {
+            type: 'body',
+            parameters: [
+              { type: 'text', text: 'Ricardo' },
+              { type: 'text', text: 'Fernando' },
+              { type: 'text', text: 'Cabana da Barra' },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
+  it('the Wings template has the lead and the seller only', () => {
+    const plan = ok(
+      base({ request: request('wings_formatacao_pedir_ligacao'), templates: [wings], voice: null }),
+    );
+    expect(plan.preview.fields.map((f) => f.role)).toEqual(['lead', 'seller']);
+    expect(plan.preview.text).toMatch(/^Olá, Ricardo! Aqui é Fernando, da Wings Company\./);
+  });
+
+  it('inside the window, never a common message: the free request, with the voice’s text', () => {
+    const plan = ok(
+      base({
+        request: request('expansao_pedir_ligacao'),
+        templates: [expansao],
+        window: { open: true, expiresAt: '2026-10-31T12:00:00.000Z' },
+      }),
+    );
+    const shown = callPermissionText({ name: 'Malkuth', article: 'a' });
+    expect(plan.free?.kind).toBe('call_permission');
+    expect(plan.needsArt).toBe(false);
+    expect(plan.preview).toMatchObject({
+      sendAs: 'free',
+      charged: false,
+      text: shown,
+      withArt: false,
+    });
+    expect(payloadOf(plan, null)).toEqual({
+      type: 'interactive',
+      interactive: {
+        type: 'call_permission_request',
+        body: { text: shown },
+        action: { name: 'call_permission_request' },
+      },
+    });
   });
 });

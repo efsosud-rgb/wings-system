@@ -2,6 +2,7 @@ import type {
   DealWhatsApp,
   WaCall,
   WaCallPermissionLive,
+  WaCallPermissionRequest,
   WaChatNumber,
   WaConversationItem,
   WaInboxFilter,
@@ -446,10 +447,24 @@ export function useCallPermission(leadId: string, enabled: boolean) {
   });
 }
 
+/** The call-request template for this deal (outside the window), before it goes. Sends nothing. */
+export function useCallRequestPreview(leadId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['whatsapp', 'call-request-preview', leadId],
+    queryFn: () =>
+      api.post<{ preview: WaTemplatePreview }>(`/leads/${leadId}/whatsapp/call-permission/preview`),
+    enabled,
+    staleTime: 0,
+    retry: false,
+  });
+}
+
+/** No input: Meta's free request (inside the window); `template`: by the approved template. */
 export function useRequestCallPermission(leadId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: () => api.post<{ message: WaMessage }>(`/leads/${leadId}/whatsapp/call-permission`),
+    mutationFn: (input?: WaCallPermissionRequest) =>
+      api.post<{ message: WaMessage }>(`/leads/${leadId}/whatsapp/call-permission`, input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['whatsapp', 'call-permission', leadId] });
       void queryClient.invalidateQueries({ queryKey: threadKey({ leadId }) });

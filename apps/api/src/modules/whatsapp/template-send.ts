@@ -29,6 +29,7 @@ import {
 import { artFileOf, type ArtFile } from './art.js';
 import {
   buttonsPayload,
+  callPermissionPayload,
   ctaUrlPayload,
   imagePayload,
   templatePayload,
@@ -37,7 +38,13 @@ import {
   type OutgoingPayload,
 } from './graph.js';
 import type { Contact } from './outbox.js';
-import { brandOf, numberWindowOf, windowOf, type BrandVoice } from './thread.js';
+import {
+  brandOf,
+  callPermissionText,
+  numberWindowOf,
+  windowOf,
+  type BrandVoice,
+} from './thread.js';
 
 /**
  * Which message a template becomes (docs/whatsapp/arte-modelos.md), one rule
@@ -48,6 +55,9 @@ import { brandOf, numberWindowOf, windowOf, type BrandVoice } from './thread.js'
  *   interactive buttons, one link button as a `cta_url`, the art as the
  *   header. A combination a common message cannot carry goes as the template,
  *   and the screen says why;
+ * - a template with Meta's call-permission request goes, inside the window,
+ *   as Meta's free request (`call_permission`, its standard text): a common
+ *   message would lose the request, and the template would be charged;
  * - outside the window the approved template goes: its `_arte` version, with
  *   the art in the header, when the art is registered and that version is
  *   approved; otherwise the first version.
@@ -137,7 +147,7 @@ export interface PlanInput {
 
 /** A common message made from a template, before the art has its Meta id. */
 export interface FreeMessage {
-  kind: 'buttons' | 'cta_url' | 'image' | 'text';
+  kind: 'buttons' | 'call_permission' | 'cta_url' | 'image' | 'text';
   body: string;
   footer: string | null;
   header: { type: 'text'; text: string } | { type: 'image' } | null;
@@ -174,6 +184,8 @@ export const ARTICLE_MISSING =
   'Cadastre o artigo (o/a) desta marca no cadastro dela; por ora vai "da".';
 export const ART_VERSION_PENDING =
   'A versão com arte deste modelo ainda não está aprovada pela Meta: vai sem a arte.';
+export const CALL_REQUEST_FREE =
+  'Dentro das 24 h vai o pedido de ligação da Meta, sem custo, com o texto padrão dele (não o do modelo).';
 
 export function planTemplate(input: PlanInput): TemplatePlan {
   const { request, templates, window, voice, hasArt } = input;
@@ -281,7 +293,11 @@ export function planTemplate(input: PlanInput): TemplatePlan {
 
   let free: FreeMessage | null = null;
   let reason: string | null = null;
-  if (window.open) {
+  if (window.open && asksCallPermission(version)) {
+    const body = callPermissionText(voice);
+    free = { kind: 'call_permission', body, footer: null, header: null, replies: [], link: null };
+    notices.push(CALL_REQUEST_FREE);
+  } else if (window.open) {
     const converted = toFreeMessage(version, text, hasArt);
     if (typeof converted === 'string') reason = converted;
     else free = converted;
@@ -305,9 +321,10 @@ export function planTemplate(input: PlanInput): TemplatePlan {
       charged: sendAs === 'template' && !(window.open && category === 'UTILITY'),
       reason,
       windowExpiresAt: window.open ? window.expiresAt : null,
-      text,
-      footer: componentOf(version, 'FOOTER')?.text ?? null,
-      buttons,
+      text: free?.kind === 'call_permission' ? free.body : text,
+      footer:
+        free?.kind === 'call_permission' ? null : (componentOf(version, 'FOOTER')?.text ?? null),
+      buttons: free?.kind === 'call_permission' ? [] : buttons,
       withArt: free ? free.header?.type === 'image' : headerFormat(version) === 'IMAGE',
       notices,
       fields,
@@ -427,6 +444,7 @@ export function payloadOf(
       : free.header?.type === 'text'
         ? { type: 'text', text: free.header.text }
         : undefined;
+  if (free.kind === 'call_permission') return callPermissionPayload(free.body);
   const extra = { header, footer: free.footer ?? undefined };
   if (free.kind === 'buttons') return buttonsPayload(free.body, free.replies, extra);
   if (free.kind === 'cta_url' && free.link) return ctaUrlPayload(free.body, free.link, extra);
