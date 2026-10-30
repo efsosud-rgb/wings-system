@@ -97,13 +97,43 @@ tempo ganha `lead.contact_blocked`. Variáveis dos modelos: `{{nome}}` (primeiro
 `{{vendedor}}`, `{{etapa}}`; qualquer outra é recusada ao salvar. O texto fica no outbox
 (a ficha do lead), nunca em log.
 
-**Pela ficha da negociação** (aba E-mail): a pessoa escolhe um modelo ativo, lê a prévia já
-preenchida e envia. Só modelos, sem texto livre. `GET /leads/:id/emails` (modelos ativos e o
-que já foi registrado), `POST /leads/:id/emails/preview` e `POST /leads/:id/emails`
-(`leads.write`, no escopo de quem chama: o vendedor só a ficha dos seus leads, o resto responde
-404). Mesmo serviço das regras (`sendTemplateToLead`), mesmo outbox e o mesmo evento
-`lead.email_sent`; auditoria `lead.email_sent` / `lead.email_failed` só com ids. Em modo `test`
-(o padrão) nada sai: a tela diz "Registrado (modo de teste)". Sem migração.
+**Pela ficha da negociação** (aba E-mail; decisão do Eric de 30/10/2026, t081). O botão "E-mail"
+da barra de ações e a aba abrem direto **Escrever e-mail**, com o cursor no assunto:
+
+- **Para**: o e-mail da negociação (contato principal) e, como opção, o dos outros contatos
+  ligados a ela (`dealAddressesOf`, em `lead-email.ts`). A API recusa qualquer outro endereço
+  (`422 not_a_contact`).
+- **Assunto** e **Texto** livres. "Começar de um modelo" preenche os dois com a prévia do modelo
+  (`POST /leads/:id/emails/preview`), e a pessoa edita antes de enviar; o outbox guarda o modelo
+  de origem (`template_id`) e o texto que saiu.
+- **Anexos**: dos Arquivos da negociação, ou do computador. O arquivo do computador sobe antes para
+  os Arquivos da negociação (o mesmo caminho do botão "Enviar arquivo", e do WhatsApp) e vai pelo
+  id. A tela mostra nome e tamanho de cada um e deixa tirar. Até **20 MB somados** e 10 arquivos
+  (`EMAIL_ATTACHMENTS_MAX_BYTES`); **programas e scripts** são recusados pela extensão ou pelo tipo
+  (`emailAttachmentRefusal`, `packages/shared/src/crm-automations.ts`: a lista do Gmail mais
+  `.sh`, `.py`, `.php` e afins). A tela confere antes de subir; a API confere de novo, e só aceita
+  arquivo desta negociação que quem envia pode abrir (`attachmentsFor`): `413 too_large`,
+  `415 file_type`, `404 file_not_found`, nada sai e nada vai para o outbox.
+- **Saída**: no modo `gmail`, pela conta Google de quem envia, com os anexos em MIME
+  (`multipart/mixed`, pelo envio por upload do Gmail, `upload/gmail/v1/users/me/messages/send`); sem
+  conta conectada cai no remetente da empresa (`SMTP_FROM`, com os anexos pelo nodemailer), e sem
+  nenhum dos dois a tela diz como conectar em Minha conta. No modo `test` nada sai e os bytes dos
+  anexos nem são lidos: fica o registro com os nomes e tamanhos.
+- **Histórico**: o outbox guarda `to_email` e `attachments` (id do arquivo, nome, tamanho; nunca o
+  conteúdo) — migração `0103_crm_email_free_text`. A lista da aba E-mail mostra assunto, data, quem
+  enviou, o estado, para quem foi e os anexos; o evento `lead.email_sent` leva o assunto, o nome de
+  quem enviou e o nome e tamanho dos anexos, e o Histórico mostra isso na linha do e-mail.
+- Expansão com marca (`409 brand_hidden`, a tela mostra o aviso e não oferece a escrita) e Não me
+  contate (`409 contact_blocked`, conferido também no endereço escolhido) valem igual.
+
+Rotas: `GET /leads/:id/emails` (endereços, modelos ativos e o que já foi registrado),
+`POST /leads/:id/emails/preview` e `POST /leads/:id/emails` (`leads.write`, no escopo de quem
+chama: o vendedor só a ficha dos seus leads, o resto responde 404). O `POST` aceita a escrita
+(`leadEmailComposeSchema`: `to`, `subject`, `text`, `templateId?`, `fileIds`) ou, como antes, só
+`{ templateId }` (o modelo como está). Mesmo serviço das regras (`sendToLead`, em `automations.ts`,
+chamado por `sendTemplateToLead`), mesmo outbox e o mesmo evento; auditoria `lead.email_sent` /
+`lead.email_failed` só com ids (`templateId`, `fileIds`, `outboxId`), nunca endereço, texto ou nome
+de arquivo. Em modo `test` (o padrão) nada sai: a tela diz "Registrado (modo de teste)".
 
 ## Avisos de chegada e rodízio de Formatação (05/10/2026)
 
