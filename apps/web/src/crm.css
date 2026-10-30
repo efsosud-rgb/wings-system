@@ -2411,6 +2411,32 @@
 .crm-wa-attach-taken .crm-input {
   min-width: 0;
 }
+/* The voice note recorded in the conversation (WhatsAppVoice.tsx). */
+.crm-wa-voice audio {
+  width: 100%;
+  max-width: 320px;
+  height: 36px;
+}
+.crm-wa-voice-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 2px;
+  border-radius: 50%;
+  background: var(--danger);
+  vertical-align: middle;
+  animation: crm-wa-voice-pulse 1s ease-in-out infinite alternate;
+}
+@keyframes crm-wa-voice-pulse {
+  to {
+    opacity: 0.3;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .crm-wa-voice-dot {
+    animation: none;
+  }
+}
 .crm-wa-note {
   flex-basis: 100%;
   margin: 0;
