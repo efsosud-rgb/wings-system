@@ -40,7 +40,7 @@ import {
   type LeadSourceRuleKind,
   type ScoreCriterion,
 } from '@wings/shared';
-import { and, asc, desc, eq, gte, isNotNull, isNull, lt, notInArray, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, notInArray, or, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   adAds,
@@ -51,6 +51,7 @@ import {
   employees,
   jobs,
   leadEnrichmentLedger,
+  crmEmailInbound,
   leadEvents,
   leadSourceRules,
   leadTrackingLinks,
@@ -1104,6 +1105,21 @@ export async function loadLead(db: Database, id: string): Promise<LoadedLead | n
       : Promise.resolve(undefined),
     adNamesOf(db, row),
   ]);
+  // A lead's e-mail shows its text in the history too; the text itself stays only in its own table.
+  const inboundIds = events
+    .filter((event) => event.kind === 'lead.email_received')
+    .map((event) => (event.detail as { inboundId?: unknown } | null)?.inboundId)
+    .filter((value): value is string => typeof value === 'string');
+  const inboundText = new Map(
+    inboundIds.length
+      ? (
+          await db
+            .select({ id: crmEmailInbound.id, body: crmEmailInbound.body })
+            .from(crmEmailInbound)
+            .where(and(eq(crmEmailInbound.leadId, row.id), inArray(crmEmailInbound.id, inboundIds)))
+        ).map((r) => [r.id, r.body] as const)
+      : [],
+  );
   return {
     lead: toLead(row, {
       adNames,
@@ -1114,12 +1130,17 @@ export async function loadLead(db: Database, id: string): Promise<LoadedLead | n
       company: company ?? null,
       contacts,
     }),
-    events: events.map((event) => ({
-      id: event.id,
-      at: event.at.toISOString(),
-      kind: event.kind,
-      detail: (event.detail ?? {}) as Record<string, unknown>,
-    })),
+    events: events.map((event) => {
+      const detail = (event.detail ?? {}) as Record<string, unknown>;
+      const text =
+        typeof detail.inboundId === 'string' ? inboundText.get(detail.inboundId) : undefined;
+      return {
+        id: event.id,
+        at: event.at.toISOString(),
+        kind: event.kind,
+        detail: text === undefined ? detail : { ...detail, text },
+      };
+    }),
     notes,
     tasks,
     history,

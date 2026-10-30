@@ -419,6 +419,8 @@ export async function sendToLead(
     transport: CrmMailTransport;
     runId: string | null;
     sentBy: string | null;
+    /** An answer to a lead's e-mail: its Gmail thread (in the sender's own mailbox) and its Message-ID. */
+    reply?: { threadId: string | null; inReplyTo: string | null };
   },
 ): Promise<SendOutcome> {
   const { lead, to } = input;
@@ -449,6 +451,8 @@ export async function sendToLead(
       text: body,
       senderEmployeeId: input.sentBy ?? lead.ownerEmployeeId,
       attachments,
+      threadId: input.reply?.threadId ?? null,
+      inReplyTo: input.reply?.inReplyTo ?? null,
     });
   } catch {
     status = 'failed';
