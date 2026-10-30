@@ -40,15 +40,31 @@ campo estava fixo no código (`WA_TEMPLATE_FIELDS`, `packages/shared/src/whatsap
 ## Pedido de permissão para ligar
 
 - **No modelo:** ao criar ou editar, "Pedir permissão para ligar" acrescenta ao modelo o botão "Permitir
-  ligações" da Meta (componente `call_permission_request`). Esse modelo vai sempre como modelo, mesmo dentro das
-  24 h, e marca o contato como "pedido de ligação enviado". **Não verificado ao vivo:** o formato do componente
-  segue a documentação da Meta, e nenhum modelo assim foi criado ainda.
+  ligações" da Meta (componente `call_permission_request`). Fora das 24 h vai como modelo aprovado. Dentro
+  delas não vira mensagem comum (que perderia o pedido) nem vai como modelo cobrado: vai o pedido livre da Meta,
+  sem custo, com o texto padrão dele, e a prévia avisa. Nos dois casos o contato fica como "pedido de ligação
+  enviado" e a resposta (`call_permission_reply`) atualiza a permissão.
+- **Os modelos de 30/10** (tipo "Solicitação de permissões para ligação", Marketing, pt_BR, em análise na Meta;
+  decisão do Eric, opção 2A):
+  - `expansao_pedir_ligacao`: lead, vendedor e marca (sem artigo, como em `expansao_boas_vindas`). Não cita a
+    Wings. Vai para lead de marca.
+  - `wings_formatacao_pedir_ligacao`: lead e vendedor. Vai para os outros leads.
+  - No painel de ligação da negociação, fora das 24 h, **"Pedir pelo modelo"** mostra a prévia do modelo certo
+    (o servidor escolhe pela voz da conversa) e só envia no clique em "Enviar pedido". Enquanto o modelo não
+    estiver aprovado, a prévia diz isso e nada sai. Um campo sem dado (o nome do lead, por exemplo) manda o
+    vendedor para "Usar modelo" na conversa, onde dá para preencher.
+- **Limite da Meta:** 1 pedido por dia e 2 por semana por pessoa. O sistema conta os pedidos que saíram para o
+  contato (livres ou por modelo; um que falhou não conta) e recusa o próximo com 429 `call_request_limit`, antes
+  de qualquer chamada à Meta. Atalho: a Meta zera a contagem depois de uma ligação atendida, e o sistema não.
+- **"Não me contate"** e o SAIR valem para o pedido por modelo como para qualquer modelo: recusa antes da Meta.
+- **Não verificado ao vivo:** o envio dos dois modelos segue a documentação da Meta (um modelo comum, só com os
+  campos do corpo); nenhum foi aprovado nem enviado ainda.
 - **"Prefiro uma ligação":** quando o lead toca nessa resposta rápida dos modelos de boas-vindas:
   - o dono da negociação ganha a tarefa "Ligar: o lead pediu uma ligação pelo WhatsApp", com prazo agora;
   - com o número oficial ligado (`official_number_live`) e as ligações ativas no número, o sistema manda na hora
     o pedido de permissão da Meta. O toque abriu a janela de 24 h.
-  - Não manda de novo enquanto a pessoa permite ligações, nem duas vezes no mesmo dia (limite da Meta). Vai uma
-    vez, sem nova tentativa.
+  - Não manda de novo enquanto a pessoa permite ligações, nem passando do limite da Meta (1 por dia, 2 por
+    semana). Vai uma vez, sem nova tentativa.
 - **Ligar pelo celular:** o painel de ligação tem "Ligar pelo celular" (link `tel:`), ao lado de "Abrir no
   WhatsApp do vendedor" e "Copiar número".
 

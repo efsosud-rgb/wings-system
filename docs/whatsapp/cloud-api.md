@@ -106,10 +106,11 @@ DROP INDEX "wa_messages_media_idx"; DELETE FROM drizzle.__drizzle_migrations WHE
 - **Recusar e desligar:** `reject` (tocando) e `terminate`; a ligação fecha na hora aqui e o aviso final da Meta
   traz a duração real.
 - **Permissão:** `GET /leads/:id/whatsapp/call-permission` pergunta à Meta (sem permissão, temporária de 7
-  dias, permanente) e se dá para pedir ou ligar agora; `POST` manda o pedido interativo da Meta, só dentro das
-  24 h (fora delas, por um modelo com o componente de pedido de ligação). A resposta da pessoa chega como
-  mensagem e atualiza o contato. A Meta limita a 1 pedido por dia e 2 por semana; 4 ligações sem resposta
-  revogam.
+  dias, permanente) e se dá para pedir ou ligar agora; `POST` sem corpo manda o pedido interativo da Meta,
+  só dentro das 24 h. Fora delas, `POST …/call-permission/preview` mostra o modelo de pedido de ligação da voz
+  da conversa e `POST` com `{ template: { params, expect } }` o envia (`modelos.md`). A resposta da pessoa
+  chega como mensagem e atualiza o contato. A Meta limita a 1 pedido por dia e 2 por semana (o sistema confere
+  antes: 429 `call_request_limit`); 4 ligações sem resposta revogam.
 - **Registro:** toda ligação terminada com negociação entra no histórico dela uma vez (`lead_activities`,
   "Pelo WhatsApp · ligação feita/recebida", atendida com a duração, ou não atendida/recusada). Uma que falhou
   antes de sair não entra. Avisos que não chegam: a ligação que tocou e ninguém fechou vira "não atendida" em
@@ -234,6 +235,7 @@ cadastrados na Meta. Os outros níveis não mudam.
 | `POST /leads/:id/whatsapp/media`, `…/conversations/:id/media`             | Arquivo da negociação, por id (ver "Enviar arquivo")    |
 | `GET /whatsapp/messages/:id/media`                                        | Arquivo recebido ou enviado                             |
 | `POST /leads/:id/whatsapp/template-preview`, `GET …/art`                  | O que o modelo vira agora e a arte (`arte-modelos.md`)  |
+| `GET`, `POST /leads/:id/whatsapp/call-permission`, `POST …/preview`       | Permissão para ligar e o pedido (livre ou por modelo)   |
 | `POST /leads/:id/whatsapp/imports[/preview]`, `GET`, `DELETE …/:batchId`  | Conversa exportada do celular (`importar-conversa.md`)  |
 | `GET /leads/:id/whatsapp/messages?before=<id>`                            | Mensagens anteriores às 500 da tela, uma página por vez |
 
