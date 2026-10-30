@@ -245,6 +245,11 @@ export function fakeGoogle(options: FakeGoogleOptions = {}) {
         return new Response(null, { status: 204 });
       }
     }
+    // The media upload takes the message itself; kept base64url like the JSON one, for the tests.
+    if (u.pathname === '/upload/gmail/v1/users/me/messages/send' && rawBody) {
+      sentMail.push({ raw: Buffer.from(rawBody, 'utf8').toString('base64url'), threadId: null });
+      return json(200, { id: `msg${sentMail.length}`, threadId: `thr${sentMail.length}` });
+    }
     if (u.pathname === '/gmail/v1/users/me/messages/send') {
       const sent = body as { raw: string; threadId?: string };
       sentMail.push({ raw: sent.raw, threadId: sent.threadId ?? null });

@@ -23,6 +23,10 @@ nome, canto superior direito). A partir daí, com a conta dela:
   resposta do lead chega na caixa dela. Quem não conectou cai no SMTP da empresa (`SMTP_FROM`);
   sem SMTP o envio é recusado e fica registrado como falho. Numa automação o remetente é o dono
   do lead. O outbox guarda `from_email`, `Message-ID`, `gmail_message_id` e `gmail_thread_id`.
+  Com anexos (Escrever e-mail, até 20 MB somados), a mensagem vai inteira pelo envio por upload
+  (`upload/gmail/v1/users/me/messages/send?uploadType=media`, `message/rfc822`), que aceita até
+  35 MB; esse caminho não leva `threadId`. **Não verificado** contra o Gmail real: só contra o
+  Google simulado dos testes (`fake-google.ts`). Ver `docs/crm/automacoes.md` (E-mail).
 - O módulo **Agenda** (a tela tipo Google Agenda, com a agenda da pessoa e a Wings Company) usa
   esta mesma conexão: ver [docs/agenda.md](../agenda.md).
 - (Etapa seguinte) as respostas do lead na linha do tempo: exige o escopo restrito

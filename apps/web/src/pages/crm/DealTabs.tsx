@@ -118,6 +118,17 @@ function importBody(event: LeadEvent): string | null {
     : count;
 }
 
+/** What an e-mail's line adds: its subject and the attachments' names and sizes (older events had neither). */
+export function emailBody(event: LeadEvent): string | null {
+  const { subject, attachments } = event.detail as {
+    subject?: string;
+    attachments?: { name: string; byteSize: number }[];
+  };
+  const files = (attachments ?? []).map((f) => `${f.name} (${formatBytes(f.byteSize)})`);
+  const parts = [subject, files.length ? `Anexos: ${files.join(', ')}` : null].filter(Boolean);
+  return parts.length ? parts.join('\n') : null;
+}
+
 const MEETING_EVENTS = new Set([
   'meeting.scheduled',
   'meeting.rescheduled',
@@ -261,13 +272,15 @@ export function entriesOf(data: LoadedLead): Entry[] {
                 : 'more',
       tone,
       title: EVENT_LABELS[event.kind] ?? 'Atualização',
-      by: null,
+      by: tone === 'email' ? ((event.detail.by as string | null | undefined) ?? null) : null,
       body:
         tone === 'whatsapp'
           ? importBody(event)
           : tone === 'meeting'
             ? meetingBody(event)
-            : undefined,
+            : tone === 'email'
+              ? (emailBody(event) ?? undefined)
+              : undefined,
     });
   }
   return entries.sort((a, b) => b.at.localeCompare(a.at));

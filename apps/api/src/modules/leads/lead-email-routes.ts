@@ -1,13 +1,16 @@
-import { leadHidesWings, type LeadEmailSent } from '@wings/shared';
+import { leadEmailComposeSchema, leadHidesWings, type LeadEmailSent } from '@wings/shared';
 import { and, desc, eq } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { crmEmailOutbox, crmEmailTemplates, employees } from '../../db/schema/index.js';
 import { contactBlock } from './contact-block.js';
 import { writeAudit } from '../../lib/audit.js';
+import { storageOf } from '../../lib/storage/index.js';
+import { dealRouteAccessOf } from '../drive/access.js';
 import { leadInScope, type LeadPermission } from './access.js';
-import { renderForLead, sendTemplateToLead } from './automations.js';
+import { renderForLead, sendTemplateToLead, sendToLead } from './automations.js';
 import { crmMailOf } from './crm-mail.js';
+import { attachmentsFor, dealAddressesOf } from './lead-email.js';
 
 const idParam = z.object({ id: z.uuid() });
 const bodySchema = z.object({ templateId: z.uuid() });
@@ -27,19 +30,32 @@ const SEND_ERRORS = {
   ],
   contact_blocked: [409, 'Pediu para não ser contatado por e-mail. Nada foi enviado.'],
   send_failed: [502, 'Não foi possível enviar o e-mail. Nada foi enviado.'],
+  not_a_contact: [422, 'Este endereço não é de um contato desta negociação.'],
+  file_not_found: [404, 'Anexo não encontrado nos arquivos desta negociação.'],
+  file_type: [415, 'Programas e scripts não vão como anexo.'],
+  too_large: [413, 'Os anexos passam de 20 MB juntos. Tire algum antes de enviar.'],
 } as const;
+type SendError = keyof typeof SEND_ERRORS;
 
 /**
- * E-mail to the lead from the deal's page: the person picks one of the active
- * templates, sees it filled in, and sends it. Same service as the automation
- * rules (`sendTemplateToLead`), same outbox and the same `lead.email_sent`
- * timeline event; in test mode (the default) nothing leaves, the message is only
- * recorded. Visibility follows the caller's scope on `leads.*` (a seller sees and
- * writes to their own leads). Audit entries carry ids, never the text.
+ * E-mail to the lead from the deal's page: the person writes it (to one of the
+ * deal's addresses, with the deal's files as attachments), starting from one of
+ * the active templates or not. A bare `{ templateId }` still sends the template
+ * as it is. Same service as the automation rules (`sendToLead`), same outbox and
+ * the same `lead.email_sent` timeline event; in test mode (the default) nothing
+ * leaves, the message is only recorded. Visibility follows the caller's scope on
+ * `leads.*` (a seller sees and writes to their own leads). Audit entries carry
+ * ids, never the text, an address or a file name.
  */
 export const leadEmailRoutes: FastifyPluginAsync = async (app) => {
-  const { db } = app.wings;
+  const { db, env } = app.wings;
   type Req = Parameters<typeof app.can>[0];
+  const driveDeps = {
+    db,
+    storage: storageOf(app.wings),
+    maxFileBytes: env.DRIVE_MAX_FILE_BYTES,
+    now: () => new Date(),
+  };
 
   const visibleLead = (request: Req, id: string, permission: LeadPermission) =>
     leadInScope(db, request.session.actor, id, permission);
@@ -69,6 +85,8 @@ export const leadEmailRoutes: FastifyPluginAsync = async (app) => {
           templateName: crmEmailTemplates.name,
           sentByName: employees.fullName,
           fromEmail: crmEmailOutbox.fromEmail,
+          toEmail: crmEmailOutbox.toEmail,
+          attachments: crmEmailOutbox.attachments,
         })
         .from(crmEmailOutbox)
         .leftJoin(crmEmailTemplates, eq(crmEmailTemplates.id, crmEmailOutbox.templateId))
@@ -87,10 +105,14 @@ export const leadEmailRoutes: FastifyPluginAsync = async (app) => {
       templateName: r.templateName,
       sentByName: r.sentByName,
       fromEmail: r.fromEmail,
+      toEmail: r.toEmail,
+      attachments: r.attachments,
     }));
     const transport = crmMailOf(app.wings);
     return reply.send({
       to: lead.email,
+      // Where "Escrever e-mail" may send to: the deal's e-mail, then its other contacts'.
+      addresses: await dealAddressesOf(db, lead),
       // Expansão with a brand: the lead must not see the Wings, so no e-mail leaves (brand rule).
       hidden: leadHidesWings(lead),
       // A "não me contate" by e-mail: why nothing can be sent, or null.
@@ -120,38 +142,91 @@ export const leadEmailRoutes: FastifyPluginAsync = async (app) => {
     return reply.send(await renderForLead(db, lead, template));
   });
 
-  app.post('/leads/:id/emails', write, async (request, reply) => {
-    const params = idParam.safeParse(request.params);
-    const body = bodySchema.safeParse(request.body);
-    if (!params.success || !body.success) return reply.status(400).send(invalid);
-    const lead = await visibleLead(request, params.data.id, 'leads.write');
-    if (!lead) return reply.status(404).send(notFound());
+  /** The template as it is, or the person's own text with attachments; every refusal is audited. */
+  const send = async (
+    request: Req,
+    lead: NonNullable<Awaited<ReturnType<typeof visibleLead>>>,
+    body: z.infer<typeof bodySchema> | z.infer<typeof leadEmailComposeSchema>,
+  ) => {
     const actor = request.session.actor.employeeId;
-    const outcome = await sendTemplateToLead(db, {
+    const transport = crmMailOf(app.wings);
+    if (!('to' in body))
+      return sendTemplateToLead(db, {
+        lead,
+        templateId: body.templateId,
+        transport,
+        runId: null,
+        sentBy: actor,
+      });
+    if (leadHidesWings(lead)) return { ok: false as const, reason: 'brand_hidden' as const };
+    const to = body.to.trim().toLowerCase();
+    if (!(await dealAddressesOf(db, lead)).some((a) => a.email === to))
+      return { ok: false as const, reason: 'not_a_contact' as const };
+    if (
+      body.templateId &&
+      !(await db.query.crmEmailTemplates.findFirst({
+        where: eq(crmEmailTemplates.id, body.templateId),
+        columns: { id: true },
+      }))
+    )
+      return { ok: false as const, reason: 'template_gone' as const };
+    const files = await attachmentsFor(
+      driveDeps,
+      dealRouteAccessOf(request.session.actor),
+      lead.id,
+      body.fileIds,
+    );
+    if (!files.ok) return files;
+    return sendToLead(db, {
       lead,
-      templateId: body.data.templateId,
-      transport: crmMailOf(app.wings),
+      to,
+      templateId: body.templateId,
+      message: async () => ({ subject: body.subject, body: body.text }),
+      attachments: files.attachments,
+      files: files.files,
+      transport,
       runId: null,
       sentBy: actor,
     });
+  };
+
+  app.post('/leads/:id/emails', write, async (request, reply) => {
+    const params = idParam.safeParse(request.params);
+    const raw = typeof request.body === 'object' && request.body !== null ? request.body : {};
+    const body =
+      'to' in raw || 'subject' in raw || 'text' in raw
+        ? leadEmailComposeSchema.safeParse(raw)
+        : bodySchema.safeParse(raw);
+    if (!params.success) return reply.status(400).send(invalid);
+    if (!body.success)
+      return reply
+        .status(400)
+        .send({ ...invalid, message: body.error.issues[0]?.message ?? invalid.message });
+    const lead = await visibleLead(request, params.data.id, 'leads.write');
+    if (!lead) return reply.status(404).send(notFound());
+    const outcome = await send(request, lead, body.data);
+    const fileIds = 'fileIds' in body.data ? body.data.fileIds : [];
     await writeAudit(db, {
-      actorEmployeeId: actor,
+      actorEmployeeId: request.session.actor.employeeId,
       action: outcome.ok ? 'lead.email_sent' : 'lead.email_failed',
       entity: 'lead',
       entityId: lead.id,
       ip: request.ip,
       metadata: {
         templateId: body.data.templateId,
+        composed: 'to' in body.data,
+        fileIds,
         ...(outcome.ok
           ? { mode: outcome.mode, outboxId: outcome.outboxId }
           : { reason: outcome.reason }),
       },
     });
     if (!outcome.ok) {
-      const [status, message] = SEND_ERRORS[outcome.reason];
-      return reply
-        .status(status)
-        .send({ error: outcome.reason, message: outcome.message ?? message });
+      const [status, message] = SEND_ERRORS[outcome.reason as SendError];
+      return reply.status(status).send({
+        error: outcome.reason,
+        message: ('message' in outcome ? outcome.message : undefined) ?? message,
+      });
     }
     return reply.status(201).send({ outboxId: outcome.outboxId, mode: outcome.mode });
   });

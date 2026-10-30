@@ -13,6 +13,8 @@ export interface Mail {
   subject: string;
   text: string;
   html: string;
+  /** Files that go with it (the CRM's free-text e-mail). */
+  attachments?: { filename: string; contentType: string; content: Buffer }[];
 }
 
 export interface Mailer {
@@ -51,6 +53,7 @@ export function createMailer(env: Env, log?: { info: (msg: string) => void }): M
         subject: mail.subject,
         text: mail.text,
         html: mail.html,
+        attachments: mail.attachments,
       });
       // Delivery evidence without personal data: no recipient address is
       // logged, only what the SMTP server answered.
