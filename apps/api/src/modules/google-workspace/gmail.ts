@@ -99,7 +99,10 @@ export function buildRawMessage(input: GmailMessageInput): string {
     const name = contentDisposition('attachment', file.filename.replace(/[\r\n]/g, ' '));
     return [
       `--${mixed}`,
-      `Content-Type: ${file.contentType.replace(/[\r\n;]/g, '')}`,
+      `Content-Type: ${file.contentType
+        .split(';')[0]!
+        .replace(/[\r\n]/g, '')
+        .trim()}`,
       `Content-Disposition: ${name}`,
       'Content-Transfer-Encoding: base64',
       '',

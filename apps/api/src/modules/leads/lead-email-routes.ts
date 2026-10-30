@@ -192,7 +192,7 @@ export const leadEmailRoutes: FastifyPluginAsync = async (app) => {
 
   app.post('/leads/:id/emails', write, async (request, reply) => {
     const params = idParam.safeParse(request.params);
-    const raw = (request.body ?? {}) as Record<string, unknown>;
+    const raw = typeof request.body === 'object' && request.body !== null ? request.body : {};
     const body =
       'to' in raw || 'subject' in raw || 'text' in raw
         ? leadEmailComposeSchema.safeParse(raw)

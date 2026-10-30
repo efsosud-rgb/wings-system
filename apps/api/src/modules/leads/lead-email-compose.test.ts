@@ -373,5 +373,13 @@ describe('free-text e-mail from the deal', () => {
     const empty = await compose(gmailApp, seller, lead.id, { to: lead.email, subject: ' ' });
     expect(empty.statusCode).toBe(400);
     expect(empty.json()).toMatchObject({ message: 'Escreva o assunto' });
+    const notAnObject = await gmailApp.inject({
+      method: 'POST',
+      url: `/leads/${lead.id}/emails`,
+      cookies: seller.cookies,
+      headers: { 'content-type': 'application/json' },
+      payload: '"texto"',
+    });
+    expect(notAnObject.statusCode).toBe(400);
   });
 });
