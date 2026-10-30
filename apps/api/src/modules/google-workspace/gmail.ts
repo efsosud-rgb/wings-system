@@ -11,9 +11,13 @@ import { contentDisposition } from '../../lib/storage/index.js';
  */
 
 export const GMAIL_SEND_URL = 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send';
-/** The media upload of the same method: the JSON `raw` one only takes small messages. */
+/**
+ * The upload of the same method, for messages with attachments (the JSON `raw` one only takes
+ * small messages). Multipart: a JSON part with the threadId, then the message itself, so an answer
+ * with attachments stays in the lead's conversation too.
+ */
 export const GMAIL_UPLOAD_URL =
-  'https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=media';
+  'https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=multipart';
 
 export class GmailError extends Error {
   constructor(
@@ -129,19 +133,31 @@ export async function sendGmail(
 ): Promise<GmailSent> {
   const message = buildRawMessage(input);
   const raw = Buffer.from(message, 'utf8').toString('base64url');
-  // shortcut: the media upload carries no threadId; nothing sends attachments in a thread yet.
   const upload = Boolean(input.attachments?.length);
+  const thread = input.threadId ? { threadId: input.threadId } : {};
+  const related = `wings-${randomBytes(12).toString('hex')}`;
   let response: Response;
   try {
     response = await transport(upload ? GMAIL_UPLOAD_URL : GMAIL_SEND_URL, {
       method: 'POST',
       headers: {
         authorization: `Bearer ${accessToken}`,
-        'content-type': upload ? 'message/rfc822' : 'application/json',
+        'content-type': upload ? `multipart/related; boundary="${related}"` : 'application/json',
       },
       body: upload
-        ? message
-        : JSON.stringify({ raw, ...(input.threadId ? { threadId: input.threadId } : {}) }),
+        ? [
+            `--${related}`,
+            'Content-Type: application/json; charset=UTF-8',
+            '',
+            JSON.stringify(thread),
+            `--${related}`,
+            'Content-Type: message/rfc822',
+            '',
+            message,
+            `--${related}--`,
+            '',
+          ].join('\r\n')
+        : JSON.stringify({ raw, ...thread }),
     });
   } catch {
     throw new GmailError('unreachable');
