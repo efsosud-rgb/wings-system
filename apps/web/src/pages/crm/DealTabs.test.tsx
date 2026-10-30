@@ -279,6 +279,35 @@ describe('Timeline — an e-mail sent from the deal', () => {
     expect(body).toMatch(/Anexos: proposta\.pdf \(2([,.]0)? KB\)/);
   });
 
+  it('shows a lead’s reply with who wrote it, its text and its files', () => {
+    render(
+      <Timeline
+        data={loaded([
+          event({
+            id: 'm3',
+            kind: 'lead.email_received',
+            detail: {
+              subject: 'Re: Proposta',
+              from: 'Paula',
+              text: 'Gostei, vamos conversar.',
+              attachments: [
+                { name: 'contrato.pdf', byteSize: 2048, refused: null },
+                { name: 'setup.exe', byteSize: 10, refused: 'file_type' },
+              ],
+            },
+          }),
+        ])}
+      />,
+    );
+    const list = screen.getByRole('list');
+    expect(within(list).getByText('E-mail recebido do lead')).toBeTruthy();
+    const body = list.querySelector('.crm-tl-body')!.textContent!;
+    expect(body).toContain('De: Paula');
+    expect(body).toContain('Re: Proposta');
+    expect(body).toContain('Gostei, vamos conversar.');
+    expect(body).toMatch(/contrato\.pdf \(2([,.]0)? KB\), setup\.exe \([^)]+\) — não guardado/);
+  });
+
   it('adds nothing to an older e-mail event that carried neither', () => {
     render(<Timeline data={loaded([event({ id: 'm2', kind: 'lead.email_sent' })])} />);
     expect(screen.getByRole('list').querySelector('.crm-tl-body')).toBeNull();
