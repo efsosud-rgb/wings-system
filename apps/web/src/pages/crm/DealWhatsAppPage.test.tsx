@@ -221,6 +221,7 @@ vi.mock('../../api/whatsapp.js', () => ({
   useSendWhatsAppText: () => mutation(textMutate),
   useSendWhatsAppTemplate: () => mutation(templateMutate),
   useSendWhatsAppFile: () => ({ ...mutation(), reset: vi.fn() }),
+  useSendWhatsAppVoice: () => ({ ...mutation(), reset: vi.fn() }),
   NO_DEAL_FOR_FILES: 'O arquivo fica nos arquivos da negociação.',
   useTemplatePreview: (_thread: unknown, input: { name: string } | null) => {
     if (input) previewCalls.push(input);

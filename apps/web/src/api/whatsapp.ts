@@ -399,6 +399,23 @@ export function useSendWhatsAppFile(thread: WhatsAppThread, leadId: string | nul
   });
 }
 
+/**
+ * A voice note recorded in the conversation: the recording goes as it is, and the API converts
+ * it, keeps it in the deal's Arquivos and sends it as a WhatsApp voice message.
+ */
+export function useSendWhatsAppVoice(thread: WhatsAppThread, leadId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (recording: Blob) =>
+      api.upload<{ message: WaMessage }>(`${threadPath(thread)}/voice`, recording),
+    onSuccess: () => afterSend(queryClient, thread),
+    // The deal's Arquivos show the audio kept there, whatever happened after.
+    onSettled: () => {
+      if (leadId) void queryClient.invalidateQueries({ queryKey: ['leads'] });
+    },
+  });
+}
+
 /** Why a conversation with no deal sends no file (the API says the same). */
 export const NO_DEAL_FOR_FILES =
   'O arquivo fica nos arquivos da negociação: esta conversa ainda não tem negociação.';

@@ -204,8 +204,49 @@ DROP INDEX "wa_messages_media_idx"; DELETE FROM drizzle.__drizzle_migrations WHE
   grava `drive.file_previewed` ou `drive.file_downloaded` com `purpose: 'whatsapp_message'`. Com o arquivo na
   lixeira, o balão busca na Meta, como um arquivo recebido ainda não copiado. A fila que copia os arquivos
   recebidos (`media-store.ts`) pula as mensagens com `file`: o que a equipe mandou já está no Drive.
-- **Fora desta entrega:** gravar áudio no navegador, figurinha, localização, contato, vários arquivos de uma
-  vez, arrastar ou colar, arquivo fora das 24 h (só modelo) e responder citando uma mensagem.
+- **Fora desta entrega:** figurinha, localização, contato, vários arquivos de uma vez, arrastar ou colar,
+  arquivo fora das 24 h (só modelo) e responder citando uma mensagem. Gravar áudio veio depois (abaixo).
+
+## Gravar áudio (t084, 30/10)
+
+Pedido do Eric de 30/10: as vendedoras mandam texto, arquivo e **áudio** pelo sistema, no número oficial e nos
+números de trabalho.
+
+- **Tela:** 🎤 ao lado do 📎 (`pages/crm/WhatsAppVoice.tsx`). O navegador só pede o microfone no clique. Gravando,
+  o campo dá lugar ao tempo ("Gravando 0:12 de 3:00"), com **Parar** e **Cancelar**; a gravação para sozinha em
+  3 minutos. Parada, aparece o player para ouvir, **Apagar** e **Enviar áudio**. O microfone desliga assim que
+  a gravação para. Microfone recusado: a tela diz como liberar (cadeado ao lado do endereço › Microfone ›
+  Permitir; no celular, também nos ajustes do aparelho); sem microfone ou com navegador que não grava, diz isso.
+  O 🎤 fica desligado, com o motivo embaixo do campo, numa conversa sem negociação, para quem não edita a
+  negociação e com "não me contate" ativo.
+- **O que o navegador manda:** a gravação como está (Chrome e Edge WebM/OPUS, Firefox OGG/OPUS, Safari MP4/AAC),
+  até 5 MB (`WA_VOICE_UPLOAD_MAX_BYTES`), no corpo cru de `POST /leads/:id/whatsapp/voice` ou
+  `POST /whatsapp/conversations/:id/voice`.
+- **Na API (`modules/whatsapp/voice.ts`):** o ffmpeg converte para **OGG com OPUS, mono, 48 kHz, 20 kbit/s**, o
+  formato que a Meta mostra como mensagem de voz (documentação da Cloud API, "Audio messages › Voice messages":
+  só OGG/OPUS; a tabela de tipos diz "mono input only"). A duração sai do próprio arquivo (posição da última
+  página OGG menos o pre-skip). Até **3 minutos** (`WA_VOICE_MAX_SECONDS`) e **512 KB** (`WA_VOICE_MAX_BYTES`): a
+  Meta aceita áudio de até 16 MB, mas só mostra o botão de tocar até 512 KB (acima vira ícone de baixar); 3 min
+  a 20 kbit/s ficam abaixo disso. A Meta não publica duração máxima.
+- **Mesmo caminho do arquivo:** depois das travas, o áudio entra nos **Arquivos da negociação**
+  (`storeLeadFile`, nome `audio-whatsapp-AAAA-MM-DD-HHMMSS.ogg` no horário de São Paulo, auditoria
+  `lead.file_added` com `voice: true`), sobe para a Meta pelo token do número da conversa (`driveFileMediaId`) e
+  sai pelo `deliverWhatsApp`, uma vez, com `{ "type": "audio", "audio": { "id": …, "voice": true } }`. A mensagem
+  guarda `media`, `file` e `voice: { seconds }`; o balão toca o arquivo do Drive, como os outros anexos. A
+  auditoria `whatsapp.message_sent` leva `kind: 'voice'`, `fileId`, `sentAs: 'audio'` e `voice: true`.
+- **Travas, na ordem:** a do vendedor no número oficial (403 `whatsapp_soon`), opt-in da prospecção, quem segura a
+  conversa (409 `not_holder`), **"não me contate" e SAIR** (409 `contact_blocked`, com `lead.contact_blocked`
+  na linha do tempo, caminho `audio_gravado`), janela de 24 h daquele número (409 `window_closed`), conversa sem
+  negociação (422 `no_deal`), quem não edita a negociação (403 `files_forbidden`). Formato que não é gravação
+  (415 `unsupported_audio`), corpo acima de 5 MB (413), gravação ilegível (422 `voice_unreadable`), longa demais
+  (413 `voice_too_long`), grande demais depois da conversão (413 `voice_too_large`), ffmpeg ausente (503
+  `voice_unavailable`). Nada recusado fica nos arquivos nem vai para a Meta.
+- **Diferente do texto:** com "não me contate" ativo, a resposta digitada dentro das 24 h continua; o áudio
+  gravado não vai (escolha mais segura, registrada nas dúvidas da tarefa t084 para o Eric).
+- **Falha depois de guardar:** se a subida para a Meta falhar, o áudio já está nos Arquivos da negociação; mandar
+  de novo grava outro. Dá para enviar o guardado pelo 📎, mas aí ele vai como áudio comum, não como voz.
+- **Imagem da API:** `docker/api.Dockerfile` instala o `ffmpeg` do Alpine (traz o libopus; uns 120 MiB a mais).
+  Sem ele, o envio de áudio responde 503 e nada sai.
 
 ## Acesso
 
@@ -233,6 +274,7 @@ cadastrados na Meta. Os outros níveis não mudam.
 | `GET /whatsapp/templates[?refresh=1]`                                     | Modelos aprovados                                       |
 | `GET`, `POST /whatsapp/templates/manage`, `PUT …/:id`, `PUT …/:id/fields` | Tela de modelos (`modelos.md`)                          |
 | `POST /leads/:id/whatsapp/media`, `…/conversations/:id/media`             | Arquivo da negociação, por id (ver "Enviar arquivo")    |
+| `POST /leads/:id/whatsapp/voice`, `…/conversations/:id/voice`             | Áudio gravado, corpo cru (ver "Gravar áudio")           |
 | `GET /whatsapp/messages/:id/media`                                        | Arquivo recebido ou enviado                             |
 | `POST /leads/:id/whatsapp/template-preview`, `GET …/art`                  | O que o modelo vira agora e a arte (`arte-modelos.md`)  |
 | `GET`, `POST /leads/:id/whatsapp/call-permission`, `POST …/preview`       | Permissão para ligar e o pedido (livre ou por modelo)   |
@@ -304,6 +346,10 @@ envio real (que só acontece a pedido), não se sabe ainda: quais tipos de docum
 publicada fala em PDF, TXT e Office; um ZIP provavelmente é recusado na subida, e a tela mostra a mensagem);
 se o áudio chega como mensagem de voz ou como arquivo; se a legenda aparece num documento; e o tempo de
 subida de um arquivo grande para o R2 e para a Meta.
+O áudio gravado (t084) foi testado com o ffmpeg de verdade (WebM, OGG e MP4 viram OGG/OPUS mono) e com a Meta
+simulada; o campo `voice: true` segue a documentação da Meta lida em 30/10 e não foi visto num celular. A
+gravação no navegador foi testada com microfone e MediaRecorder falsos: o primeiro teste num Safari de verdade
+confere o MP4 e o player do OGG no balão (Safari antigo pode não tocar OGG).
 
 ## Custos (página de preços da Meta, 30/09/2026)
 

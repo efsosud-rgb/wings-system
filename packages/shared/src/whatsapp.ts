@@ -245,6 +245,28 @@ export function waSendKindOf(file: {
     : null;
 }
 
+// --- a voice note recorded in the browser ------------------------------------------------
+
+/**
+ * A recording goes as a voice note (docs/whatsapp/cloud-api.md, "Gravar áudio"): the API turns it
+ * into OGG/OPUS mono, the format Meta shows as a voice message, and keeps it in the deal's files.
+ * Meta shows the play button only up to 512 KB (a larger one comes with a download icon): three
+ * minutes at the API's bitrate stay under it.
+ */
+export const WA_VOICE_MAX_SECONDS = 180;
+/** The voice note as it goes to Meta. */
+export const WA_VOICE_MAX_BYTES = 512_000;
+/** The recording as the browser sends it (before the conversion), at most. */
+export const WA_VOICE_UPLOAD_MAX_BYTES = 5_000_000;
+/** What browsers record in: Chrome and Edge WebM, Firefox OGG, Safari MP4 (all with no video). */
+export const WA_VOICE_RECORDING_TYPES = ['audio/webm', 'audio/ogg', 'audio/mp4'] as const;
+
+/** Whether the API takes this recording's type (parameters like `;codecs=opus` aside). */
+export const waVoiceRecordingType = (contentType: string | undefined) => {
+  const type = (contentType ?? '').split(';')[0]!.trim().toLowerCase();
+  return (WA_VOICE_RECORDING_TYPES as readonly string[]).includes(type) ? type : null;
+};
+
 export const waSendMediaSchema = z.object({
   /** One of the deal's own files (it went up to the deal's Arquivos first). */
   fileId: z.uuid(),
