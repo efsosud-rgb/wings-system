@@ -33,7 +33,8 @@ permissão. O que o Eric faz na Meta e o roteiro da troca do número ficam em `/
   a versão `_arte` é escolhida no envio. Dentro da janela o modelo vira mensagem comum; fora, vai o modelo com a
   arte da marca no cabeçalho (`arte-modelos.md`).
 - **Pedido para parar:** "SAIR", "PARAR", "PARE", "STOP", "CANCELAR" ou "DESCADASTRAR" sozinhos bloqueiam
-  modelos para aquele telefone até a pessoa escrever outra coisa.
+  modelos para aquele telefone (o "não me contate" fica até a gerência revogar) e, no número oficial, também o
+  texto e o arquivo da equipe até a pessoa escrever outra coisa (409 `opted_out`, WA-12).
 - **Arquivos recebidos:** copiados da Meta para o nosso armazenamento (R2) logo depois de chegar
   (`modules/whatsapp/media-store.ts`, a cada minuto, na API; liga sozinho quando o WhatsApp e o armazenamento
   estão configurados). Cada arquivo vai uma vez; uma falha é tentada de novo depois de 1, 5 e 30 minutos, 2, 6
@@ -241,7 +242,8 @@ números de trabalho.
   (415 `unsupported_audio`), corpo acima de 5 MB (413), gravação ilegível (422 `voice_unreadable`), longa demais
   (413 `voice_too_long`), grande demais depois da conversão (413 `voice_too_large`), ffmpeg ausente (503
   `voice_unavailable`). Nada recusado fica nos arquivos nem vai para a Meta.
-- **Diferente do texto:** com "não me contate" ativo, a resposta digitada dentro das 24 h continua; o áudio
+- **Diferente do texto:** com "não me contate" ativo, a resposta digitada dentro das 24 h continua (menos logo
+  depois de um SAIR, antes de a pessoa escrever de novo: 409 `opted_out`); o áudio
   gravado não vai (escolha mais segura, registrada nas dúvidas da tarefa t084 para o Eric).
 - **Falha depois de guardar:** se a subida para a Meta falhar, o áudio já está nos Arquivos da negociação; mandar
   de novo grava outro. Dá para enviar o guardado pelo 📎, mas aí ele vai como áudio comum, não como voz.
