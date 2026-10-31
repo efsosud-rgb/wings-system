@@ -34,7 +34,7 @@ import { waExportChatOf } from '@wings/shared';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { permissionScope, useSession } from './auth.js';
-import { api } from './client.js';
+import { api, ApiError } from './client.js';
 import { sendLeadFile } from './crm.js';
 import { openRingingStream } from './ringing-stream.js';
 import { INBOX_SUMMARY_KEY, inboxStreamDown, receiveInboxSummary } from './whatsapp-inbox.js';
@@ -406,12 +406,17 @@ export function useSendWhatsAppFile(thread: WhatsAppThread, leadId: string | nul
 export function useSendWhatsAppVoice(thread: WhatsAppThread, leadId: string | null) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (recording: Blob) =>
-      api.upload<{ message: WaMessage }>(`${threadPath(thread)}/voice`, recording),
+    // The recording's key goes with it: a second try of the same one gets the audio that went.
+    mutationFn: (input: { recording: Blob; key: string }) =>
+      api.upload<{ message: WaMessage }>(`${threadPath(thread)}/voice`, input.recording, {
+        'Idempotency-Key': input.key,
+      }),
     onSuccess: () => afterSend(queryClient, thread),
-    // The deal's Arquivos show the audio kept there, whatever happened after.
-    onSettled: () => {
-      if (leadId) void queryClient.invalidateQueries({ queryKey: ['leads'] });
+    // The deal's Arquivos show the audio kept there. A refusal by the API kept nothing, so the
+    // deals are not read again; a network error may hide a send that went, so they are.
+    onSettled: (_data, error) => {
+      if (leadId && !(error instanceof ApiError))
+        void queryClient.invalidateQueries({ queryKey: ['leads'] });
     },
   });
 }

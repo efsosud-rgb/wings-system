@@ -222,18 +222,25 @@ números de trabalho.
   negociação e com "não me contate" ativo.
 - **O que o navegador manda:** a gravação como está (Chrome e Edge WebM/OPUS, Firefox OGG/OPUS, Safari MP4/AAC),
   até 5 MB (`WA_VOICE_UPLOAD_MAX_BYTES`), no corpo cru de `POST /leads/:id/whatsapp/voice` ou
-  `POST /whatsapp/conversations/:id/voice`.
+  `POST /whatsapp/conversations/:id/voice`, com o cabeçalho `Idempotency-Key`: um UUID por gravação, criado
+  quando ela para (sem ele, 400 `voice_key_missing`).
+- **Uma gravação, um áudio (revisão do PR #67, 31/10):** a chave fica em `wa_voice_sends` (chave primária
+  funcionário + chave). Dois cliques ao mesmo tempo, ou um novo envio depois de um erro de rede, não geram dois
+  áudios: o segundo recebe a mensagem que saiu (200) ou, se a primeira ainda está indo, 409 `voice_in_progress`.
+  Uma recusa apaga a reserva, então a mesma gravação pode ir de novo; uma reserva largada por uma queda do
+  servidor é retomada depois de 5 minutos. A tela manda a mesma chave enquanto a gravação não for apagada, e só
+  relê as negociações depois de um envio ou de um erro de rede (uma recusa da API não guardou nada).
 - **Na API (`modules/whatsapp/voice.ts`):** o ffmpeg converte para **OGG com OPUS, mono, 48 kHz, 20 kbit/s**, o
   formato que a Meta mostra como mensagem de voz (documentação da Cloud API, "Audio messages › Voice messages":
   só OGG/OPUS; a tabela de tipos diz "mono input only"). A duração sai do próprio arquivo (posição da última
   página OGG menos o pre-skip). Até **3 minutos** (`WA_VOICE_MAX_SECONDS`) e **512 KB** (`WA_VOICE_MAX_BYTES`): a
   Meta aceita áudio de até 16 MB, mas só mostra o botão de tocar até 512 KB (acima vira ícone de baixar); 3 min
   a 20 kbit/s ficam abaixo disso. A Meta não publica duração máxima.
-- **Mesmo caminho do arquivo:** depois das travas, o áudio entra nos **Arquivos da negociação**
-  (`storeLeadFile`, nome `audio-whatsapp-AAAA-MM-DD-HHMMSS.ogg` no horário de São Paulo, auditoria
-  `lead.file_added` com `voice: true`), sobe para a Meta pelo token do número da conversa (`driveFileMediaId`) e
-  sai pelo `deliverWhatsApp`, uma vez, com `{ "type": "audio", "audio": { "id": …, "voice": true } }`. A mensagem
-  guarda `media`, `file` e `voice: { seconds }`; o balão toca o arquivo do Drive, como os outros anexos. A
+- **Mesmo caminho do arquivo:** depois das travas, o áudio sobe para a Meta pelo token do número da conversa
+  (`uploadWhatsAppMedia`) e **só então** entra nos **Arquivos da negociação** (`storeLeadFile`, nome
+  `audio-whatsapp-AAAA-MM-DD-HHMMSS.ogg` no horário de São Paulo, auditoria `lead.file_added` com `voice: true`),
+  e sai pelo `deliverWhatsApp`, uma vez, com `{ "type": "audio", "audio": { "id": …, "voice": true } }`. A mensagem
+  guarda `media`, `file` e `voice: { seconds, key }`; o balão toca o arquivo do Drive, como os outros anexos. A
   auditoria `whatsapp.message_sent` leva `kind: 'voice'`, `fileId`, `sentAs: 'audio'` e `voice: true`.
 - **Travas, na ordem:** a do vendedor no número oficial (403 `whatsapp_soon`), opt-in da prospecção, quem segura a
   conversa (409 `not_holder`), **"não me contate" e SAIR** (409 `contact_blocked`, com `lead.contact_blocked`
@@ -245,8 +252,9 @@ números de trabalho.
 - **Diferente do texto:** com "não me contate" ativo, a resposta digitada dentro das 24 h continua (menos logo
   depois de um SAIR, antes de a pessoa escrever de novo: 409 `opted_out`); o áudio
   gravado não vai (escolha mais segura, registrada nas dúvidas da tarefa t084 para o Eric).
-- **Falha depois de guardar:** se a subida para a Meta falhar, o áudio já está nos Arquivos da negociação; mandar
-  de novo grava outro. Dá para enviar o guardado pelo 📎, mas aí ele vai como áudio comum, não como voz.
+- **Subida que falhou:** se a Meta não aceitar a subida, nada fica nos Arquivos e nada sai (502
+  `media_upload_failed`, "nada foi enviado nem guardado"); um novo clique guarda um áudio só. Se a Meta recusar o
+  envio depois da subida, a mensagem fica como falha e o áudio fica nos Arquivos, como um arquivo enviado.
 - **Imagem da API:** `docker/api.Dockerfile` instala o `ffmpeg` do Alpine (traz o libopus; uns 120 MiB a mais).
   Sem ele, o envio de áudio responde 503 e nada sai.
 

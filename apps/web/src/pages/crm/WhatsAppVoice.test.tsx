@@ -49,9 +49,10 @@ const thread = (over: Partial<DealWhatsApp> = {}): DealWhatsApp => ({
 const show = (
   data: DealWhatsApp = thread(),
   target: { leadId: string } | { conversationId: string } = { leadId: 'l1' },
+  client = new QueryClient(),
 ) =>
   render(
-    <QueryClientProvider client={new QueryClient()}>
+    <QueryClientProvider client={client}>
       <WhatsAppChat thread={target} data={data} canSend />
     </QueryClientProvider>,
   );
@@ -134,6 +135,46 @@ describe('recording a voice note', () => {
     await waitFor(() => expect(screen.queryByLabelText('Ouvir a gravação')).toBeNull());
     expect(screen.getByLabelText('Mensagem')).toBeTruthy();
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:gravacao');
+  });
+
+  it('sends the same key again for the same recording, so a retry after a network error is one audio', async () => {
+    fetchMock.mockImplementationOnce(() => Promise.reject(new TypeError('Failed to fetch')));
+    show();
+    fireEvent.click(mic());
+    fireEvent.click(await screen.findByRole('button', { name: 'Parar' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar áudio' }));
+    await waitFor(() => expect(voiceCalls()).toHaveLength(1));
+    // The answer never came: the recording stays, and "Enviar áudio" sends it again.
+    fireEvent.click(await screen.findByRole('button', { name: 'Enviar áudio' }));
+    await waitFor(() => expect(voiceCalls()).toHaveLength(2));
+    const keys = voiceCalls().map(
+      ([, init]) => ((init as RequestInit).headers as Record<string, string>)['Idempotency-Key'],
+    );
+    expect(keys[0]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(keys[1]).toBe(keys[0]);
+  });
+
+  it('does not read the deals again when the API refused the audio, and does after a send', async () => {
+    const client = new QueryClient();
+    const invalidated = vi.spyOn(client, 'invalidateQueries');
+    const leadsRead = () =>
+      invalidated.mock.calls.filter(([filter]) => filter?.queryKey?.[0] === 'leads').length;
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ error: 'window_closed', message: 'Fora das 24 horas.' }), {
+          status: 409,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    );
+    show(thread(), { leadId: 'l1' }, client);
+    fireEvent.click(mic());
+    fireEvent.click(await screen.findByRole('button', { name: 'Parar' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar áudio' }));
+    expect(await screen.findByText('Fora das 24 horas.')).toBeTruthy();
+    expect(leadsRead()).toBe(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar áudio' }));
+    await waitFor(() => expect(leadsRead()).toBe(1));
   });
 
   it("sends a work number's chat by the conversation", async () => {
