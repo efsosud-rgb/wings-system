@@ -142,6 +142,9 @@ const prospectsOf = async (who: Session, query = '') =>
   (await call(who, 'GET', `/prospects${query}`)).json<{ prospects: InstagramProspect[] }>()
     .prospects;
 
+/** Scanning every column takes seconds when other test files load the database too. */
+const SCAN_TIMEOUT = 60_000;
+
 /** Every text or json column of the public schema that holds `needle`. */
 async function columnsHolding(needle: string): Promise<string[]> {
   const columns = await db.execute<{ table_name: string; column_name: string }>(sql`
@@ -284,20 +287,24 @@ describe('preview (§1.2 step 3): reads and crosses, writes nothing, no AI', () 
 });
 
 describe('confirm (§1.2 step 4)', () => {
-  it('the pasted text is in no table; phone and e-mail only as [número] and [e-mail]', async () => {
-    const text = `${EXAMPLE_1}\n@usuario.dados: quero franquear, zap 11 91357-2468 e teste.ficticio@exemplo.com`;
-    const res = await paste(sellerA, text);
-    expect(res.statusCode).toBe(200);
-    expect(await columnsHolding(text)).toEqual([]);
-    expect(await columnsHolding('Quer ter a sua própria rede')).toEqual([]);
-    expect(await columnsHolding('91357')).toEqual([]);
-    expect(await columnsHolding('teste.ficticio@exemplo.com')).toEqual([]);
-    const [evidence] = await db
-      .select()
-      .from(prospectEvidence)
-      .where(eq(prospectEvidence.authorUsername, 'usuario.dados'));
-    expect(evidence!.excerpt).toBe('quero franquear, zap [número] e [e-mail]');
-  });
+  it(
+    'the pasted text is in no table; phone and e-mail only as [número] and [e-mail]',
+    async () => {
+      const text = `${EXAMPLE_1}\n@usuario.dados: quero franquear, zap 11 91357-2468 e teste.ficticio@exemplo.com`;
+      const res = await paste(sellerA, text);
+      expect(res.statusCode).toBe(200);
+      expect(await columnsHolding(text)).toEqual([]);
+      expect(await columnsHolding('Quer ter a sua própria rede')).toEqual([]);
+      expect(await columnsHolding('91357')).toEqual([]);
+      expect(await columnsHolding('teste.ficticio@exemplo.com')).toEqual([]);
+      const [evidence] = await db
+        .select()
+        .from(prospectEvidence)
+        .where(eq(prospectEvidence.authorUsername, 'usuario.dados'));
+      expect(evidence!.excerpt).toBe('quero franquear, zap [número] e [e-mail]');
+    },
+    SCAN_TIMEOUT,
+  );
 
   it('"não contatar", lead and client never become prospects; nothing is kept about them', async () => {
     await paste(sellerA, '@pessoa.bloqueada: quero\n@pessoa.lead: quero\n@pessoa.cliente: quero');
@@ -534,28 +541,39 @@ describe('working a prospect (§1.2 step 5)', () => {
 });
 
 describe('purge after 30 days (§8.4) and nothing personal in the dw (§2.7)', () => {
-  it('clock + 31 days: the @ is gone from every table but contact_opt_outs; a lead stays', async () => {
-    const later = new Date(clock.getTime() + 31 * 86_400_000);
-    const result = await runInstagramHousekeeping(db, later);
-    expect(result).toMatchObject({ ran: true });
-    expect(await columnsHolding('usuario.dono')).toEqual([]);
-    expect(await columnsHolding('usuario.junta')).toEqual([]);
-    expect(await columnsHolding('usuario.parar')).toEqual(['contact_opt_outs.key_value']);
-    // Became a lead: its comment follows the lead's retention.
-    expect(await columnsHolding('usuario.lead1')).toContain('prospect_evidence.author_username');
-    const [audit] = await db
-      .select()
-      .from(auditLog)
-      .where(eq(auditLog.action, 'prospect_ai.instagram_purged'));
-    expect((audit!.metadata as { count: number }).count).toBeGreaterThan(5);
-  });
+  it(
+    'clock + 31 days: the @ is gone from every table but contact_opt_outs; a lead stays',
+    async () => {
+      const later = new Date(clock.getTime() + 31 * 86_400_000);
+      const result = await runInstagramHousekeeping(db, later);
+      expect(result).toMatchObject({ ran: true });
+      expect(await columnsHolding('usuario.dono')).toEqual([]);
+      expect(await columnsHolding('usuario.junta')).toEqual([]);
+      expect(await columnsHolding('usuario.parar')).toEqual(['contact_opt_outs.key_value']);
+      // Became a lead: its comment follows the lead's retention.
+      expect(await columnsHolding('usuario.lead1')).toContain('prospect_evidence.author_username');
+      const [audit] = await db
+        .select()
+        .from(auditLog)
+        .where(eq(auditLog.action, 'prospect_ai.instagram_purged'));
+      expect((audit!.metadata as { count: number }).count).toBeGreaterThan(5);
+    },
+    SCAN_TIMEOUT,
+  );
 
-  it('a day before the deadline nothing is purged', async () => {
-    await paste(sellerB, '@usuario.recente: quero abrir');
-    const result = await runInstagramHousekeeping(db, new Date(clock.getTime() + 29 * 86_400_000));
-    expect(result).toMatchObject({ purged: 0 });
-    expect(await columnsHolding('usuario.recente')).not.toEqual([]);
-  });
+  it(
+    'a day before the deadline nothing is purged',
+    async () => {
+      await paste(sellerB, '@usuario.recente: quero abrir');
+      const result = await runInstagramHousekeeping(
+        db,
+        new Date(clock.getTime() + 29 * 86_400_000),
+      );
+      expect(result).toMatchObject({ purged: 0 });
+      expect(await columnsHolding('usuario.recente')).not.toEqual([]);
+    },
+    SCAN_TIMEOUT,
+  );
 
   it('no column of the dw is named after the @, the excerpt, the post or the IGSID', async () => {
     const columns = await db.execute<{ column_name: string }>(sql`
