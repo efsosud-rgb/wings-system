@@ -338,7 +338,15 @@ export const instagramDoNotContactSchema = z.object({
   reason: z.string().trim().max(300).optional().or(z.literal('')),
 });
 export const instagramTransferSchema = z.object({ ownerEmployeeId: z.uuid() });
-export const instagramAttachSchema = z.object({ leadId: z.uuid() });
+/** "Anexar o comentário ao lead" (§2.4): a comment of someone who is already a lead. */
+export const instagramAttachSchema = z.object({
+  leadId: z.uuid(),
+  postUrl: z.string().trim().min(1).max(300),
+  username: z.string().trim().min(1).max(60),
+  text: z.string().min(1).max(5_000),
+  when: z.string().trim().max(40).nullable().optional(),
+});
+export type InstagramAttachInput = z.infer<typeof instagramAttachSchema>;
 
 /** "Criar lead" (§1.2): what the person wrote in the Direct, typed by the seller. */
 export const instagramLeadSchema = z

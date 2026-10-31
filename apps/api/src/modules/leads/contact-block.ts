@@ -291,12 +291,13 @@ export async function noteContactBlocked(
 }
 
 /**
- * For a list of search results at once: the oldest active "não me contate" reaching each place_id
- * or phone (the register and the WhatsApp SAIR), keyed `place_id:<id>` and `phone:<canonical>`.
+ * For a list of search results at once: the oldest active "não me contate" reaching each place_id,
+ * phone or Instagram @ (the register and the WhatsApp SAIR), keyed `place_id:<id>`,
+ * `phone:<canonical>` and `instagram_user:<@>`.
  */
 export async function optOutsAmong(
   db: Executor,
-  given: { placeIds: string[]; phones: string[] },
+  given: { placeIds: string[]; phones: string[]; instagramUsers?: string[] },
   tenantId = WINGS_TENANT_ID,
 ): Promise<Map<string, ContactOptOutEntry>> {
   const phones = [
@@ -306,7 +307,9 @@ export async function optOutsAmong(
     lead: [],
     phone: phones,
     email: [],
-    instagram_user: [],
+    instagram_user: (given.instagramUsers ?? [])
+      .map((u) => normalizeContactKey('instagram_user', u))
+      .filter((u) => u !== null),
     place_id: given.placeIds,
     cnpj: [],
   };

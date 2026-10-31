@@ -280,7 +280,7 @@ const fromItem = (item: Item, runId: string | null): Classified => ({
   reviewReason: null,
 });
 
-const unclassified = (reason: ProspectReviewReason): Classified => ({
+export const unclassified = (reason: ProspectReviewReason): Classified => ({
   method: null,
   signal: null,
   category: null,
