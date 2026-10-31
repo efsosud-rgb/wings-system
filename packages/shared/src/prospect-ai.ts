@@ -173,6 +173,14 @@ export const instagramProspectingSettingsSchema = z.object({
       path: ['revisar'],
     }),
   retention: z.object({ instagramSemLeadDias: z.number().int().min(7).max(90) }),
+  /** Business Discovery (parte 3, §6.4); came later, so a saved row without it reads the defaults. */
+  discovery: z
+    .object({
+      cacheDias: z.number().int().min(1).max(30),
+      porDia: z.number().int().min(0).max(2_000),
+      recentPosts: z.number().int().min(3).max(25),
+    })
+    .default({ cacheDias: 7, porDia: 500, recentPosts: 12 }),
   messages: z.object({
     primeiraAbordagemDirect: z
       .string()
@@ -193,6 +201,7 @@ export const DEFAULT_INSTAGRAM_PROSPECTING_SETTINGS: InstagramProspectingSetting
   paste: { maxChars: 50_000, maxComments: 300, perSellerPerDay: 10 },
   thresholds: { listar: 70, revisar: 40 },
   retention: { instagramSemLeadDias: 30 },
+  discovery: { cacheDias: 7, porDia: 500, recentPosts: 12 },
   messages: { primeiraAbordagemDirect: DEFAULT_FIRST_DIRECT_MESSAGE, linkPolitica: null },
 };
 
