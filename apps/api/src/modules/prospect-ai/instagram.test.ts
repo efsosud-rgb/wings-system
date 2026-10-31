@@ -27,6 +27,7 @@ import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factori
 import type { AgentLlm, LlmRequest } from '../agent/llm.js';
 import { recordContactOptOut } from '../leads/contact-block.js';
 import { upsertLead } from '../leads/service.js';
+import { runInstagramHousekeeping } from './housekeeping.js';
 
 /**
  * Prospecção Instagram, parte 2, against the API and a throwaway database, with a scripted model
@@ -529,5 +530,40 @@ describe('working a prospect (§1.2 step 5)', () => {
     const all = await prospectsOf(gerente);
     expect(new Set(all.map((p) => p.ownerEmployeeId)).size).toBeGreaterThan(1);
     expect((await prospectsOf(sellerA)).every((p) => p.mine)).toBe(true);
+  });
+});
+
+describe('purge after 30 days (§8.4) and nothing personal in the dw (§2.7)', () => {
+  it('clock + 31 days: the @ is gone from every table but contact_opt_outs; a lead stays', async () => {
+    const later = new Date(clock.getTime() + 31 * 86_400_000);
+    const result = await runInstagramHousekeeping(db, later);
+    expect(result).toMatchObject({ ran: true });
+    expect(await columnsHolding('usuario.dono')).toEqual([]);
+    expect(await columnsHolding('usuario.junta')).toEqual([]);
+    expect(await columnsHolding('usuario.parar')).toEqual(['contact_opt_outs.key_value']);
+    // Became a lead: its comment follows the lead's retention.
+    expect(await columnsHolding('usuario.lead1')).toContain('prospect_evidence.author_username');
+    const [audit] = await db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, 'prospect_ai.instagram_purged'));
+    expect((audit!.metadata as { count: number }).count).toBeGreaterThan(5);
+  });
+
+  it('a day before the deadline nothing is purged', async () => {
+    await paste(sellerB, '@usuario.recente: quero abrir');
+    const result = await runInstagramHousekeeping(db, new Date(clock.getTime() + 29 * 86_400_000));
+    expect(result).toMatchObject({ purged: 0 });
+    expect(await columnsHolding('usuario.recente')).not.toEqual([]);
+  });
+
+  it('no column of the dw is named after the @, the excerpt, the post or the IGSID', async () => {
+    const columns = await db.execute<{ column_name: string }>(sql`
+      select column_name from information_schema.columns where table_schema = 'dw'`);
+    expect(columns.rows.length).toBeGreaterThan(0);
+    const personal = columns.rows.filter((c) =>
+      /username|excerpt|trecho|igsid|instagram|post_url|comment/.test(c.column_name),
+    );
+    expect(personal).toEqual([]);
   });
 });
