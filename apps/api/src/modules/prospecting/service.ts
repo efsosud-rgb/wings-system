@@ -6,9 +6,13 @@ import {
   excludedName,
   grantedScope,
   icpScore,
+  INSTAGRAM_FROM_GOOGLE_SITE,
+  instagramOfWebsite,
   missingFields,
   nameKey,
   normalizeBrazilianPhone,
+  normalizeInstagram,
+  PROSPECT_ENRICHMENT_SOURCE,
   PROSPECT_FOLLOW_UP_TITLE,
   PROSPECT_HOLDING_STATUSES,
   PROSPECT_SEARCH_MAX_PAGES,
@@ -23,6 +27,7 @@ import {
   type ProspectClaimInput,
   type ProspectEnrichment,
   type ProspectingIcp,
+  type ProspectInstagramRef,
   type ProspectLeadInput,
   type ProspectQuery,
   type ProspectSearchInput,
@@ -334,6 +339,29 @@ async function leadDomainsAmong(db: Database, domains: string[]): Promise<Set<st
 }
 
 /**
+ * The company's known Instagram (§1.3): what its own site showed (saved, with the date), else
+ * Google's site field when it is an `instagram.com/<@>` profile (read live, never saved).
+ */
+function instagramRefOf(
+  enrichment: ProspectEnrichment,
+  website: string | null,
+  ticketOf: (username: string) => string,
+): ProspectInstagramRef | null {
+  const saved = enrichment.instagram ? normalizeInstagram(enrichment.instagram.value) : null;
+  if (saved)
+    return {
+      username: saved,
+      source: PROSPECT_ENRICHMENT_SOURCE,
+      at: enrichment.instagram?.at ?? null,
+      ticket: ticketOf(saved),
+    };
+  const live = instagramOfWebsite(website);
+  return live
+    ? { username: live, source: INSTAGRAM_FROM_GOOGLE_SITE, at: null, ticket: ticketOf(live) }
+    : null;
+}
+
+/**
  * Google's results with our data around them: filters and the exclusion list,
  * what is held by another seller (hidden from a seller), the tags, the ICP
  * score. Computed for this answer only.
@@ -344,6 +372,8 @@ export async function assembleSearch(
   answer: GoogleAnswer,
   input: ProspectSearchInput,
   icp: ProspectingIcp,
+  /** Signs a company's @ for this seller, so the discovery route takes it (instagram-graph.ts). */
+  ticketOf: (username: string) => string,
 ): Promise<Pick<ProspectSearchResponse, 'items' | 'hidden'>> {
   const hidden = { excluded: 0, filtered: 0, heldByOthers: 0, repeated: answer.repeated };
   const units = new Map<string, number>();
@@ -467,6 +497,7 @@ export async function assembleSearch(
         },
         icp.weights,
       ),
+      instagram: instagramRefOf(enrichment, place.website, ticketOf),
       tags,
       prospect: prospect
         ? {

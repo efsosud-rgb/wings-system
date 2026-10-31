@@ -2,7 +2,7 @@
 
 Versão de 29/10/2026. Pedido e aprovação: Eric, 29/10/2026 às 16:35 ("Tudo aprovado"). Base de código: develop no commit `3a9a6f0f`; toda referência `arquivo:linha` é desse commit. Abreviações: `api` = `apps/api/src`, `web` = `apps/web/src`, `shared` = `packages/shared/src`, `worker` = `apps/worker/src`.
 
-**Estado (31/10/2026):** a Fase A (parte 2) foi construída e está desligada; o que existe e o que ficou diferente estão em [instagram-fase-a.md](instagram-fase-a.md). As Fases B e C seguem só especificação.
+**Estado (31/10/2026):** as Fases A (parte 2) e B (parte 3) foram construídas e estão desligadas; o que existe e o que ficou diferente estão em [instagram-fase-a.md](instagram-fase-a.md) e [instagram-fase-b.md](instagram-fase-b.md). A Fase C segue só especificação.
 
 **Só documentação.** As seções 7 (Meta) e 8 (LGPD) estão em [instagram-meta-lgpd.md](instagram-meta-lgpd.md). Nada aqui foi construído, ligado ou configurado: nenhum código, banco, app da Meta, staging ou produção mudou. Tudo o que toca a Meta é feito pelo Eric, na hora (§7).
 

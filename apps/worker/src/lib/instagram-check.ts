@@ -1,6 +1,7 @@
 import {
   INSTAGRAM_REASONS,
   estimateAgentCostMicroUsd,
+  graphErrorKindOf,
   instagramVerdictOf,
   normalizeInstagram,
   type AgentModel,
@@ -89,24 +90,17 @@ export function createInstagramDiscovery(config: {
           posts: asCount(found.media_count),
         };
       }
-      const error = body.error as
-        { code?: number; error_subcode?: number; message?: unknown } | undefined;
+      // The map Prospecção's Business Discovery shares (shared/instagram-discovery.ts).
+      const kind = graphErrorKindOf(body.error as Parameters<typeof graphErrorKindOf>[0]);
       // "Invalid user id" / "does not exist or is not a business account": the username is not visible.
-      if (
-        error?.code === 110 ||
-        error?.code === 24 ||
-        error?.error_subcode === 2207013 ||
-        (error?.code === 100 && /invalid user id/i.test(String(error.message ?? '')))
-      ) {
-        return { kind: 'not_found' };
-      }
-      if (error?.code === 190 || error?.code === 10 || error?.code === 200) {
+      if (kind === 'not_business') return { kind: 'not_found' };
+      if (kind === 'permission') {
         return {
           kind: 'error',
           reason: 'A conta da Wings não está autorizada a consultar o Instagram',
         };
       }
-      if (error?.code === 4 || error?.code === 17 || error?.code === 32 || error?.code === 613) {
+      if (kind === 'rate_limit') {
         return { kind: 'error', reason: 'Limite de consultas da Meta; tente mais tarde' };
       }
       return { kind: 'error', reason: `A API da Meta respondeu com erro (${status})` };

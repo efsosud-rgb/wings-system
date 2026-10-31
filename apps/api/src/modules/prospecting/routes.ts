@@ -3,6 +3,7 @@ import {
   PROSPECT_ENRICHMENT_SOURCE,
   PROSPECT_PARSE_DAILY_MAX,
   PROSPECT_STATUSES,
+  instagramDiscoverySchema,
   prospectApproachSchema,
   prospectBatchSchema,
   prospectClaimSchema,
@@ -29,6 +30,13 @@ import { writeAudit } from '../../lib/audit.js';
 import { createOpenRouterLlm, LlmError, type AgentLlm } from '../agent/llm.js';
 import { leadInScope } from '../leads/access.js';
 import { aiCallsToday, APPROACH_AUDIT_ACTION, suggestApproach } from './approach.js';
+import { discoverInstagram, type DiscoveryHold } from './instagram-discovery.js';
+import {
+  createBusinessDiscoveryClient,
+  issueTicket,
+  ticketKeyOf,
+  type BusinessDiscoveryClient,
+} from './instagram-graph.js';
 import { exportProspects, prospectingMetrics, searchHistory } from './insights.js';
 import { createPlacesClient, PlacesError, type PlacesClient } from './places-client.js';
 import { reserveCalls, usageOf } from './quota.js';
@@ -87,6 +95,21 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
   const places: PlacesClient | null = env.GOOGLE_PLACES_API_KEY
     ? createPlacesClient({ apiKey: env.GOOGLE_PLACES_API_KEY, fetchImpl: app.wings.placesFetch })
     : null;
+  /** Null while off or unconfigured: the discovery route then answers 503 (§6, a Meta switch). */
+  const discovery: BusinessDiscoveryClient | null =
+    env.INSTAGRAM_BUSINESS_DISCOVERY_ENABLED === 'true' &&
+    env.INSTAGRAM_DISCOVERY_ACCOUNT_ID &&
+    env.INSTAGRAM_DISCOVERY_TOKEN
+      ? createBusinessDiscoveryClient({
+          accountId: env.INSTAGRAM_DISCOVERY_ACCOUNT_ID,
+          token: env.INSTAGRAM_DISCOVERY_TOKEN,
+          fetchImpl: app.wings.instagramDiscoveryFetch,
+          log: (facts) => app.log.info({ module: 'instagram-discovery', ...facts }, 'discovery'),
+        })
+      : null;
+  const ticketKey = ticketKeyOf(env.SESSION_SECRET);
+  // shortcut: one hold per API process; with replicas each learns Meta's limit on its own call.
+  const hold: DiscoveryHold = { until: null, reason: null };
   const llm: AgentLlm | null =
     app.wings.agentLlm ??
     (env.OPENROUTER_API_KEY ? createOpenRouterLlm({ apiKey: env.OPENROUTER_API_KEY }) : null);
@@ -160,7 +183,11 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
   // --- state of the screen ----------------------------------------------------------------
 
   app.get('/prospecting/status', use, async (_request, reply) =>
-    reply.send({ configured: places !== null, aiConfigured: llm !== null }),
+    reply.send({
+      configured: places !== null,
+      aiConfigured: llm !== null,
+      instagramDiscovery: discovery !== null,
+    }),
   );
 
   app.get('/prospecting/usage', use, async (request, reply) =>
@@ -248,6 +275,25 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
     return reply.send(await loadProspectingSettings(db));
   });
 
+  // --- Instagram numbers of the companies found (parte 3, docs/prospeccao/instagram.md §6) ----
+
+  app.post('/prospecting/instagram/discovery', use, async (request, reply) => {
+    if (!discovery)
+      return reply.status(503).send({
+        error: 'instagram_discovery_off',
+        message: 'A consulta ao Instagram (Meta) está desligada neste ambiente.',
+      });
+    const body = instagramDiscoverySchema.safeParse(request.body);
+    if (!body.success) return invalid(reply, body.error);
+    const answer = await discoverInstagram(
+      { db, client: discovery, ticketKey, hold, now: now() },
+      request.session.actor.employeeId,
+      body.data,
+    );
+    // Meta's numbers live on the screen and in our cache: no browser or proxy keeps them.
+    return reply.header('Cache-Control', 'no-store').send(answer);
+  });
+
   // --- the AI and the search -------------------------------------------------------------
 
   app.post('/prospecting/parse', use, async (request, reply) => {
@@ -329,7 +375,9 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
     const settings = await loadProspectingSettings(db);
     let assembled: Awaited<ReturnType<typeof assembleSearch>>;
     try {
-      assembled = await assembleSearch(db, actor, answer, input, settings.icp);
+      assembled = await assembleSearch(db, actor, answer, input, settings.icp, (username) =>
+        issueTicket(ticketKey, actor.employeeId, username, at),
+      );
     } catch (error) {
       // A failed query's message carries its parameters (Google's phones): only the code is kept.
       request.log.error(

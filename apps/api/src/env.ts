@@ -635,6 +635,14 @@ const schema = z.object({
   ),
   /** Token that may read Business Discovery through that account (secret). */
   INSTAGRAM_DISCOVERY_TOKEN: optionalString,
+  /**
+   * Prospecção → busca do Google: the company's Instagram numbers from Business Discovery in the
+   * 0-100 score (docs/prospeccao/instagram.md §6). Off unless "true" AND the two above are set.
+   */
+  INSTAGRAM_BUSINESS_DISCOVERY_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
   /** Arrival checks that leave the server (site, Instagram, CNPJ); on unless "false". */
   LEAD_CHECKS_ENABLED: optionalString.refine(
     (value) => value === undefined || value === 'true' || value === 'false',

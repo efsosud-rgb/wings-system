@@ -64,6 +64,14 @@ import {
   webUrl,
 } from './GooglePlacePanel.js';
 import { InstagramTab } from './InstagramProspecting.js';
+import {
+  hourOf,
+  InstagramCell,
+  scoreDetail,
+  scoreWithInstagram,
+  useInstagramNumbers,
+  type InstagramNumbers,
+} from './ProspectInstagram.js';
 import { ApproachPanel } from './ProspectApproachPanel.js';
 import { HistoryTab, MetricsTab } from './ProspectingHistory.js';
 
@@ -246,6 +254,7 @@ export function ProspectingPage() {
                   form={form}
                   setForm={setForm}
                   configured={status.data?.configured}
+                  instagramDiscovery={status.data?.instagramDiscovery}
                   usage={usage.data}
                   canManage={canManage}
                 />
@@ -440,16 +449,19 @@ function SearchTab({
   form,
   setForm,
   configured,
+  instagramDiscovery,
   usage,
   canManage,
 }: {
   form: SearchForm;
   setForm: (next: SearchForm) => void;
   configured: boolean | undefined;
+  instagramDiscovery: boolean | undefined;
   usage: ProspectingUsage | undefined;
   canManage: boolean;
 }) {
   const search = useProspectSearch();
+  const settings = useProspectingSettings();
   const batch = useBatchReserve();
   const [results, setResults] = useState<Results | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
@@ -525,7 +537,18 @@ function SearchTab({
     );
 
   const blocked = configured === false ? NO_KEY : null;
-  const answer = results?.answer;
+  const numbers = useInstagramNumbers(
+    results?.answer.items ?? NO_ITEMS,
+    instagramDiscovery === true,
+  );
+  const weights = settings.data?.icp?.weights;
+  // The score with the Instagram numbers as they arrive; it orders the list (§6.3).
+  const answer = results && {
+    ...results.answer,
+    items: results.answer.items
+      .map((item) => ({ ...item, icp: scoreWithInstagram(item, numbers, weights) }))
+      .sort((a, b) => b.icp.score - a.icp.score || (b.reviews ?? 0) - (a.reviews ?? 0)),
+  };
   const hidden = answer ? hiddenLine(answer.hidden) : null;
   const failedLine = answer ? failedPlacesLine(answer.failedPlaces, answer.callsSpent) : null;
   const selectable = (answer?.items ?? []).filter(canReserveItem);
@@ -710,7 +733,8 @@ function SearchTab({
                     <th>Empresa</th>
                     <th>Contato</th>
                     <th className="is-num">Nota</th>
-                    <th className="is-num">ICP</th>
+                    <th className="is-num">ICP (0–100)</th>
+                    <th>Instagram</th>
                     <th>Etiquetas</th>
                     <th>Ações</th>
                   </tr>
@@ -723,6 +747,8 @@ function SearchTab({
                       selected={selected.includes(item.placeId)}
                       onToggle={canReserveItem(item) ? () => toggle(item.placeId) : null}
                       canManage={canManage}
+                      numbers={numbers}
+                      instagramEnabled={instagramDiscovery}
                       onChange={(change) => patch(item.placeId, change)}
                     />
                   ))}
@@ -730,9 +756,15 @@ function SearchTab({
               </table>
             </div>
           )}
+          {numbers.holdUntil && (
+            <p className="crm-sub" role="status">
+              Instagram em espera até {hourOf(numbers.holdUntil)}: a Meta pediu para esperar.
+            </p>
+          )}
           <p className="crm-sub">
             De onde vem cada dado: nome, endereço, telefone, site e nota — Google (ao vivo) ·
-            Instagram, e-mail e WhatsApp do site — site da empresa · nota ICP, etiquetas e
+            Instagram, e-mail e WhatsApp do site — site da empresa · seguidores, posts, curtidas e
+            comentários — Meta (Business Discovery, com a data da leitura) · nota ICP, etiquetas e
             &quot;incompleto&quot; — regras da Wings · situação, motivo e observações — o vendedor ·
             sugestão de abordagem — IA, para revisar.
           </p>
@@ -763,6 +795,8 @@ function SearchTab({
     </>
   );
 }
+
+const NO_ITEMS: ProspectSearchItem[] = [];
 
 /** A result the seller can reserve now: free, or discarded or "sem interesse" (taken over). */
 const canReserveItem = (item: ProspectSearchItem) =>
@@ -859,6 +893,8 @@ function ResultRow({
   selected,
   onToggle,
   canManage,
+  numbers,
+  instagramEnabled,
   onChange,
 }: {
   item: ProspectSearchItem;
@@ -866,6 +902,8 @@ function ResultRow({
   /** Null when the result cannot be reserved now: no box to tick. */
   onToggle: (() => void) | null;
   canManage: boolean;
+  numbers: InstagramNumbers;
+  instagramEnabled: boolean | undefined;
   onChange: (change: Partial<ProspectSearchItem>) => void;
 }) {
   const claim = useClaimProspect();
@@ -929,8 +967,19 @@ function ResultRow({
           {ratingText(item.rating)}
           <div className="crm-sub">{item.reviews ?? '—'} avaliações</div>
         </td>
-        <td className="is-num" title={item.icp.reasons.join('\n') || 'Nenhum critério contou'}>
+        <td
+          className="is-num"
+          title={scoreDetail(
+            item.icp,
+            item.instagram
+              ? (numbers.byUsername.get(item.instagram.username)?.snapshot?.fetchedAt ?? null)
+              : null,
+          )}
+        >
           {item.icp.score}
+        </td>
+        <td>
+          <InstagramCell item={item} numbers={numbers} enabled={instagramEnabled} />
         </td>
         <td>
           {item.tags.map((tag) => (
@@ -1001,7 +1050,7 @@ function ResultRow({
       </tr>
       {(discarding || Object.keys(enrichment).length > 0) && (
         <tr>
-          <td colSpan={7}>
+          <td colSpan={8}>
             {discarding && (
               <form
                 className="crm-quick-row"

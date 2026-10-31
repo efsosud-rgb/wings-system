@@ -1,5 +1,5 @@
 {
-  "id": "0902e2a1-a9c3-456b-975b-24b13d3a3a4b",
+  "id": "fcdd6113-06e4-48d0-a015-ae1debe17d7a",
   "prevId": "d752fbfa-4908-460d-a034-cd42e83798da",
   "version": "7",
   "dialect": "postgresql",
@@ -16314,6 +16314,257 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.instagram_business_snapshots": {
+      "name": "instagram_business_snapshots",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'00000000-0000-0000-0000-000000000001'"
+        },
+        "username": {
+          "name": "username",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "followers_count": {
+          "name": "followers_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "media_count": {
+          "name": "media_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "recent_media_read": {
+          "name": "recent_media_read",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "avg_likes_milli": {
+          "name": "avg_likes_milli",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "avg_comments_milli": {
+          "name": "avg_comments_milli",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "posts_last_30d": {
+          "name": "posts_last_30d",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_post_at": {
+          "name": "last_post_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "error_code": {
+          "name": "error_code",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'meta_business_discovery'"
+        },
+        "api_version": {
+          "name": "api_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "fetched_at": {
+          "name": "fetched_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "instagram_business_snapshots_username_uq": {
+          "name": "instagram_business_snapshots_username_uq",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "username",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "instagram_business_snapshots_fetched_idx": {
+          "name": "instagram_business_snapshots_fetched_idx",
+          "columns": [
+            {
+              "expression": "fetched_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "instagram_business_snapshots_tenant_id_tenants_id_fk": {
+          "name": "instagram_business_snapshots_tenant_id_tenants_id_fk",
+          "tableFrom": "instagram_business_snapshots",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "instagram_business_snapshots_status_check": {
+          "name": "instagram_business_snapshots_status_check",
+          "value": "\"instagram_business_snapshots\".\"status\" in ('encontrada', 'nao_comercial', 'erro')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.instagram_discovery_calls": {
+      "name": "instagram_discovery_calls",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'00000000-0000-0000-0000-000000000001'"
+        },
+        "employee_id": {
+          "name": "employee_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "instagram_discovery_calls_created_idx": {
+          "name": "instagram_discovery_calls_created_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "instagram_discovery_calls_tenant_id_tenants_id_fk": {
+          "name": "instagram_discovery_calls_tenant_id_tenants_id_fk",
+          "tableFrom": "instagram_discovery_calls",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "instagram_discovery_calls_employee_id_employees_id_fk": {
+          "name": "instagram_discovery_calls_employee_id_employees_id_fk",
+          "tableFrom": "instagram_discovery_calls",
+          "tableTo": "employees",
+          "columnsFrom": [
+            "employee_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.prospect_calls": {
       "name": "prospect_calls",
       "schema": "",
@@ -21021,99 +21272,6 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.wa_voice_sends": {
-      "name": "wa_voice_sends",
-      "schema": "",
-      "columns": {
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'00000000-0000-0000-0000-000000000001'"
-        },
-        "employee_id": {
-          "name": "employee_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "key": {
-          "name": "key",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "message_id": {
-          "name": "message_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "wa_voice_sends_tenant_id_tenants_id_fk": {
-          "name": "wa_voice_sends_tenant_id_tenants_id_fk",
-          "tableFrom": "wa_voice_sends",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "wa_voice_sends_employee_id_employees_id_fk": {
-          "name": "wa_voice_sends_employee_id_employees_id_fk",
-          "tableFrom": "wa_voice_sends",
-          "tableTo": "employees",
-          "columnsFrom": [
-            "employee_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "wa_voice_sends_message_id_wa_messages_id_fk": {
-          "name": "wa_voice_sends_message_id_wa_messages_id_fk",
-          "tableFrom": "wa_voice_sends",
-          "tableTo": "wa_messages",
-          "columnsFrom": [
-            "message_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "wa_voice_sends_employee_id_key_pk": {
-          "name": "wa_voice_sends_employee_id_key_pk",
-          "columns": [
-            "employee_id",
-            "key"
-          ]
-        }
-      },
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},

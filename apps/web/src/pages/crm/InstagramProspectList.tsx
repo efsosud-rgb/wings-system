@@ -425,7 +425,10 @@ function LeadModal({ prospect, onClose }: { prospect: InstagramProspect; onClose
   );
 }
 
-/** Ajustes → Instagram (§2.5): limits, thresholds, retention, the first message and its link. */
+/**
+ * Ajustes → Instagram (§2.5): limits, thresholds, retention, Business Discovery's limits (parte 3),
+ * the first message and its link.
+ */
 export function InstagramSettings({ settings }: { settings: InstagramProspectingSettings }) {
   const save = useSaveInstagramSettings();
   const [form, setForm] = useState(settings);
@@ -450,6 +453,8 @@ export function InstagramSettings({ settings }: { settings: InstagramProspecting
   };
   const paste = (k: keyof InstagramProspectingSettings['paste']) => (n: number) =>
     setForm((c) => ({ ...c, paste: { ...c.paste, [k]: n } }));
+  const discovery = (k: keyof InstagramProspectingSettings['discovery']) => (n: number) =>
+    setForm((c) => ({ ...c, discovery: { ...c.discovery, [k]: n } }));
   return (
     <form className="crm-panel crm-stack" onSubmit={submit} aria-label="Ajustes do Instagram">
       <p className="crm-sub">Números propostos, para calibrar no piloto. Toda troca é auditada.</p>
@@ -469,6 +474,21 @@ export function InstagramSettings({ settings }: { settings: InstagramProspecting
         )}
         {num('Dias até apagar quem não virou lead', form.retention.instagramSemLeadDias, (n) =>
           setForm((c) => ({ ...c, retention: { instagramSemLeadDias: n } })),
+        )}
+        {num(
+          'Busca do Google: dias de cache dos números do Instagram',
+          form.discovery.cacheDias,
+          discovery('cacheDias'),
+        )}
+        {num(
+          'Busca do Google: consultas à Meta por dia',
+          form.discovery.porDia,
+          discovery('porDia'),
+        )}
+        {num(
+          'Busca do Google: posts recentes lidos por empresa',
+          form.discovery.recentPosts,
+          discovery('recentPosts'),
         )}
         <label className="crm-field is-wide">
           <span>Link da política de privacidade (sem ele, "Copiar mensagem" não funciona)</span>
