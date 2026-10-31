@@ -32,6 +32,8 @@ import { api, noteUnauthorized } from './client.js';
 export interface ProspectingStatus {
   configured: boolean;
   aiConfigured: boolean;
+  /** Business Discovery (Instagram numbers in the score) is on and configured. */
+  instagramDiscovery: boolean;
 }
 
 export interface ProspectOwner {

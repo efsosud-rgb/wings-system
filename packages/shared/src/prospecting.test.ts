@@ -15,6 +15,7 @@ import {
   prospectSearchSchema,
   siteDomain,
   whatsappOptInMissing,
+  withInstagram,
 } from './prospecting.js';
 
 describe('icpScore', () => {
@@ -143,6 +144,15 @@ describe('icpScore with Instagram (§6.3)', () => {
     const missing = icpScore(google, DEFAULT_ICP_WEIGHTS, { ...full, avgCommentsMilli: null });
     const zero = icpScore(google, DEFAULT_ICP_WEIGHTS, { ...full, avgCommentsMilli: 0 });
     expect(missing.score).toBeGreaterThan(zero.score);
+  });
+
+  it("the screen adds Instagram to the search's score and gets the same answer", () => {
+    const later = withInstagram(icpScore(google), DEFAULT_ICP_WEIGHTS, {
+      ...full,
+      followers: 2_000,
+    });
+    expect(later).toEqual(icpScore(google, DEFAULT_ICP_WEIGHTS, { ...full, followers: 2_000 }));
+    expect(withInstagram(icpScore(google), DEFAULT_ICP_WEIGHTS, null)).toEqual(icpScore(google));
   });
 
   it('without a business account the score is Google alone, still 0 to 100', () => {

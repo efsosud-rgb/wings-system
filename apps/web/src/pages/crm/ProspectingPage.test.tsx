@@ -61,7 +61,14 @@ const item = (over: Partial<ProspectSearchItem>): ProspectSearchItem => ({
   businessStatus: 'OPERATIONAL',
   mapsUri: 'https://maps.google.com/?cid=1',
   types: ['restaurant'],
-  icp: { score: 5, reasons: ['Nota ≥ 4,5 (+2)', 'Avaliações ≥ 200 (+2)', 'Tem site (+1)'] },
+  icp: {
+    score: 56,
+    earned: 5,
+    possible: 9,
+    reasons: ['Nota ≥ 4,5 (+2)', 'Avaliações ≥ 200 (+2)', 'Tem site (+1)'],
+    noData: [],
+  },
+  instagram: null,
   missing: [],
   tags: [],
   prospect: null,
@@ -182,7 +189,7 @@ describe('Prospecção', () => {
     expect(maps[0]!.getAttribute('rel')).toContain('noopener');
     expect(within(results).getByText('já é lead: dono Ana')).toBeTruthy();
     const icp = within(results).getAllByTitle(/Nota ≥ 4,5 \(\+2\)/)[0]!;
-    expect(icp.textContent).toBe('5');
+    expect(icp.textContent).toBe('56');
     expect(
       within(results).getByText(
         '12 ocultos: 5 pela lista de exclusão, 4 pelos filtros, 3 reservados por outros vendedores',
@@ -514,7 +521,7 @@ describe('Wings Maps Prospecting', () => {
     fireEvent.click(within(results).getByRole('button', { name: 'Selecionar todas livres' }));
     fireEvent.click(within(results).getByRole('button', { name: 'Revisar 2 selecionadas' }));
     const review = within(results).getByRole('region', { name: 'Revisão do lote' });
-    expect(review.textContent).toContain('Padaria Incompleta · ICP 5 · incompleto: sem telefone');
+    expect(review.textContent).toContain('Padaria Incompleta · ICP 56 · incompleto: sem telefone');
     expect(post.mock.calls.some(([path]) => path === '/prospecting/prospects/batch')).toBe(false);
     fireEvent.click(within(review).getByRole('button', { name: 'Reservar 2' }));
     const outcome = await within(results).findByRole('status');

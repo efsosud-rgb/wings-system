@@ -389,7 +389,7 @@ export function icpScore(
 ): IcpScore {
   const rating = input.rating ?? 0;
   const reviews = input.reviews ?? 0;
-  const googleHits = new Map<IcpWeightKey[], IcpWeightKey | null>([
+  const hits = new Map<IcpWeightKey[], IcpWeightKey | null>([
     [BANDS[0]!, rating >= 4.5 ? 'rating45' : rating >= 4.2 ? 'rating42' : null],
     [
       BANDS[1]!,
@@ -405,30 +405,52 @@ export function icpScore(
     [BANDS[3]!, input.hasInstagram ? 'instagram' : null],
     [BANDS[4]!, input.multiUnit ? 'multiUnit' : null],
   ]);
-  const igHits = instagram
-    ? instagramHits(instagram)
-    : new Map<IcpWeightKey[], IcpWeightKey | null>();
-  let earned = 0;
-  let possible = 0;
-  const reasons: string[] = [];
-  for (const [band, hit] of [...googleHits, ...igHits]) {
+  const google = tally(hits, weights, { earned: 0, possible: 0, reasons: [] });
+  return withInstagram(
+    { score: scoreOf(google.earned, google.possible), ...google, noData: [] },
+    weights,
+    instagram,
+  );
+}
+
+const scoreOf = (earned: number, possible: number) =>
+  possible > 0 ? Math.round((100 * earned) / possible) : 0;
+
+function tally(
+  hits: Map<IcpWeightKey[], IcpWeightKey | null>,
+  weights: IcpWeights,
+  base: { earned: number; possible: number; reasons: string[] },
+) {
+  let { earned, possible } = base;
+  const reasons = [...base.reasons];
+  for (const [band, hit] of hits) {
     possible += Math.max(...band.map((k) => weights[k]));
     if (hit && weights[hit] > 0) {
       earned += weights[hit];
       reasons.push(`${ICP_WEIGHT_LABELS[hit]} (+${weights[hit]})`);
     }
   }
-  const noData = instagram
-    ? INSTAGRAM_BANDS.filter((band) => !igHits.has(band)).flatMap((band) =>
-        band.filter((k) => weights[k] > 0).map((k) => ICP_WEIGHT_LABELS[k]),
-      )
-    : [];
+  return { earned, possible, reasons };
+}
+
+/**
+ * A Google score with the Instagram part added (the screen does this when Business Discovery
+ * answers, after the search). Without a business account's numbers the score is unchanged.
+ */
+export function withInstagram(
+  google: IcpScore,
+  weights: IcpWeights,
+  instagram: InstagramIcpMetrics | null,
+): IcpScore {
+  if (!instagram) return google;
+  const hits = instagramHits(instagram);
+  const total = tally(hits, weights, google);
   return {
-    score: possible > 0 ? Math.round((100 * earned) / possible) : 0,
-    earned,
-    possible,
-    reasons,
-    noData,
+    score: scoreOf(total.earned, total.possible),
+    ...total,
+    noData: INSTAGRAM_BANDS.filter((band) => !hits.has(band)).flatMap((band) =>
+      band.filter((k) => weights[k] > 0).map((k) => ICP_WEIGHT_LABELS[k]),
+    ),
   };
 }
 
