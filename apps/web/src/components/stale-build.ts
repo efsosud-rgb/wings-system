@@ -41,12 +41,23 @@ export function clearReloadLock(): void {
   }
 }
 
-export function listenForStaleBuild(): void {
-  window.addEventListener('vite:preloadError', (event) => {
-    event.preventDefault();
-    console.error('Chunk from a previous build failed to load; reloading once.', event);
-    reloadOnceForNewBuild();
-  });
+/**
+ * Vite's preload helper dispatches `vite:preloadError` when a chunk is gone and rejects with the
+ * original error unless a listener called `preventDefault()`; with it, the helper resolves
+ * `undefined` instead. So the event is swallowed only when the page is really reloading; on the
+ * second time (lock set) the error must reach the screen's own handling.
+ */
+export function handleStalePreloadError(event: Event): void {
+  console.error('Chunk from a previous build failed to load.', event);
+  if (reloadOnceForNewBuild()) event.preventDefault();
+}
+
+export function listenForStaleBuild(): () => void {
+  window.addEventListener('vite:preloadError', handleStalePreloadError);
   // Loaded without a chunk error: arm the lock again after a short while.
-  window.setTimeout(clearReloadLock, 10_000);
+  const timer = window.setTimeout(clearReloadLock, 10_000);
+  return () => {
+    window.removeEventListener('vite:preloadError', handleStalePreloadError);
+    window.clearTimeout(timer);
+  };
 }

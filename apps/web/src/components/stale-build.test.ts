@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { clearReloadLock, isStaleChunkError, reloadOnceForNewBuild } from './stale-build.js';
+import {
+  clearReloadLock,
+  isStaleChunkError,
+  listenForStaleBuild,
+  reloadOnceForNewBuild,
+} from './stale-build.js';
+import { goneChunk, viteImport } from './vite-preload.testing.js';
 
 describe('stale build', () => {
   const reload = vi.fn();
@@ -31,5 +37,37 @@ describe('stale build', () => {
     clearReloadLock();
     expect(reloadOnceForNewBuild()).toBe(true);
     expect(reload).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('vite:preloadError listener', () => {
+  const reload = vi.fn();
+  let stop: () => void;
+  beforeEach(() => {
+    sessionStorage.clear();
+    reload.mockReset();
+    vi.stubGlobal('location', { ...window.location, reload });
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    stop = listenForStaleBuild();
+  });
+  afterEach(() => {
+    stop();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('swallows the error only while it reloads; the second time the import rejects', async () => {
+    // First failure: reload, and the helper resolves undefined (the page is going away).
+    await expect(viteImport(goneChunk)).resolves.toBeUndefined();
+    expect(reload).toHaveBeenCalledTimes(1);
+    // The reload brought the same broken build back: the original error reaches the caller.
+    await expect(viteImport(goneChunk)).rejects.toThrow(/Failed to fetch dynamically imported/);
+    await expect(viteImport(goneChunk)).rejects.toThrow(/Failed to fetch dynamically imported/);
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not touch an import that works', async () => {
+    await expect(viteImport(() => Promise.resolve('ok'))).resolves.toBe('ok');
+    expect(reload).not.toHaveBeenCalled();
   });
 });
