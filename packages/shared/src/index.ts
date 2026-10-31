@@ -31,6 +31,7 @@ export * from './contact-opt-out.js';
 export * from './instagram-check.js';
 export * from './lead-fields.js';
 export * from './instagram.js';
+export * from './instagram-paste.js';
 export * from './sales-panel.js';
 export * from './crm-automations.js';
 export * from './csv.js';
