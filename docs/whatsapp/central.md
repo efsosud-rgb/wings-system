@@ -90,6 +90,25 @@ liberar o app (Tech Provider e App Review, ainda não pedidos).
   ("Conversa do WhatsApp ligada a esta negociação") e `whatsapp.conversation_linked` na auditoria (ids).
 - O número oficial segue como antes (a negociação aberta mais recente do telefone), porque mudar isso empurraria
   mensagens para a triagem e criaria negociações duplicadas.
+- **Número em atendimento (WA-03):** um número que a Sofia ou a equipe atende sem negociação (o "ocupado" de
+  `GET /whatsapp/targets`) não chega a uma negociação de vendedor por nenhuma tela dele. Respondem 409
+  `number_in_attendance` para quem tem escopo próprio, sem gravar nada, porque a próxima mensagem levaria a conversa
+  para essa negociação:
+  - a criação (`POST /leads`, importação, prospect que vira negociação) e a **lacuna**: o mesmo e-mail de uma
+    negociação dele sem telefone, agora com o número, não completa o telefone (`upsertLead`);
+  - o **contato**: `POST /leads/:id/contacts` (contato digitado ou já existente), a troca de telefone em
+    `PATCH /crm/contacts/:id` e o cadastro em `POST /crm/contacts`. No contato digitado (nas duas rotas), vale o
+    telefone digitado e o telefone do contato que o e-mail já encontra, conferidos antes de `resolveCompany` e de
+    `findOrCreateContact`: nenhuma lacuna (telefone, nome, cargo, empresa) é completada antes da recusa. Por isso o
+    vendedor também não cadastra um contato avulso com o número;
+  - quem distribui negociações (escopo total) continua vinculando, e a conversa vai para a negociação na próxima
+    mensagem. Conversa encerrada não é de ninguém. Fica de fora: vínculos feitos antes desta trava não foram desfeitos
+    (`DUVIDAS.md` da execução wa03), e, nas rotas de contato, a checagem roda antes da gravação, fora da mesma transação (uma conversa que fica
+    "em atendimento" entre os dois passos escapa; a janela é de milissegundos).
+- **Não me contate no contato vinculado:** a conversa que entrou numa negociação pelo telefone de um contato é
+  conferida pelo telefone da própria conversa e pelo id da negociação (`contactBlock`): um registro no telefone do
+  contato, ou na negociação, recusa o modelo com 409 `contact_blocked` e grava `lead.contact_blocked`
+  (`central-linked-contact.test.ts`).
 
 ### Acesso
 
