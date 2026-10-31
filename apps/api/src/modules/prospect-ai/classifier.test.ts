@@ -108,6 +108,13 @@ describe('rules without the model', () => {
     ]);
   });
 
+  it('emoji with a variation selector or a joiner are still only emoji (lint 31/10)', () => {
+    expect(ruleFor('\u2764\uFE0F')?.signal).toBe('elogio');
+    expect(ruleFor('\u{1F468}\u200D\u{1F469}\u200D\u{1F467} \u{1F44F}\u{1F3FB}')?.confidence).toBe(
+      95,
+    );
+  });
+
   it('praise with a price question is not praise', () => {
     expect(ruleFor('muito bom! quanto custa?')?.signal).toBe('pediu_preco');
     expect(ruleFor('top, quero saber mais')).toBeNull();

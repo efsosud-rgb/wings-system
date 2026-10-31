@@ -81,7 +81,7 @@ const cacheKey = (normalized: string) =>
 
 // --- rules without the model (§3.1) --------------------------------------------------------
 
-const EMOJI = /[\p{Extended_Pictographic}\p{Emoji_Modifier}‍️]/gu;
+const EMOJI = /\p{Extended_Pictographic}|\p{Emoji_Modifier}|\u200D|\uFE0F/gu;
 const PRAISE =
   /^(top|show|parab[eé]ns|amei|incr[ií]vel|sucesso|lindo|perfeito|maravilhoso|muito bom|que legal)( (sempre|demais|pelo conteudo|pelo conteúdo))?[!. ]*$/;
 const INTEREST = /quanto|pre[cç]o|valor|custa|quero|como|contato|proposta|diagn[oó]stico/;

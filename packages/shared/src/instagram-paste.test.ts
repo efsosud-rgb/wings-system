@@ -170,6 +170,13 @@ describe('parseInstagramPaste: edges', () => {
     expect(parseInstagramPaste('a'.repeat(50_000), { maxChars: 50_000 }).ok).toBe(true);
   });
 
+  it('zero-width characters copied from the page do not break a line (lint 31/10)', () => {
+    const reading = read('\u200Busuario.teste13\uFEFF\nquero\u200D\n2 d\nResponder');
+    expect(reading.comments).toEqual([
+      { username: 'usuario.teste13', text: 'quero', when: '2 d', format: 'web_computador' },
+    ]);
+  });
+
   it('English interface lines are ignored too', () => {
     const reading = read('usuario.teste11\nhow much?\n3w\n2 likes\nReply\nSee translation');
     expect(reading.comments).toHaveLength(1);

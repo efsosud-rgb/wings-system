@@ -176,7 +176,7 @@ export function parseInstagramPaste(
   const lines = raw
     .replace(/\r\n?/g, '\n')
     .split('\n')
-    .map((line) => line.replace(/[​-‍﻿]/g, '').trim())
+    .map((line) => line.replace(/[\u200B-\u200D\uFEFF]/g, '').trim())
     .filter(Boolean);
 
   const ignored = Object.fromEntries(PASTE_IGNORED_KINDS.map((k) => [k, 0])) as Record<
