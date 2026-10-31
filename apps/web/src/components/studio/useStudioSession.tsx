@@ -28,6 +28,7 @@ import {
   useTranscription,
 } from '../../api/studio.js';
 import { errorText } from '../drive/DriveParts.js';
+import { loadStudioCore } from './loadStudioCore.js';
 import {
   applyTimelineOps,
   snapshotClips,
@@ -195,7 +196,10 @@ export function useStudioSession(): StudioSession {
     let made: Core | null = null;
     const offs: (() => void)[] = [];
     (async () => {
-      const studio = await import('@wings/studio');
+      const studio = await loadStudioCore();
+      // The build's preload helper resolves `undefined` when the chunk is gone and the page is
+      // already reloading (see handleStalePreloadError): same cause, same notice.
+      if (!studio) throw new Error('Failed to fetch dynamically imported module: @wings/studio');
       studio.configureStudio({ harfbuzzWasmUrl: hbWasmUrl, resvgWasmUrl: resvgWasmUrl });
       if (cancelled || !timelineRef.current) return;
       const edit = new studio.Edit(emptyEdit('16:9'));

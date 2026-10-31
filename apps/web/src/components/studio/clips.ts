@@ -7,6 +7,7 @@ import {
   type StudioTransition,
 } from '@wings/shared';
 import type { Edit, EditConfig } from '@wings/studio';
+import { STALE_BUILD_NOTICE, isStaleChunkError } from '../stale-build.js';
 import type {
   CaptionStyle,
   ClipPatch,
@@ -74,6 +75,7 @@ export function withCleanSize<T extends { output?: unknown }>(doc: T): T {
  */
 export function friendlyCoreError(error: unknown, fallback: string): string {
   const message = error instanceof Error ? error.message : String(error);
+  if (isStaleChunkError(error)) return STALE_BUILD_NOTICE;
   if (/^\s*\[\s*\{[\s\S]*"code"/.test(message)) {
     console.error('studio core validation', message);
     return 'O projeto não pôde ser montado: a linha do tempo ou o formato estão fora do que o editor aceita. Crie um projeto novo ou abra outro arquivo do Drive.';
