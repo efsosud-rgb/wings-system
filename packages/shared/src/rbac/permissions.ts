@@ -32,6 +32,10 @@ export const PERMISSIONS = {
   'prospecting.configure':
     'Editar os pesos da nota ICP, a lista de exclusão e os prazos (reserva e dados do site) da prospecção',
   'prospecting.quota': 'Mudar a cota de chamadas ao Google da prospecção',
+  'prospecting.instagram_paste':
+    'Prospecção Instagram: colar comentários de posts de concorrentes, ver e trabalhar as listas (a abordagem é à mão, pelo Direct)',
+  'prospect_ai.configure':
+    'Editar os limites, limiares, prazos e textos da Prospecção Instagram (registrado em auditoria)',
   'prospecting.export':
     'Exportar em planilha os prospects (só os dados da Wings, nunca os do Google; registrado em auditoria)',
   'sofia.manage': 'Ligar e desligar a Sofia e editar as perguntas e mensagens dela',
@@ -126,9 +130,13 @@ const CRM_FULL_SCREENS: RolePermissions = {
 
 /**
  * Prospecção (Eric, 24/10): the Formatação seller works their own prospects; the managers see every
- * one and pass a prospect to another seller. Not for the Expansão seller.
+ * one and pass a prospect to another seller. Not for the Expansão seller. Instagram (parte 2):
+ * Diretoria reads every list and pastes nothing, since pasting also needs `leads.write`.
  */
-const PROSPECTING_ALL: RolePermissions = { 'prospecting.use': 'all' };
+const PROSPECTING_ALL: RolePermissions = {
+  'prospecting.use': 'all',
+  'prospecting.instagram_paste': 'all',
+};
 
 /**
  * The Agenda, for every level (Eric, 14/10: "Todos podem ter acesso a esse módulo"). `own`: each
@@ -175,6 +183,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'prospecting.configure': 'all',
     'prospecting.quota': 'all',
     'prospecting.export': 'all',
+    'prospect_ai.configure': 'all',
     'meetings.approve_send': 'all',
     ...CRM_FULL_SCREENS,
     ...DRIVE_ALL,
@@ -277,6 +286,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   gerente_comercial: {
     ...AGENDA,
     ...PROSPECTING_ALL,
+    'prospect_ai.configure': 'all',
     'prospecting.configure': 'all',
     'prospecting.export': 'all',
     'meetings.approve_send': 'all',
@@ -342,6 +352,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'campaign_leads.read': 'own',
     'campaign_leads.reveal': 'own',
     'prospecting.use': 'own',
+    'prospecting.instagram_paste': 'own',
   },
 };
 

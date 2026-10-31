@@ -32,6 +32,7 @@ export const LEAD_SOURCES = [
   'csv_import',
   'whatsapp',
   'google_places',
+  'instagram_colagem',
 ] as const;
 export type LeadSource = (typeof LEAD_SOURCES)[number];
 
@@ -47,6 +48,7 @@ export const LEAD_SOURCE_LABELS: Record<LeadSource, string> = {
   csv_import: 'Planilha importada',
   whatsapp: 'WhatsApp (Sofia)',
   google_places: 'Prospecção Google Maps',
+  instagram_colagem: 'Instagram (comentário em concorrente)',
 };
 
 /**

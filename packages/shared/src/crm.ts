@@ -911,6 +911,7 @@ export const LEAD_SOURCE_BADGES: Record<LeadSource, { label: string; tone: strin
   manual: { label: 'Manual', tone: 'manual' },
   csv_import: { label: 'Planilha', tone: 'manual' },
   google_places: { label: 'Prospecção', tone: 'manual' },
+  instagram_colagem: { label: 'Instagram', tone: 'manual' },
 };
 
 /** Google shows when the attribution says so, whatever the door was. */

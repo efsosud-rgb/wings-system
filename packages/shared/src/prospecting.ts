@@ -616,7 +616,9 @@ export function whatsappOptInMissing(lead: {
   consentSource: string | null;
 }): boolean {
   return (
-    (lead.source === 'google_places' || lead.consentSource === 'prospeccao') &&
+    (lead.source === 'google_places' ||
+      lead.source === 'instagram_colagem' ||
+      lead.consentSource === 'prospeccao') &&
     lead.legalBasis !== 'consent'
   );
 }
