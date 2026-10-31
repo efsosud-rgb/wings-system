@@ -9,12 +9,14 @@ import {
   type LeadEmailAttachment,
   type LeadPipeline,
   leadHidesWings,
+  normalizeEmail,
 } from '@wings/shared';
 import { and, asc, eq, inArray, isNull, lt, lte, ne } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   crmAutomationRules,
   crmAutomationRuns,
+  crmContacts,
   crmEmailOutbox,
   crmEmailTemplates,
   crmNotifications,
@@ -427,7 +429,18 @@ export async function sendToLead(
   // Expansão with a brand: no e-mail from a Wings address reaches the lead (the brand rule).
   if (leadHidesWings(lead)) return { ok: false, reason: 'brand_hidden' };
   if (!to) return { ok: false, reason: 'no_email' };
-  const block = await contactBlock(db, 'email', { leadId: lead.id, email: to });
+  let block = await contactBlock(db, 'email', { leadId: lead.id, email: to });
+  // Another contact of the deal is a person of their own: every key they are known by decides,
+  // so a "não me contate" on all channels recorded by their phone stops the e-mail too.
+  const person = await db
+    .select({ phone: crmContacts.phone })
+    .from(crmContacts)
+    .where(
+      and(eq(crmContacts.tenantId, lead.tenantId), eq(crmContacts.email, normalizeEmail(to) ?? to)),
+    );
+  for (const { phone } of person)
+    if (!block.blocked && phone)
+      block = await contactBlock(db, 'email', { tenantId: lead.tenantId, email: to, phone });
   if (block.blocked) {
     await noteContactBlocked(
       db,
