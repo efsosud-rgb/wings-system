@@ -91,7 +91,7 @@ copia `created_at` para os leads existentes e marca os do RD CRM como `rd_deal_c
 Meta e do RD Marketing que já existem são preenchidos pelo script `entrada-leads.sh`
 (simulação primeiro; na produção, só com PRODUCAO digitado).
 
-## Regras de origem (Administração → Clientes → "Origens de leads")
+## Regras de origem (Formatação → Clientes → "Origens de leads")
 
 `lead_source_rules`, mantida por quem tem `clients.manage`. Três tipos:
 
@@ -105,7 +105,7 @@ O padrão é normalizado ao salvar (minúsculas, sem `https://`, sem `www.`,
 sem `/` final); entre várias regras que batem, vence a mais longa
 (`matchSourceRule`, `packages/shared`).
 
-## Links rastreáveis (Administração → Clientes → "Links e expansão")
+## Links rastreáveis (Formatação → Clientes → "Links e expansão")
 
 Um link por cliente e canal (Instagram, site, Linktree, LinkedIn, TikTok):
 `https://wa.me/<WINGS_WHATSAPP_NUMBER>?text=<código>`. O código tem 6

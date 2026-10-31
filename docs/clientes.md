@@ -1,4 +1,4 @@
-# Administração → Clientes: cadastro e ficha
+# Formatação → Clientes: cadastro e ficha
 
 Os clientes da Wings são empresas em formatação para virar franqueadoras. O
 cadastro tem duas partes:
@@ -120,6 +120,23 @@ pelo `PATCH /clients/:id`.
 
 Na ficha de uma marca de Expansão (ou "ambos"), o quadro "WhatsApp da marca" guarda a **arte do cabeçalho** dos
 modelos (PNG ou JPEG, 1125 × 600, até 2 MB, na pasta Mídia da marca no Drive) e o **artigo** do nome (o/a: "do
-Casal do Churros", "da Malkuth"). A arte da Wings, dos modelos da Formatação, fica em Administração → Clientes.
+Casal do Churros", "da Malkuth"). A arte da Wings, dos modelos da Formatação, fica em Formatação → Clientes.
 Migração 0081 (`clients.article`, `clients.whatsapp_art_file_id`, `clients.whatsapp_art_set_at`). Detalhes em
 `docs/whatsapp/arte-modelos.md`.
+
+## Negociações, reuniões, arquivos e linha do tempo (29/10/2026)
+
+O menu: Clientes fica em Formatação desde 30/09 (`/administracao/clientes` redireciona). Não há atalho em
+Administração: a documentação não diz que a Administração usa a tela, e quem tem `clients.read` a vê em
+Formatação.
+
+A ficha ganhou a aba **Negociações**, depois dos sete blocos (não conta no "% preenchido"). Ela lista as
+negociações das empresas do CRM ligadas ao cliente (`crm_companies.client_id`, que o "Virar cliente" de CRM
+Vendas → Empresas preenche) e, para a negociação escolhida, mostra os mesmos componentes da ficha do lead:
+**Linha do tempo** (`Timeline`), **Reuniões** (`MeetingsTab`) e **Arquivos** (`FilesTab`). Na ficha do
+cliente tudo é só leitura; anotar, marcar reunião e enviar arquivo continuam na página da negociação, aberta
+pelo nome dela. Sem tabela nem migração nova: tudo já estava no banco.
+
+`GET /clients/:id/deals` exige `clients.read` **e** `leads.read`, e devolve só as negociações no escopo de
+`leads.read` de quem pede (próprio ou todos), como em Empresas. Hoje isso dá a aba a Admin Master e
+Diretoria. Jurídico e Marketing leem a ficha, mas não o CRM: para eles a aba não aparece e a API responde 403. Contatos, contrato e dados da empresa continuam nos blocos 1, 3 e 5; os documentos, na pasta do Drive.

@@ -49,6 +49,16 @@ Estados (`wa_conversations.attendance`): `sofia` Sofia atendendo · `waiting_sel
 - **Encerra sozinha só em três casos:** pediu para não ser contatado (SAIR/PARAR, regra fixa, sem IA; bloqueia
   mensagens ativas), spam, número errado. Uma negociação aberta sem dono da conversa vira perda com esse motivo;
   com dono, nunca é tocada.
+- **Depois do SAIR, a conversa fica bloqueada para ela** (Eric, 29/10, WA-12): a confirmação do SAIR é a última
+  palavra dela. Quem tem "não me contate" ativo e escreve de novo, **inclusive outro SAIR**, não recebe nada da
+  Sofia (nem a confirmação de novo, nem texto livre): a conversa cai em "Aguardando atendente" (`nao_me_contate`)
+  e o dono (ou, sem dono, gerência e diretoria) recebe aviso. Uma pessoa decide. A confirmação vai marcada
+  (`content.optOut`), e um SAIR anterior da pessoa também conta: assim ela sabe que já confirmou. Figurinha ou
+  arquivo depois do SAIR: a conversa segue encerrada, sem resposta.
+- **A equipe também não escreve primeiro:** no número oficial, enquanto a última palavra da pessoa é o SAIR
+  (`wa_contacts.opt_out_at` preenchido), texto e arquivo da tela são recusados (409 `opted_out`), mesmo dentro das
+  24 h que o próprio SAIR abriu. Quando a pessoa escreve de novo, quem atende pode responder dentro da janela;
+  modelo e pedido de ligação continuam barrados pelo "não me contate" (`docs/crm/nao-me-contate.md`).
 - **Limites:** não informa valores, não promete nada, mensagens curtas. Fora do horário (seg–sex 9h–18h, São
   Paulo) a transferência leva o texto de fora do horário.
 
@@ -86,8 +96,19 @@ escreveu "Teste", que virou o nome. Agora:
 - Sem IA: botões, listas, o nome, "sim/não" da marca e "não tenho" das perguntas opcionais.
 - **Nome, telefone e e-mail não vão para a IA:** a resposta do nome é lida por regra; o nome e o nome do perfil
   são trocados por "[nome]" no histórico enviado; números e e-mails são removidos.
-- A frase da IA só sai se for curta, sem pergunta, sem número, sem palavra de preço, sem promessa, sem link,
-  sem dizer que é pessoa e, em conversa de marca, sem citar a Wings. Senão, vai só a pergunta.
+- **A frase da IA só sai se estiver na lista aprovada** (Eric, 29/10, WA-04), e sai com o nosso texto, nunca com o
+  do modelo (maiúsculas, espaços e a pontuação final não importam). Antes da lista, continuam os bloqueios: curta,
+  sem pergunta, sem número, sem palavra de preço, sem promessa, sem link, sem dizer que é pessoa e, em conversa de
+  marca, sem citar a Wings. Fora da lista, vai só a pergunta; se a resposta não andou o roteiro, conta como "não
+  entendeu" (na segunda vez, uma pessoa assume). A lista está em `apps/api/src/modules/sofia/brain.ts`
+  (`SOFIA_ACKNOWLEDGEMENTS`) e no prompt (`sofia-2026-10-31.1`). **Lista proposta, valendo até o Eric aprovar ou
+  trocar:**
+  1. "Entendi."
+  2. "Certo, anotado."
+  3. "Perfeito, obrigada."
+  4. "Ótimo, obrigada."
+  5. "Obrigada pela resposta."
+  6. "Obrigada pelas informações."
 - **Teto:** `SOFIA_DAILY_USD` (padrão 1) por dia UTC. Cada chamada reserva US$ 0,01 sob trava antes de ser feita
   e fica com o custo real que o OpenRouter informa (`sofia_ai_runs`). Uma chamada fica bem abaixo de um
   centavo. Passou do teto, falhou ou demorou mais de 15 s: mensagem fixa e a conversa vai para uma pessoa.

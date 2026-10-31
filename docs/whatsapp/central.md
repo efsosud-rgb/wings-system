@@ -26,7 +26,8 @@ liberar o app (Tech Provider e App Review, ainda não pedidos).
     Todas, Não lidas, Sem resposta, Minhas, Sem responsável, Pessoa, Sofia. Filtros: número, departamento (do número),
     situação e período (dia da última mensagem, horário de São Paulo). 50 por vez, com "Carregar mais conversas".
   - **Conversa:** a mesma do sistema (mídia, citação, reações, enviado/entregue/lido/falha, modelos e anexos no
-    número oficial). Carregando, erro com o motivo, e "Reconectando…" quando uma atualização falha (o que já
+    número oficial). Nos dois tipos de número, o 🎤 grava e envia áudio como mensagem de voz (`cloud-api.md`,
+    "Gravar áudio"). Carregando, erro com o motivo, e "Reconectando…" quando uma atualização falha (o que já
     chegou fica na tela).
   - **Contato:** com negociação, empresa, negociação (link), funil, etapa, dono, valor, previsão, origem, entrada,
     tarefas abertas, anotações e arquivos. Sem negociação, as negociações daquele telefone para escolher; sem
@@ -70,7 +71,8 @@ liberar o app (Tech Provider e App Review, ainda não pedidos).
   vez. Este código já lê o histórico; o que chegar antes dele fica no bruto por 90 dias e se perde.
 - Nunca vão para a Sofia nem para a triagem; não abrem a janela de 24 h nem mexem no descadastro do número oficial
   (`wa_contacts.last_inbound_at`, `opt_out_at`).
-- **Envio:** com o token do próprio número, texto livre e arquivo da negociação, só dentro de 24 h da última
+- **Envio:** com o token do próprio número, texto livre, arquivo da negociação e áudio gravado na tela (mensagem
+  de voz, `cloud-api.md` "Gravar áudio"), só dentro de 24 h da última
   mensagem da pessoa **para aquele número**; fora delas, um modelo aprovado **da WABA daquele número** (fase 2b:
   `GET /whatsapp/templates?numberId=`, sincronizado com o token do número em `wa_number_templates`; nunca os
   modelos oficiais). O pedido de ligação continua só no número oficial (409 `number_no_calls`). Quem pediu para

@@ -186,7 +186,86 @@ export interface LeadEmailSent {
   sentByName: string | null;
   /** The address it left from; null in test mode. */
   fromEmail: string | null;
+  /** Who it went to; null on messages recorded before free-text e-mail (they went to the lead). */
+  toEmail: string | null;
+  attachments: LeadEmailAttachment[];
+  /** The conversation it belongs to (one Gmail thread); replies with the same key show under it. */
+  conversation: string;
 }
+
+/** An attachment of a reply: in the deal's files (`fileId`), or refused and not kept (`refused`). */
+export interface LeadEmailReceivedAttachment {
+  fileId: string | null;
+  name: string;
+  byteSize: number;
+  /** Why it was not kept: a program or script, past the 20 MB (or 10 files), or storage off. */
+  refused: 'file_type' | 'too_large' | 'unavailable' | null;
+}
+
+/** A lead's e-mail read from the seller's Gmail (t083): a reply to the system's e-mail, or from a contact of the deal. */
+export interface LeadEmailReceived {
+  id: string;
+  /** Who wrote it: the name in the From header, and the address. */
+  fromName: string | null;
+  fromEmail: string;
+  subject: string;
+  /** The text without the quoted older messages, when they could be told apart. */
+  body: string;
+  at: string;
+  attachments: LeadEmailReceivedAttachment[];
+  conversation: string;
+  /** Whose Gmail it was read from. */
+  mailboxName: string | null;
+}
+
+// --- free-text e-mail from the deal (t081, Eric 30/10/2026) --------------------------------
+
+/** What the history keeps of an attachment: the deal's file, its name and size; never its bytes. */
+export interface LeadEmailAttachment {
+  fileId: string;
+  name: string;
+  byteSize: number;
+}
+
+/** All attachments of one e-mail together (Gmail takes 25 MB; the base64 of 20 MB fits). */
+export const EMAIL_ATTACHMENTS_MAX_BYTES = 20 * 1024 * 1024;
+export const EMAIL_ATTACHMENTS_MAX_COUNT = 10;
+
+/** Programs and scripts never leave as an attachment (Gmail's own list, and the scripts it misses). */
+const BLOCKED_EXTENSIONS = new Set(
+  (
+    'ade adp apk appx appxbundle bat cab chm cmd com cpl diagcab diagcfg diagpack dll dmg ex ex_ ' +
+    'exe hta img ins iso isp jar jnlp js jse lib lnk mde mjs msc msi msix msixbundle msp mst nsh ' +
+    'pif ps1 scr sct shb sys vb vbe vbs vhd vxd wsc wsf wsh xll ' +
+    'sh bash zsh command py rb pl php app deb rpm run'
+  ).split(' '),
+);
+const BLOCKED_TYPE =
+  /^application\/(x-(msdownload|msdos-program|ms-installer|executable|elf|sh|csh|bat|python|perl|php|ruby|java-archive)|vnd\.microsoft\.portable-executable|java-archive|javascript|ecmascript)$|^text\/(javascript|ecmascript|x-(sh|python|perl|php|ruby|script))/i;
+
+/** Why this file cannot go as an attachment, or null when it can. */
+export function emailAttachmentRefusal(name: string, mimeType: string | null): string | null {
+  const extension = name.includes('.') ? (name.toLowerCase().split('.').pop() ?? '') : '';
+  return BLOCKED_EXTENSIONS.has(extension) || BLOCKED_TYPE.test(mimeType ?? '')
+    ? 'Programas e scripts não vão como anexo.'
+    : null;
+}
+
+/** "Escrever e-mail": to one of the deal's addresses, with the deal's files as attachments. */
+export const leadEmailComposeSchema = z.object({
+  to: z.email('E-mail inválido').max(254),
+  subject: z.string().trim().min(1, 'Escreva o assunto').max(200),
+  text: z.string().trim().min(1, 'Escreva o texto').max(20_000),
+  /** The template it started from, for the history; the text sent is what the person left. */
+  templateId: z.uuid().nullable().default(null),
+  fileIds: z
+    .array(z.uuid())
+    .max(EMAIL_ATTACHMENTS_MAX_COUNT, `No máximo ${EMAIL_ATTACHMENTS_MAX_COUNT} anexos`)
+    .default([]),
+  /** The lead's e-mail this one answers (t083): it goes in the same conversation. */
+  replyToId: z.uuid().nullable().default(null),
+});
+export type LeadEmailComposeInput = z.input<typeof leadEmailComposeSchema>;
 
 /** Fills the variables; a missing value becomes an empty string, never "undefined". */
 export function renderTemplate(

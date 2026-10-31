@@ -22,6 +22,10 @@ FROM node:24-alpine AS runner
 ENV NODE_ENV=production
 WORKDIR /app
 
+# ffmpeg turns a voice note recorded in the browser into OGG/OPUS, the format WhatsApp shows as a
+# voice message (modules/whatsapp/voice.ts). Alpine's package carries libopus.
+RUN apk add --no-cache ffmpeg
+
 # Never run the API as root.
 USER node
 

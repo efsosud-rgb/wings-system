@@ -41,6 +41,7 @@ const STATUS: Record<ConnectErrorCode, number> = {
   phone_taken: 409,
   phone_locked: 409,
   number_mismatch: 409,
+  number_in_use: 409,
   not_registered: 404,
   not_eligible: 409,
   code_refused: 502,
@@ -53,36 +54,77 @@ const STATUS: Record<ConnectErrorCode, number> = {
   busy: 409,
 };
 
+/** Each refusal says what happened and what to do next. */
 const MESSAGES: Record<ConnectErrorCode, string> = {
-  owner_invalid: 'Escolha uma pessoa ativa como dona do número.',
+  owner_invalid:
+    'O dono do número não é uma pessoa ativa. Nada foi salvo: em "Editar", escolha uma pessoa ativa como dona.',
   official_number:
     'Este é o número oficial da Wings: ele é o canal oficial do sistema e não entra aqui como número de pessoa. Nada foi salvo.',
-  phone_taken: 'Este número já está cadastrado.',
+  phone_taken: 'Este número já está cadastrado. Nada foi salvo: procure-o na lista.',
   phone_locked:
     'O número conectado é o que a Meta mostrou: para outro número, cadastre um novo. Nada foi salvo.',
   number_mismatch:
     'Na janela da Meta foi escolhido outro número, não o deste cadastro. Nada foi salvo: conecte de novo escolhendo o número certo.',
-  not_registered: 'Cadastre o número antes de conectar.',
+  number_in_use:
+    'Este número já está conectado em outro cadastro desta lista. Nada foi salvo: use o cadastro em que ele já está.',
+  not_registered:
+    'Este cadastro não existe mais. Nada foi feito: recarregue a lista e cadastre o número.',
   not_eligible:
-    'Só se conecta número confirmado no cadastro (app Business 2.24.17 ou maior, número de trabalho, dono com o celular na mão). Nada foi feito.',
+    'Só se conecta número confirmado no cadastro (app Business 2.24.17 ou maior, número de trabalho, dono com o celular na mão). Nada foi feito: confira e marque "Confirmado" em "Editar".',
   code_refused:
-    'A Meta recusou o código da conexão (ele vale 30 segundos). Nada foi salvo: conecte de novo.',
-  waba_unreadable: 'A Meta não deixou ler a conta do WhatsApp conectada. Nada foi salvo.',
-  number_not_found: 'A conta do WhatsApp conectada não mostra esse número. Nada foi salvo.',
+    'A autorização da Meta venceu (ela vale 30 segundos) ou já foi usada. Nada foi salvo: conecte de novo, sem pausa no fim da janela.',
+  waba_unreadable:
+    'A Meta não reconheceu a conta do WhatsApp escolhida na janela. Nada foi salvo: conecte de novo e escolha a conta do número.',
+  number_not_found:
+    'A conta do WhatsApp escolhida na janela não tem este número. Nada foi salvo: conecte de novo e escolha a conta em que o número está.',
   number_ambiguous:
-    'A conta do WhatsApp conectada tem mais de um número e a Meta não disse qual. Nada foi salvo.',
+    'A conta do WhatsApp conectada tem mais de um número e a Meta não disse qual. Nada foi salvo: conecte de novo e escolha só o número deste cadastro.',
   not_business_app:
-    'Este número não está no app WhatsApp Business. Aqui só se conecta número que continua no celular.',
-  not_found: 'Número não encontrado.',
+    'Este número não está no app WhatsApp Business (versão 2.24.17 ou maior), exigido para manter o número no celular. Nada foi salvo: instale ou atualize o app no celular do dono e conecte de novo.',
+  not_found: 'Número não encontrado. Recarregue a lista.',
   sync_expired:
     'Passaram as 24 horas da conexão: a Meta não manda mais contatos e histórico. Para pedir de novo, o número precisa ser desconectado e conectado outra vez.',
   busy: 'Este número já está sendo conectado agora. Espere terminar e veja a lista.',
 };
 
+const META_BUSY =
+  'A Meta está com instabilidade. Nada foi salvo: espere alguns minutos e conecte de novo.';
+const META_LIMIT =
+  'Muitas tentativas seguidas na Meta. Nada foi salvo: espere alguns minutos e conecte de novo.';
+const META_DENIED =
+  'A permissão para gerenciar o WhatsApp não foi dada na janela da Meta. Nada foi salvo: conecte de novo e aceite todas as permissões, entrando com quem administra o portfólio.';
+
+/** Meta's Graph error codes for the code exchange and the WABA read (Graph API error handling). */
+const META_MESSAGES: Record<number, string> = {
+  1: META_BUSY,
+  2: META_BUSY,
+  4: META_LIMIT,
+  17: META_LIMIT,
+  32: META_LIMIT,
+  613: META_LIMIT,
+  80008: META_LIMIT,
+  10: META_DENIED,
+  200: META_DENIED,
+  190: 'O acesso dado pela Meta venceu ou foi cancelado. Nada foi salvo: conecte de novo pela Meta.',
+  368: 'A Meta bloqueou temporariamente a conta por política. Nada foi salvo: avise o Eric, que resolve com a Meta.',
+};
+
+/** Code 100 is each call's own refusal: an expired or used code, or a WABA Meta does not show. */
+export function refusalMessage({ code, metaCode }: ConnectError): string {
+  if (code !== 'code_refused' && code !== 'waba_unreadable') return MESSAGES[code];
+  if (metaCode === null)
+    return 'A Meta não respondeu (internet do servidor ou a Meta fora do ar). Nada foi salvo: espere alguns minutos e conecte de novo.';
+  if (metaCode === 100) return MESSAGES[code];
+  return (
+    META_MESSAGES[metaCode] ??
+    `A Meta recusou a conexão. Nada foi salvo: conecte de novo; se repetir, passe ao suporte o código META-${metaCode}.`
+  );
+}
+
 const refuse = (reply: FastifyReply, error: ConnectError) =>
   reply.status(STATUS[error.code]).send({
     error: error.code,
-    message: MESSAGES[error.code],
+    message: refusalMessage(error),
     ...(error.metaCode !== null ? { metaCode: error.metaCode } : {}),
   });
 
@@ -99,7 +141,7 @@ export const whatsappNumbersRoutes: FastifyPluginAsync = async (app) => {
   const off = (reply: FastifyReply) =>
     reply.status(503).send({
       error: 'signup_not_configured',
-      message: `Falta configurar neste ambiente: ${missingForSignup(env).join(', ')}.`,
+      message: `A conexão pela Meta não está configurada neste ambiente (falta: ${missingForSignup(env).join(', ')}). Nada foi feito: avise o Eric.`,
     });
 
   app.get('/whatsapp/numbers', manage, async (_request, reply) => {
@@ -166,7 +208,11 @@ export const whatsappNumbersRoutes: FastifyPluginAsync = async (app) => {
     if (!ready) return off(reply);
     const body = waNumberConnectSchema.safeParse(request.body);
     if (!body.success)
-      return reply.status(400).send({ error: 'invalid_request', message: 'Dados inválidos.' });
+      return reply.status(400).send({
+        error: 'invalid_request',
+        message:
+          'A janela da Meta devolveu dados que o sistema não reconhece. Nada foi salvo: conecte de novo.',
+      });
     try {
       const result = await connectNumber(ready, body.data, request.session.actor.employeeId);
       await writeAudit(db, {

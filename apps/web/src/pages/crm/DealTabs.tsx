@@ -51,6 +51,7 @@ export const EVENT_LABELS: Record<string, string> = {
   'rd.deal_linked': 'Ligada ao negócio do RD CRM',
   'rd.deal_created': 'Cópia criada no RD CRM',
   'lead.email_sent': 'E-mail ao lead',
+  'lead.email_received': 'E-mail recebido do lead',
   'lead.contact_opt_out': 'Não me contate registrado',
   'lead.contact_blocked': 'Contato não iniciado: não me contate',
   'research.queued': 'Pesquisa pedida',
@@ -98,7 +99,7 @@ const TONE_LABELS: Record<Tone, string> = {
   event: 'Sistema',
 };
 
-const EMAIL_EVENTS = new Set(['lead.email_sent']);
+const EMAIL_EVENTS = new Set(['lead.email_sent', 'lead.email_received']);
 const FILE_EVENTS = new Set(['lead.file_added', 'lead.file_removed']);
 const WHATSAPP_EVENTS = new Set([
   'whatsapp.conversation_imported',
@@ -116,6 +117,29 @@ function importBody(event: LeadEvent): string | null {
   return from && to
     ? `${count}, de ${formatDate(from)} a ${formatDate(to)}. Estão na tela WhatsApp da negociação.`
     : count;
+}
+
+/**
+ * What an e-mail's line adds: its subject and the attachments' names and sizes (older events had
+ * neither); a received one also who wrote it and its text, without the quoted older messages.
+ */
+export function emailBody(event: LeadEvent): string | null {
+  const { subject, attachments, from, text } = event.detail as {
+    subject?: string;
+    attachments?: { name: string; byteSize: number; refused?: string | null }[];
+    from?: string;
+    text?: string;
+  };
+  const files = (attachments ?? []).map(
+    (f) => `${f.name} (${formatBytes(f.byteSize)})${f.refused ? ' — não guardado' : ''}`,
+  );
+  const parts = [
+    from ? `De: ${from}` : null,
+    subject,
+    text,
+    files.length ? `Anexos: ${files.join(', ')}` : null,
+  ].filter(Boolean);
+  return parts.length ? parts.join('\n') : null;
 }
 
 const MEETING_EVENTS = new Set([
@@ -261,13 +285,15 @@ export function entriesOf(data: LoadedLead): Entry[] {
                 : 'more',
       tone,
       title: EVENT_LABELS[event.kind] ?? 'Atualização',
-      by: null,
+      by: tone === 'email' ? ((event.detail.by as string | null | undefined) ?? null) : null,
       body:
         tone === 'whatsapp'
           ? importBody(event)
           : tone === 'meeting'
             ? meetingBody(event)
-            : undefined,
+            : tone === 'email'
+              ? (emailBody(event) ?? undefined)
+              : undefined,
     });
   }
   return entries.sort((a, b) => b.at.localeCompare(a.at));

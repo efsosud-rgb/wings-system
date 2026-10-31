@@ -2,6 +2,7 @@ import type {
   DealWhatsApp,
   WaCall,
   WaCallPermissionLive,
+  WaCallPermissionRequest,
   WaChatNumber,
   WaConversationItem,
   WaInboxFilter,
@@ -398,6 +399,23 @@ export function useSendWhatsAppFile(thread: WhatsAppThread, leadId: string | nul
   });
 }
 
+/**
+ * A voice note recorded in the conversation: the recording goes as it is, and the API converts
+ * it, keeps it in the deal's Arquivos and sends it as a WhatsApp voice message.
+ */
+export function useSendWhatsAppVoice(thread: WhatsAppThread, leadId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (recording: Blob) =>
+      api.upload<{ message: WaMessage }>(`${threadPath(thread)}/voice`, recording),
+    onSuccess: () => afterSend(queryClient, thread),
+    // The deal's Arquivos show the audio kept there, whatever happened after.
+    onSettled: () => {
+      if (leadId) void queryClient.invalidateQueries({ queryKey: ['leads'] });
+    },
+  });
+}
+
 /** Why a conversation with no deal sends no file (the API says the same). */
 export const NO_DEAL_FOR_FILES =
   'O arquivo fica nos arquivos da negociação: esta conversa ainda não tem negociação.';
@@ -446,10 +464,24 @@ export function useCallPermission(leadId: string, enabled: boolean) {
   });
 }
 
+/** The call-request template for this deal (outside the window), before it goes. Sends nothing. */
+export function useCallRequestPreview(leadId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['whatsapp', 'call-request-preview', leadId],
+    queryFn: () =>
+      api.post<{ preview: WaTemplatePreview }>(`/leads/${leadId}/whatsapp/call-permission/preview`),
+    enabled,
+    staleTime: 0,
+    retry: false,
+  });
+}
+
+/** No input: Meta's free request (inside the window); `template`: by the approved template. */
 export function useRequestCallPermission(leadId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: () => api.post<{ message: WaMessage }>(`/leads/${leadId}/whatsapp/call-permission`),
+    mutationFn: (input?: WaCallPermissionRequest) =>
+      api.post<{ message: WaMessage }>(`/leads/${leadId}/whatsapp/call-permission`, input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['whatsapp', 'call-permission', leadId] });
       void queryClient.invalidateQueries({ queryKey: threadKey({ leadId }) });

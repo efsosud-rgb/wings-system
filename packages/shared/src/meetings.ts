@@ -347,4 +347,12 @@ export interface GoogleWorkspaceStatus {
   wingsCalendarConfigured: boolean;
   /** A code (invalid_grant, calendar_forbidden…), never Google's text. */
   lastError: string | null;
+  /**
+   * Reading the leads' replies (t083): `on` (the system reads and this connection may), `reconnect`
+   * (connected before the reading scope existed: connect once more), `off` (the system does not read).
+   */
+  mailRead: 'on' | 'reconnect' | 'off';
 }
+
+/** The Gmail scope that reads the leads' replies (t083): the narrowest one that reaches the text and the attachments. */
+export const GMAIL_READ_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';

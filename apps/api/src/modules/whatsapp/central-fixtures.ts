@@ -1,4 +1,7 @@
 import { randomBytes } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { SESSION_COOKIE, type RoleKey } from '@wings/shared';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -6,6 +9,7 @@ import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
 import {
   leadEvents,
+  leadFiles,
   leadTriageQueue,
   leads,
   waConversations,
@@ -49,8 +53,11 @@ export let harness: TestDatabase;
 export let db: Database;
 export let app: FastifyInstance;
 export let clock = NOW;
+let mediaDir = '';
 
 export const sends: { url: string; auth: string | null; body: Record<string, unknown> }[] = [];
+/** Each file sent up to Meta: to which number, with which token, as which type. */
+export const mediaUploads: { url: string; auth: string | null; type: string | null }[] = [];
 /** Each read of a WABA's templates: which WABA, with which token. */
 export const templateReads: { url: string; auth: string | null }[] = [];
 export const json = (body: unknown, status = 200): Response =>
@@ -75,6 +82,14 @@ export const whatsappFetch = (async (input: string | URL | Request, init?: Reque
         },
       ],
     });
+  }
+  if (url.pathname.endsWith('/media')) {
+    mediaUploads.push({
+      url: url.pathname,
+      auth,
+      type: (init?.body as FormData).get('type') as string,
+    });
+    return json({ id: `MEDIA${mediaUploads.length}` });
   }
   if (url.pathname.endsWith('/messages')) {
     sends.push({ url: url.pathname, auth, body: JSON.parse(String(init?.body)) });
@@ -216,6 +231,7 @@ export const setClock = (at: Date) => {
 export async function startCentral() {
   harness = await createTestDatabase();
   db = harness.db;
+  mediaDir = await mkdtemp(join(tmpdir(), 'wings-central-'));
   app = await buildApp({
     env: loadEnv({
       NODE_ENV: 'test',
@@ -224,6 +240,7 @@ export async function startCentral() {
       CPF_ENCRYPTION_KEY: TEST_CPF_KEY,
       CPF_INDEX_KEY: TEST_INDEX_KEY,
       APP_BASE_URL: 'http://localhost:5173',
+      MEDIA_DIR: mediaDir,
       WHATSAPP_APP_SECRET: 'whatsapp-app-secret-for-tests',
       WHATSAPP_WEBHOOK_VERIFY_TOKEN: 'whatsapp-verify-token-long-enough',
       WHATSAPP_ACCESS_TOKEN: TOKEN,
@@ -243,12 +260,14 @@ export async function startCentral() {
 export async function stopCentral() {
   await app?.close();
   await harness?.drop();
+  if (mediaDir) await rm(mediaDir, { recursive: true, force: true });
 }
 
 /** Each test starts with no deal, conversation or event, and the work number connected again. */
 export async function resetCentral() {
   clock = NOW;
   sends.length = 0;
+  mediaUploads.length = 0;
   templateReads.length = 0;
   await setOfficialLive(db, true);
   await db.delete(leadTriageQueue);
@@ -256,6 +275,8 @@ export async function resetCentral() {
   await db.delete(waConversations);
   await db.delete(waNumbers);
   await db.delete(leadEvents);
+  // A recorded voice note kept in a deal's files (central-voice.test.ts).
+  await db.delete(leadFiles);
   await db.delete(leads);
   await db.delete(waWebhookEvents);
   const [row] = await db

@@ -22,6 +22,7 @@ import {
   useSendWhatsAppFile,
   useSendWhatsAppTemplate,
   useSendWhatsAppText,
+  useSendWhatsAppVoice,
   useTemplatePreview,
   useWhatsAppArt,
   useWhatsAppSoon,
@@ -35,6 +36,7 @@ import { LoadFailure } from '../../components/LoadFailure.js';
 import { formatDateTime, formatPhone } from './format.js';
 import { AttachTray, EmojiButton, pickedOf, type Picked } from './WhatsAppAttach.js';
 import { dayLabel } from './whatsapp-time.js';
+import { useVoiceRecorder, VoiceTray } from './WhatsAppVoice.js';
 
 /**
  * The conversation itself, for a deal or for one no deal took yet: the
@@ -151,6 +153,7 @@ export function WhatsAppChat({
             key={composerKey}
             thread={thread}
             leadId={data.leadId}
+            blocked={data.contactBlock.blocked ? data.contactBlock.reason : null}
             onTemplate={() => setUseTemplate(true)}
             onTyping={onTyping}
           />
@@ -503,16 +506,20 @@ function attachOffOf(leadId: string | null, canEditDeal: boolean) {
 
 /**
  * Free text inside the window, with emoji, or one file of the deal (photo, video, document,
- * audio) with the text as its caption. The file goes up to the deal's Arquivos, then by its id.
+ * audio) with the text as its caption, or a voice note recorded here. The file goes up to the
+ * deal's Arquivos, then by its id; the recording goes to the API, which keeps it there too.
  */
 function TextCompose({
   thread,
   leadId,
+  blocked,
   onTemplate,
   onTyping,
 }: {
   thread: WhatsAppThread;
   leadId: string | null;
+  /** "Não me contate": a typed reply still goes, a recorded voice note does not (the API agrees). */
+  blocked: string | null;
   /** Switches to the template picker (a work number's chat uses its own WABA's templates). */
   onTemplate?: () => void;
   onTyping?: () => void;
@@ -521,6 +528,15 @@ function TextCompose({
   const sendFile = useSendWhatsAppFile(thread, leadId);
   const session = useSession();
   const attachOff = attachOffOf(leadId, hasPermission(session.data, 'leads.write'));
+  const voice = useVoiceRecorder();
+  const sendVoice = useSendWhatsAppVoice(thread, leadId);
+  const voiceOff = !leadId
+    ? 'O áudio fica nos arquivos da negociação: esta conversa ainda não tem negociação.'
+    : attachOff
+      ? 'Para gravar áudio, é preciso poder editar a negociação: o áudio fica nos arquivos dela.'
+      : blocked
+        ? `Áudio gravado não vai: ${blocked}`
+        : null;
   const field = useRef<HTMLTextAreaElement>(null);
   const chooser = useRef<HTMLInputElement>(null);
   const [text, setText] = useState('');
@@ -615,7 +631,8 @@ function TextCompose({
     });
   };
 
-  const busy = send.isPending || sendFile.isPending;
+  const busy = send.isPending || sendFile.isPending || sendVoice.isPending;
+  const recording = voice.state.step !== 'idle';
   const status =
     progress !== null && progress < 1
       ? `Subindo para os arquivos da negociação… ${Math.round(progress * 100)}%`
@@ -631,7 +648,11 @@ function TextCompose({
           'Sem resposta do servidor. Confira a conexão e, antes de tentar de novo, veja se o arquivo já aparece na conversa.'
         : // The upload's own words too (the storage refused, the connection fell).
           sendFile.error.message || 'Não foi possível enviar o arquivo.'
-      : send.error && errorText(send.error, 'Não foi possível enviar.');
+      : sendVoice.error
+        ? sendVoice.error instanceof TypeError
+          ? 'Sem resposta do servidor. Confira a conexão e, antes de tentar de novo, veja se o áudio já aparece na conversa.'
+          : errorText(sendVoice.error, 'Não foi possível enviar o áudio.')
+        : send.error && errorText(send.error, 'Não foi possível enviar.');
   return (
     <form
       className="crm-wa-compose"
@@ -684,49 +705,89 @@ function TextCompose({
         >
           <Icon name="paperclip" size={20} />
         </button>
-      </div>
-      <textarea
-        ref={field}
-        className="crm-input"
-        aria-label={picked ? 'Legenda' : 'Mensagem'}
-        placeholder={
-          captionless
-            ? 'Áudio vai sem legenda: o texto fica para a próxima mensagem'
-            : picked
-              ? 'Legenda (opcional)'
-              : 'Escreva uma mensagem (Enter envia, Shift+Enter quebra a linha)'
-        }
-        rows={2}
-        maxLength={picked ? WA_CAPTION_MAX : 4096}
-        disabled={captionless}
-        // What goes is what was there on the click: no edit while it goes, none lost after.
-        readOnly={busy}
-        value={text}
-        onChange={(event) => {
-          setText(event.target.value);
-          onTyping?.();
-        }}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' && !event.shiftKey) {
-            event.preventDefault();
-            submit();
-          }
-        }}
-      />
-      <div className="crm-wa-compose-actions">
         <button
-          type="submit"
-          className="crm-btn is-primary"
-          disabled={busy || (picked ? picked.renameWhy !== null : text.trim().length === 0)}
+          type="button"
+          className="crm-wa-tool"
+          aria-label="Gravar áudio"
+          title={voiceOff ?? 'Gravar áudio'}
+          aria-disabled={voiceOff !== null || busy || picked !== null || recording}
+          onClick={() => {
+            if (busy || picked || recording) return;
+            if (voiceOff) return setNote(voiceOff);
+            setNote(null);
+            sendVoice.reset();
+            void voice.start();
+          }}
         >
-          {picked ? 'Enviar arquivo' : 'Enviar'}
+          <Icon name="mic" size={20} />
         </button>
-        {onTemplate && (
-          <button type="button" className="crm-btn is-quiet is-small" onClick={onTemplate}>
-            Usar modelo
-          </button>
-        )}
       </div>
+      {voice.state.step !== 'idle' ? (
+        <VoiceTray
+          state={voice.state}
+          busy={sendVoice.isPending}
+          status={sendVoice.isPending ? 'Enviando…' : null}
+          onStop={voice.stop}
+          onDiscard={() => {
+            voice.discard();
+            sendVoice.reset();
+          }}
+          onSend={() => {
+            if (voice.state.step !== 'recorded' || sendVoice.isPending) return;
+            sendVoice.mutate(voice.state.blob, { onSuccess: () => voice.discard() });
+          }}
+        />
+      ) : (
+        <>
+          <textarea
+            ref={field}
+            className="crm-input"
+            aria-label={picked ? 'Legenda' : 'Mensagem'}
+            placeholder={
+              captionless
+                ? 'Áudio vai sem legenda: o texto fica para a próxima mensagem'
+                : picked
+                  ? 'Legenda (opcional)'
+                  : 'Escreva uma mensagem (Enter envia, Shift+Enter quebra a linha)'
+            }
+            rows={2}
+            maxLength={picked ? WA_CAPTION_MAX : 4096}
+            disabled={captionless}
+            // What goes is what was there on the click: no edit while it goes, none lost after.
+            readOnly={busy}
+            value={text}
+            onChange={(event) => {
+              setText(event.target.value);
+              onTyping?.();
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                submit();
+              }
+            }}
+          />
+          <div className="crm-wa-compose-actions">
+            <button
+              type="submit"
+              className="crm-btn is-primary"
+              disabled={busy || (picked ? picked.renameWhy !== null : text.trim().length === 0)}
+            >
+              {picked ? 'Enviar arquivo' : 'Enviar'}
+            </button>
+            {onTemplate && (
+              <button type="button" className="crm-btn is-quiet is-small" onClick={onTemplate}>
+                Usar modelo
+              </button>
+            )}
+          </div>
+        </>
+      )}
+      {voice.error && (
+        <p className="crm-wa-note" role="alert">
+          {voice.error}
+        </p>
+      )}
       {note && <p className="crm-wa-note">{note}</p>}
       {failure && <p className="crm-error">{failure}</p>}
     </form>
