@@ -1,5 +1,6 @@
 import {
   EMAIL_ATTACHMENTS_MAX_BYTES,
+  EMAIL_ATTACHMENTS_MAX_COUNT,
   emailAttachmentRefusal,
   type LeadEmailAttachment,
   type LeadEmailReceived,
@@ -22,6 +23,9 @@ const STATUS_LABELS = {
 
 const errorText = (error: unknown, fallback: string) =>
   error instanceof ApiError || error instanceof Error ? error.message : fallback;
+
+/** Why an 11th file is not taken (the API refuses it too). */
+export const TOO_MANY_ATTACHMENTS = `Um e-mail leva até ${EMAIL_ATTACHMENTS_MAX_COUNT} anexos. Tire um para juntar outro.`;
 
 const attachmentsText = (files: { name: string; byteSize: number }[]) =>
   files.map((f) => `${f.name} (${formatBytes(f.byteSize)})`).join(', ');
@@ -153,6 +157,7 @@ export function LeadEmailTab({ leadId }: { leadId: string }) {
     const refusal = emailAttachmentRefusal(file.name, file.mimeType ?? null);
     if (refusal) return setAttachError(`${file.name}: ${refusal}`);
     if (attached.some((f) => f.fileId === file.fileId)) return setAttachError(null);
+    if (attached.length >= EMAIL_ATTACHMENTS_MAX_COUNT) return setAttachError(TOO_MANY_ATTACHMENTS);
     if (total + file.byteSize > EMAIL_ATTACHMENTS_MAX_BYTES)
       return setAttachError(
         `${file.name} não cabe: os anexos de um e-mail somam até ${formatBytes(EMAIL_ATTACHMENTS_MAX_BYTES)}.`,
@@ -166,8 +171,10 @@ export function LeadEmailTab({ leadId }: { leadId: string }) {
 
   const fromComputer = async (list: FileList | null) => {
     let sum = total;
+    let count = attached.length;
     for (const file of list ? Array.from(list) : []) {
       // Checked here first, so a file that cannot go is not stored in the deal for nothing.
+      if (count >= EMAIL_ATTACHMENTS_MAX_COUNT) return setAttachError(TOO_MANY_ATTACHMENTS);
       const refusal = emailAttachmentRefusal(file.name, file.type || null);
       if (refusal) return setAttachError(`${file.name}: ${refusal}`);
       if (sum + file.size > EMAIL_ATTACHMENTS_MAX_BYTES)
@@ -178,6 +185,7 @@ export function LeadEmailTab({ leadId }: { leadId: string }) {
       try {
         const stored = await upload.mutateAsync({ file, onProgress: () => undefined });
         sum += stored.byteSize;
+        count += 1;
         attach({ ...stored, mimeType: stored.mimeType });
       } catch (err) {
         setAttachError(errorText(err, 'Não foi possível anexar o arquivo.'));
@@ -336,8 +344,8 @@ export function LeadEmailTab({ leadId }: { leadId: string }) {
             </ul>
           )}
           <p className="crm-muted" style={{ margin: '4px 0' }}>
-            {formatBytes(total)} de {formatBytes(EMAIL_ATTACHMENTS_MAX_BYTES)}. Programas e scripts
-            não vão como anexo.
+            {attached.length} de {EMAIL_ATTACHMENTS_MAX_COUNT} anexos, {formatBytes(total)} de{' '}
+            {formatBytes(EMAIL_ATTACHMENTS_MAX_BYTES)}. Programas e scripts não vão como anexo.
           </p>
           <div className="crm-quick-row">
             <input
