@@ -76,7 +76,7 @@ Em Meus prospects, "Sugerir abordagem (IA)" (`POST /prospecting/prospects/:id/ap
 
 ## Nota ICP
 
-Calculada a cada resposta, nunca guardada (`icpScore` no shared). Pesos padrão: nota ≥ 4,5 +2 (≥ 4,2 +1); avaliações ≥ 500 +3 (≥ 200 +2, ≥ 50 +1); tem site +1; Instagram achado no site +1; mesmo nome em mais de um endereço da resposta +2. A lista vem da maior nota para a menor. Quem muda pesos e lista de exclusão: Gerente Comercial e Admin Master (Ajustes, `PUT /prospecting/settings/icp`); a auditoria guarda os pesos e a quantidade de nomes excluídos, não os nomes.
+Calculada a cada resposta, nunca guardada (`icpScore` e `withInstagram` no shared), **de 0 a 100**: `round(100 × pontos obtidos ÷ pontos possíveis)`. Pesos padrão do Google: nota ≥ 4,5 +2 (≥ 4,2 +1); avaliações ≥ 500 +3 (≥ 200 +2, ≥ 50 +1); tem site +1; Instagram achado no site +1; mesmo nome em mais de um endereço da resposta +2 (9 pontos possíveis: numa faixa exclusiva conta só o maior peso). Com a Business Discovery ligada, a parte do Instagram entra só com os critérios que a Meta deu ([instagram-fase-b.md](../prospeccao/instagram-fase-b.md)). A lista vem da maior nota para a menor. Quem muda pesos e lista de exclusão: Gerente Comercial e Admin Master (Ajustes, `PUT /prospecting/settings/icp`); a auditoria guarda os pesos e a quantidade de nomes excluídos, não os nomes.
 
 ## Status de um prospect
 
