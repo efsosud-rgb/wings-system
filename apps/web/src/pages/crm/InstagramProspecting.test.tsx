@@ -27,6 +27,7 @@ const previewMutate = vi.fn();
 const confirmMutate = vi.fn();
 const actionMutate = vi.fn();
 const fetchMessage = vi.fn();
+const saveMutate = vi.fn();
 const idle = { isPending: false, isError: false, isSuccess: false, reset: vi.fn() };
 
 vi.mock('../../api/prospect-ai.js', () => ({
@@ -39,11 +40,12 @@ vi.mock('../../api/prospect-ai.js', () => ({
   useInstagramOwners: () => ({ data: { owners: [] }, isError: false }),
   useProspectAction: () => ({ ...idle, mutate: actionMutate }),
   useCreateInstagramLead: () => ({ ...idle, mutate: vi.fn() }),
-  useSaveInstagramSettings: () => ({ ...idle, mutate: vi.fn() }),
+  useSaveInstagramSettings: () => ({ ...idle, mutate: saveMutate }),
   fetchFirstMessage: (id: string) => fetchMessage(id),
 }));
 
 const { InstagramTab } = await import('./InstagramProspecting.js');
+const { InstagramSettings } = await import('./InstagramProspectList.js');
 
 const wrap = (node: ReactNode) => render(<MemoryRouter>{node}</MemoryRouter>);
 const zero = <K extends string>(keys: readonly K[]) =>
@@ -201,5 +203,29 @@ describe('InstagramTab', () => {
     expect(screen.queryByRole('button', { name: 'Colar comentários' })).toBeNull();
     expect(screen.getByText('@usuario.teste01')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Criar lead' })).toBeNull();
+  });
+});
+
+describe('Ajustes do Instagram', () => {
+  it('edits the Business Discovery limits and keeps the rest of the settings', () => {
+    wrap(<InstagramSettings settings={DEFAULT_INSTAGRAM_PROSPECTING_SETTINGS} />);
+    fireEvent.change(screen.getByLabelText('Busca do Google: consultas à Meta por dia'), {
+      target: { value: '200' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar' }));
+    expect(saveMutate).toHaveBeenCalledWith({
+      ...DEFAULT_INSTAGRAM_PROSPECTING_SETTINGS,
+      discovery: { cacheDias: 7, porDia: 200, recentPosts: 12 },
+    });
+  });
+
+  it('refuses a ceiling outside its range before saving', () => {
+    wrap(<InstagramSettings settings={DEFAULT_INSTAGRAM_PROSPECTING_SETTINGS} />);
+    fireEvent.change(screen.getByLabelText('Busca do Google: posts recentes lidos por empresa'), {
+      target: { value: '40' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar' }));
+    expect(screen.getByRole('alert')).toBeTruthy();
+    expect(saveMutate).not.toHaveBeenCalled();
   });
 });

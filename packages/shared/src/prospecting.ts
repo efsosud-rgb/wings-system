@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ProspectInstagramRef } from './instagram-discovery.js';
 import { LEAD_NAME_MAX } from './leads.js';
 
 /**
@@ -226,9 +227,25 @@ export const ICP_WEIGHT_KEYS = [
   'website',
   'instagram',
   'multiUnit',
+  'igFollowers10k',
+  'igFollowers1k',
+  'igActive30d',
+  'igPosts100',
+  'igEngagement1pct',
+  'igComments5',
 ] as const;
 export type IcpWeightKey = (typeof ICP_WEIGHT_KEYS)[number];
 export type IcpWeights = Record<IcpWeightKey, number>;
+
+/** The criteria read from Instagram's Business Discovery (docs/prospeccao/instagram.md §6.3). */
+export const ICP_INSTAGRAM_KEYS = [
+  'igFollowers10k',
+  'igFollowers1k',
+  'igActive30d',
+  'igPosts100',
+  'igEngagement1pct',
+  'igComments5',
+] as const satisfies readonly IcpWeightKey[];
 
 export const ICP_WEIGHT_LABELS: Record<IcpWeightKey, string> = {
   rating45: 'Nota ≥ 4,5',
@@ -239,8 +256,15 @@ export const ICP_WEIGHT_LABELS: Record<IcpWeightKey, string> = {
   website: 'Tem site',
   instagram: 'Instagram achado no site',
   multiUnit: 'Mesmo nome em mais de um endereço',
+  igFollowers10k: 'Instagram: seguidores ≥ 10.000',
+  igFollowers1k: 'Instagram: seguidores ≥ 1.000',
+  igActive30d: 'Instagram: 4 ou mais posts em 30 dias',
+  igPosts100: 'Instagram: 100 ou mais posts',
+  igEngagement1pct: 'Instagram: engajamento ≥ 1%',
+  igComments5: 'Instagram: média ≥ 5 comentários por post',
 };
 
+/** Proposals without a market source, to calibrate in the pilot (§6.3). */
 export const DEFAULT_ICP_WEIGHTS: IcpWeights = {
   rating45: 2,
   rating42: 1,
@@ -250,14 +274,28 @@ export const DEFAULT_ICP_WEIGHTS: IcpWeights = {
   website: 1,
   instagram: 1,
   multiUnit: 2,
+  igFollowers10k: 2,
+  igFollowers1k: 1,
+  igActive30d: 2,
+  igPosts100: 1,
+  igEngagement1pct: 2,
+  igComments5: 1,
 };
 
+const weight = z.number().int().min(0).max(10);
+
 export const prospectingIcpSchema = z.object({
+  // The Instagram weights came later: a saved row without them reads their defaults instead of
+  // failing whole (which would drop the exclusion list with it).
   weights: z.object(
-    Object.fromEntries(ICP_WEIGHT_KEYS.map((k) => [k, z.number().int().min(0).max(10)])) as Record<
-      IcpWeightKey,
-      z.ZodNumber
-    >,
+    Object.fromEntries(
+      ICP_WEIGHT_KEYS.map((k) => [
+        k,
+        (ICP_INSTAGRAM_KEYS as readonly string[]).includes(k)
+          ? weight.default(DEFAULT_ICP_WEIGHTS[k])
+          : weight,
+      ]),
+    ) as Record<IcpWeightKey, typeof weight>,
   ),
   /** Big chains already franchised: a result whose name holds one of these is hidden. */
   excludedNames: z.array(z.string().trim().min(2).max(80)).max(300),
@@ -272,26 +310,147 @@ export interface IcpInput {
   multiUnit: boolean;
 }
 
-/** The ICP score, computed on every answer and never stored; each reason is a weight that counted. */
+/**
+ * What Business Discovery said about the company's account, as the score reads it. Null fields are
+ * "no data" (Meta did not send them), never zero. Averages are × 1000, integers.
+ */
+export interface InstagramIcpMetrics {
+  followers: number | null;
+  posts: number | null;
+  postsLast30d: number | null;
+  avgLikesMilli: number | null;
+  avgCommentsMilli: number | null;
+}
+
+export interface IcpScore {
+  /** 0 to 100: points earned over the points possible. */
+  score: number;
+  earned: number;
+  possible: number;
+  /** Each criterion that counted, with its weight. */
+  reasons: string[];
+  /** Instagram criteria left out of both sides for lack of data. */
+  noData: string[];
+}
+
+/** Bands of one measure: only the highest that holds counts, and only the highest weight is possible. */
+const BANDS: IcpWeightKey[][] = [
+  ['rating45', 'rating42'],
+  ['reviews500', 'reviews200', 'reviews50'],
+  ['website'],
+  ['instagram'],
+  ['multiUnit'],
+];
+const INSTAGRAM_BANDS: IcpWeightKey[][] = [
+  ['igFollowers10k', 'igFollowers1k'],
+  ['igActive30d'],
+  ['igPosts100'],
+  ['igEngagement1pct'],
+  ['igComments5'],
+];
+
+/** Which Instagram bands have data, and the key that holds in each (null: none holds). */
+function instagramHits(m: InstagramIcpMetrics): Map<IcpWeightKey[], IcpWeightKey | null> {
+  const out = new Map<IcpWeightKey[], IcpWeightKey | null>();
+  const [followers, active, posts, engagement, comments] = INSTAGRAM_BANDS as [
+    IcpWeightKey[],
+    IcpWeightKey[],
+    IcpWeightKey[],
+    IcpWeightKey[],
+    IcpWeightKey[],
+  ];
+  if (m.followers !== null)
+    out.set(
+      followers,
+      m.followers >= 10_000 ? 'igFollowers10k' : m.followers >= 1_000 ? 'igFollowers1k' : null,
+    );
+  if (m.postsLast30d !== null) out.set(active, m.postsLast30d >= 4 ? 'igActive30d' : null);
+  if (m.posts !== null) out.set(posts, m.posts >= 100 ? 'igPosts100' : null);
+  // Engagement: likes plus comments per post over followers. Hidden likes are no data (§6.2).
+  if (m.followers !== null && m.followers > 0 && m.avgLikesMilli !== null) {
+    const perPostMilli = m.avgLikesMilli + (m.avgCommentsMilli ?? 0);
+    out.set(engagement, perPostMilli * 100 >= m.followers * 1000 ? 'igEngagement1pct' : null);
+  }
+  if (m.avgCommentsMilli !== null)
+    out.set(comments, m.avgCommentsMilli >= 5_000 ? 'igComments5' : null);
+  return out;
+}
+
+/**
+ * The ICP score from 0 to 100 (docs/prospeccao/instagram.md §6.3): points earned over points
+ * possible. Google's criteria always count on both sides, as before; an Instagram criterion counts
+ * only when Business Discovery gave its data, so a missing one never reads as zero, and a company
+ * without a known business account is scored on Google alone. Computed on every answer, never stored.
+ */
 export function icpScore(
   input: IcpInput,
   weights: IcpWeights = DEFAULT_ICP_WEIGHTS,
-): { score: number; reasons: string[] } {
-  const hits: IcpWeightKey[] = [];
+  instagram: InstagramIcpMetrics | null = null,
+): IcpScore {
   const rating = input.rating ?? 0;
   const reviews = input.reviews ?? 0;
-  if (rating >= 4.5) hits.push('rating45');
-  else if (rating >= 4.2) hits.push('rating42');
-  if (reviews >= 500) hits.push('reviews500');
-  else if (reviews >= 200) hits.push('reviews200');
-  else if (reviews >= 50) hits.push('reviews50');
-  if (input.hasWebsite) hits.push('website');
-  if (input.hasInstagram) hits.push('instagram');
-  if (input.multiUnit) hits.push('multiUnit');
-  const counted = hits.filter((k) => weights[k] > 0);
+  const hits = new Map<IcpWeightKey[], IcpWeightKey | null>([
+    [BANDS[0]!, rating >= 4.5 ? 'rating45' : rating >= 4.2 ? 'rating42' : null],
+    [
+      BANDS[1]!,
+      reviews >= 500
+        ? 'reviews500'
+        : reviews >= 200
+          ? 'reviews200'
+          : reviews >= 50
+            ? 'reviews50'
+            : null,
+    ],
+    [BANDS[2]!, input.hasWebsite ? 'website' : null],
+    [BANDS[3]!, input.hasInstagram ? 'instagram' : null],
+    [BANDS[4]!, input.multiUnit ? 'multiUnit' : null],
+  ]);
+  const google = tally(hits, weights, { earned: 0, possible: 0, reasons: [] });
+  return withInstagram(
+    { score: scoreOf(google.earned, google.possible), ...google, noData: [] },
+    weights,
+    instagram,
+  );
+}
+
+const scoreOf = (earned: number, possible: number) =>
+  possible > 0 ? Math.round((100 * earned) / possible) : 0;
+
+function tally(
+  hits: Map<IcpWeightKey[], IcpWeightKey | null>,
+  weights: IcpWeights,
+  base: { earned: number; possible: number; reasons: string[] },
+) {
+  let { earned, possible } = base;
+  const reasons = [...base.reasons];
+  for (const [band, hit] of hits) {
+    possible += Math.max(...band.map((k) => weights[k]));
+    if (hit && weights[hit] > 0) {
+      earned += weights[hit];
+      reasons.push(`${ICP_WEIGHT_LABELS[hit]} (+${weights[hit]})`);
+    }
+  }
+  return { earned, possible, reasons };
+}
+
+/**
+ * A Google score with the Instagram part added (the screen does this when Business Discovery
+ * answers, after the search). Without a business account's numbers the score is unchanged.
+ */
+export function withInstagram(
+  google: IcpScore,
+  weights: IcpWeights,
+  instagram: InstagramIcpMetrics | null,
+): IcpScore {
+  if (!instagram) return google;
+  const hits = instagramHits(instagram);
+  const total = tally(hits, weights, google);
   return {
-    score: counted.reduce((sum, k) => sum + weights[k], 0),
-    reasons: counted.map((k) => `${ICP_WEIGHT_LABELS[k]} (+${weights[k]})`),
+    score: scoreOf(total.earned, total.possible),
+    ...total,
+    noData: INSTAGRAM_BANDS.filter((band) => !hits.has(band)).flatMap((band) =>
+      band.filter((k) => weights[k] > 0).map((k) => ICP_WEIGHT_LABELS[k]),
+    ),
   };
 }
 
@@ -481,7 +640,9 @@ export function siteDomain(url: string | null | undefined): string | null {
 }
 
 export interface ProspectSearchItem extends PlaceResult {
-  icp: { score: number; reasons: string[] };
+  icp: IcpScore;
+  /** The company's Instagram when known (its site, or Google's site field), for the discovery. */
+  instagram: ProspectInstagramRef | null;
   /** Fields Google did not give: an incomplete record, flagged, never filled in. */
   missing: ProspectMissingField[];
   tags: ProspectTag[];

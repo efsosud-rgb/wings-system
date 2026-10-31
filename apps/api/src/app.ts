@@ -119,6 +119,8 @@ declare module 'fastify' {
       youtubeFetch?: typeof fetch;
       /** Set only by tests, so no test ever reaches Google Places. */
       placesFetch?: typeof fetch;
+      /** Set only by tests, so no test ever reaches Instagram's Business Discovery (Prospecção). */
+      instagramDiscoveryFetch?: typeof fetch;
       /** Set only by tests, so no test ever reads a company's site (Prospecção). */
       siteTransport?: PageTransport;
       storage?: ObjectStorage;
@@ -164,6 +166,8 @@ export async function buildApp(deps: {
   youtubeFetch?: typeof fetch;
   /** Overridable so tests talk to a simulated Google Places. */
   placesFetch?: typeof fetch;
+  /** Overridable so tests play Instagram's Business Discovery themselves. */
+  instagramDiscoveryFetch?: typeof fetch;
   /** Overridable so tests serve the companies' sites themselves. */
   siteTransport?: PageTransport;
   storage?: ObjectStorage;
@@ -268,6 +272,7 @@ export async function buildApp(deps: {
     googleFetch: deps.googleFetch,
     youtubeFetch: deps.youtubeFetch,
     placesFetch: deps.placesFetch,
+    instagramDiscoveryFetch: deps.instagramDiscoveryFetch,
     siteTransport: deps.siteTransport,
     storage: deps.storage,
     now: deps.now,

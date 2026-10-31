@@ -8,34 +8,37 @@ import {
   prospectApproachSchema,
   prospectBatchSchema,
   prospectClaimSchema,
+  prospectingIcpSchema,
   prospectingRetentionSchema,
   prospectLeadSchema,
   reservationExpiresAt,
   prospectSearchSchema,
   siteDomain,
   whatsappOptInMissing,
+  withInstagram,
 } from './prospecting.js';
 
 describe('icpScore', () => {
-  it('adds the weights the brief lists, the highest band only', () => {
-    expect(
-      icpScore({
-        rating: 4.6,
-        reviews: 812,
-        hasWebsite: true,
-        hasInstagram: true,
-        multiUnit: true,
-      }).score,
-    ).toBe(2 + 3 + 1 + 1 + 2);
-    expect(
-      icpScore({
-        rating: 4.2,
-        reviews: 200,
-        hasWebsite: false,
-        hasInstagram: false,
-        multiUnit: false,
-      }).score,
-    ).toBe(1 + 2);
+  it('adds the weights the brief lists, the highest band only, over the 9 points possible', () => {
+    const top = icpScore({
+      rating: 4.6,
+      reviews: 812,
+      hasWebsite: true,
+      hasInstagram: true,
+      multiUnit: true,
+    });
+    expect(top.earned).toBe(2 + 3 + 1 + 1 + 2);
+    expect(top.possible).toBe(9);
+    expect(top.score).toBe(100);
+    const mid = icpScore({
+      rating: 4.2,
+      reviews: 200,
+      hasWebsite: false,
+      hasInstagram: false,
+      multiUnit: false,
+    });
+    expect(mid.earned).toBe(1 + 2);
+    expect(mid.score).toBe(Math.round((100 * 3) / 9));
     expect(
       icpScore({
         rating: 4.1,
@@ -44,7 +47,7 @@ describe('icpScore', () => {
         hasInstagram: false,
         multiUnit: false,
       }),
-    ).toEqual({ score: 0, reasons: [] });
+    ).toEqual({ score: 0, earned: 0, possible: 9, reasons: [], noData: [] });
   });
 
   it('uses edited weights and drops a zero weight from the reasons', () => {
@@ -52,7 +55,135 @@ describe('icpScore', () => {
       { rating: null, reviews: 60, hasWebsite: true, hasInstagram: false, multiUnit: false },
       { ...DEFAULT_ICP_WEIGHTS, website: 0, reviews50: 4 },
     );
-    expect(result).toEqual({ score: 4, reasons: ['Avaliações ≥ 50 (+4)'] });
+    // Possible: rating 2 + reviews max(3, 2, 4) + website 0 + instagram 1 + units 2 = 9.
+    expect(result).toEqual({
+      score: Math.round((100 * 4) / 9),
+      earned: 4,
+      possible: 9,
+      reasons: ['Avaliações ≥ 50 (+4)'],
+      noData: [],
+    });
+  });
+
+  it('is 0 and not NaN when every weight is zero', () => {
+    const zero = Object.fromEntries(Object.keys(DEFAULT_ICP_WEIGHTS).map((k) => [k, 0]));
+    expect(
+      icpScore(
+        { rating: 5, reviews: 900, hasWebsite: true, hasInstagram: true, multiUnit: true },
+        zero as typeof DEFAULT_ICP_WEIGHTS,
+      ).score,
+    ).toBe(0);
+  });
+});
+
+describe('icpScore with Instagram (§6.3)', () => {
+  const google = {
+    rating: 4.6,
+    reviews: 812,
+    hasWebsite: true,
+    hasInstagram: true,
+    multiUnit: true,
+  };
+  const full = {
+    followers: 12_000,
+    posts: 340,
+    postsLast30d: 6,
+    avgLikesMilli: 150_000,
+    avgCommentsMilli: 8_000,
+  };
+
+  it('a business account with every number: Google 9 + Instagram 8 possible', () => {
+    const result = icpScore(google, DEFAULT_ICP_WEIGHTS, full);
+    // 158 per post over 12,000 followers is 1.3%: engagement counts.
+    expect(result.possible).toBe(9 + 2 + 2 + 1 + 2 + 1);
+    expect(result.earned).toBe(9 + 8);
+    expect(result.score).toBe(100);
+    expect(result.reasons).toContain('Instagram: seguidores ≥ 10.000 (+2)');
+    expect(result.noData).toEqual([]);
+  });
+
+  it('counts a criterion that holds and misses one that does not', () => {
+    const result = icpScore(
+      { rating: null, reviews: null, hasWebsite: false, hasInstagram: false, multiUnit: false },
+      DEFAULT_ICP_WEIGHTS,
+      {
+        followers: 1_500,
+        posts: 40,
+        postsLast30d: 2,
+        avgLikesMilli: 5_000,
+        avgCommentsMilli: 1_000,
+      },
+    );
+    // Only 1k followers (+1); 6 per post over 1,500 is 0.4%: no engagement.
+    expect(result.earned).toBe(1);
+    expect(result.possible).toBe(9 + 8);
+    expect(result.score).toBe(Math.round(100 / 17));
+  });
+
+  it('hidden likes take out only the engagement criterion, on both sides', () => {
+    const result = icpScore(google, DEFAULT_ICP_WEIGHTS, { ...full, avgLikesMilli: null });
+    expect(result.possible).toBe(9 + 8 - 2);
+    expect(result.earned).toBe(9 + 8 - 2);
+    expect(result.noData).toEqual(['Instagram: engajamento ≥ 1%']);
+  });
+
+  it('no timestamp takes out the frequency; no followers the followers and the engagement', () => {
+    const noTime = icpScore(google, DEFAULT_ICP_WEIGHTS, { ...full, postsLast30d: null });
+    expect(noTime.possible).toBe(17 - 2);
+    expect(noTime.noData).toEqual(['Instagram: 4 ou mais posts em 30 dias']);
+    const noFollowers = icpScore(google, DEFAULT_ICP_WEIGHTS, { ...full, followers: null });
+    expect(noFollowers.possible).toBe(17 - 2 - 2);
+    expect(noFollowers.noData).toEqual([
+      'Instagram: seguidores ≥ 10.000',
+      'Instagram: seguidores ≥ 1.000',
+      'Instagram: engajamento ≥ 1%',
+    ]);
+  });
+
+  it('a missing criterion never reads as zero: the same company scores higher than a zero', () => {
+    const missing = icpScore(google, DEFAULT_ICP_WEIGHTS, { ...full, avgCommentsMilli: null });
+    const zero = icpScore(google, DEFAULT_ICP_WEIGHTS, { ...full, avgCommentsMilli: 0 });
+    expect(missing.score).toBeGreaterThan(zero.score);
+  });
+
+  it("the screen adds Instagram to the search's score and gets the same answer", () => {
+    const later = withInstagram(icpScore(google), DEFAULT_ICP_WEIGHTS, {
+      ...full,
+      followers: 2_000,
+    });
+    expect(later).toEqual(icpScore(google, DEFAULT_ICP_WEIGHTS, { ...full, followers: 2_000 }));
+    expect(withInstagram(icpScore(google), DEFAULT_ICP_WEIGHTS, null)).toEqual(icpScore(google));
+  });
+
+  it('without a business account the score is Google alone, still 0 to 100', () => {
+    expect(icpScore(google, DEFAULT_ICP_WEIGHTS, null)).toEqual(icpScore(google));
+    expect(icpScore(google).score).toBe(100);
+  });
+});
+
+describe('prospectingIcpSchema', () => {
+  it('reads a row saved before the Instagram weights with their defaults, keeping the list', () => {
+    const old = {
+      weights: {
+        rating45: 2,
+        rating42: 1,
+        reviews500: 3,
+        reviews200: 2,
+        reviews50: 1,
+        website: 1,
+        instagram: 1,
+        multiUnit: 2,
+      },
+      excludedNames: ['Rede Exemplo Burger'],
+    };
+    const parsed = prospectingIcpSchema.parse(old);
+    expect(parsed.excludedNames).toEqual(['Rede Exemplo Burger']);
+    expect(parsed.weights.igFollowers10k).toBe(2);
+    expect(parsed.weights.igComments5).toBe(1);
+    expect(
+      prospectingIcpSchema.safeParse({ ...old, weights: { ...old.weights, igPosts100: 11 } })
+        .success,
+    ).toBe(false);
   });
 });
 
