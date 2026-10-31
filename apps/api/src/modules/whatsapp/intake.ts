@@ -40,7 +40,7 @@ import { distribute } from './attendance.js';
 import { notifyCallsChanged } from './call-signal.js';
 import { callingOn } from './calling.js';
 import { callPermissionPayload, type WhatsAppConfig } from './graph.js';
-import { callRequestRefusal } from './call-request-limit.js';
+import { CallRequestLimited, callRequestRefusal } from './call-request-limit.js';
 import { officialNumberLive } from './official-number.js';
 import { deliverWhatsApp, type Contact } from './outbox.js';
 import { contactBlock, noteContactBlocked, recordContactOptOut } from '../leads/contact-block.js';
@@ -685,8 +685,12 @@ async function answerCallRequest(
     content: { callPermissionRequest: true },
     payload: callPermissionPayload(shown),
     at,
+  }).catch((error: unknown) => {
+    // A seller's request got in at the same moment: Meta's limit stops this one, nothing goes.
+    if (error instanceof CallRequestLimited) return null;
+    throw error;
   });
-  if (delivered.outcome === 'sent')
+  if (delivered?.outcome === 'sent')
     await db
       .update(waContacts)
       .set({ callPermission: 'requested', callPermissionRequestedAt: at })

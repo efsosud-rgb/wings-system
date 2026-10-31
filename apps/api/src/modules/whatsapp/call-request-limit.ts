@@ -1,6 +1,6 @@
 import { and, eq, isNull, ne, or, sql } from 'drizzle-orm';
-import type { Database } from '../../db/client.js';
 import { waMessages } from '../../db/schema/index.js';
+import type { Executor } from '../leads/crm.js';
 
 export const CALL_REQUEST_DAILY =
   'A Meta só deixa pedir a permissão para ligar 1 vez por dia a cada pessoa: já foi pedido nas últimas 24 h.';
@@ -15,7 +15,7 @@ export const CALL_REQUEST_WEEKLY =
  * where Meta would allow — upgrade if sellers hit it after talking to the person.
  */
 export async function callRequestRefusal(
-  db: Database,
+  db: Executor,
   contactId: string | null,
 ): Promise<string | null> {
   if (!contactId) return null;
@@ -37,4 +37,22 @@ export async function callRequestRefusal(
   if ((counted?.day ?? 0) >= 1) return CALL_REQUEST_DAILY;
   if ((counted?.week ?? 0) >= 2) return CALL_REQUEST_WEEKLY;
   return null;
+}
+
+/** A request refused at the last moment, under the lock: another one of this person got there first. */
+export class CallRequestLimited extends Error {
+  constructor(readonly why: string) {
+    super('call_request_limit');
+  }
+}
+
+/**
+ * The count again inside the transaction that writes the request, under one lock per person: two
+ * clicks at once (or a click and the automatic "Prefiro uma ligação") cannot both pass the limit.
+ * Throws `CallRequestLimited`; the caller's early `callRequestRefusal` answers the usual case.
+ */
+export async function lockCallRequests(tx: Executor, contactId: string): Promise<void> {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`wa_call_request:${contactId}`}))`);
+  const why = await callRequestRefusal(tx, contactId);
+  if (why) throw new CallRequestLimited(why);
 }

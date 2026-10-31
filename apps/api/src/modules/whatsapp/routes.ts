@@ -130,7 +130,7 @@ import { factListOf } from '../sofia/state.js';
 import { adoptUnmatched, conversationFor, openConversation } from './intake.js';
 import { syncNumberTemplates, syncTemplates } from './templates.js';
 import { inboxSummaryOf } from './inbox.js';
-import { callRequestRefusal } from './call-request-limit.js';
+import { CallRequestLimited, callRequestRefusal } from './call-request-limit.js';
 import { notifyInboxChanged } from './inbox-signal.js';
 import {
   payloadOf,
@@ -1261,6 +1261,7 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     // The conversation becomes the writer's (and Sofia stops) before the message goes.
     const held = await holdForSend(db, conversation.id, actor.employeeId, at);
     if (!held.ok) return notHolder(reply, held.holderName);
+    // Another request of this person got in between the check above and here: the lock refuses it.
     const delivered = await deliverWhatsApp(db, fetchImpl(), config, {
       numberId,
       contact,
@@ -1284,7 +1285,11 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       content,
       payload,
       at,
+    }).catch((error: unknown) => {
+      if (error instanceof CallRequestLimited) return error;
+      throw error;
     });
+    if (delivered instanceof CallRequestLimited) return callLimitReply(reply, delivered.why);
     const saved = delivered.row;
     const outcome = delivered.outcome;
     // Meta said the file behind the id is gone: the next send uploads it again (this one stays failed).

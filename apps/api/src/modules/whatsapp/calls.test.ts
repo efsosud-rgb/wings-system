@@ -776,6 +776,35 @@ describe('"Prefiro uma ligação" on a template (Eric, 26/10)', () => {
     expect(posts.filter((p) => p.type === 'interactive')).toHaveLength(1);
   });
 
+  it('sends no third automatic request in the week, even a day apart', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    await deal('5521977200020', owner.id);
+    // Each request moved back two days: past Meta's 1 a day, inside its 2 a week.
+    const twoDaysBack = async () => {
+      const [contact] = await db
+        .select()
+        .from(waContacts)
+        .where(eq(waContacts.phone, '5521977200020'));
+      await db
+        .update(waMessages)
+        .set({ createdAt: sql`now() - interval '2 days'` })
+        .where(eq(waMessages.contactId, contact!.id));
+      await db
+        .update(waContacts)
+        .set({ callPermissionRequestedAt: sql`now() - interval '2 days'` })
+        .where(eq(waContacts.id, contact!.id));
+    };
+    const requests = () => posts.filter((p) => p.type === 'interactive').length;
+    await tap('5521977200020', 'wamid.CALLME20');
+    expect(requests()).toBe(1);
+    await twoDaysBack();
+    await tap('5521977200020', 'wamid.CALLME21');
+    expect(requests()).toBe(2);
+    await twoDaysBack();
+    await tap('5521977200020', 'wamid.CALLME22');
+    expect(requests()).toBe(2);
+  });
+
   it('a "não me contate" keeps the task for the owner and sends no request', async () => {
     const owner = await sessionFor('vendedor_formatacao');
     const leadId = await deal('5521977200010', owner.id);
@@ -994,6 +1023,62 @@ describe('asking for the call permission by template, outside the 24 h (d-t033)'
     // The refusal ends the request: nothing reaches Meta after the answer either.
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(posts).toHaveLength(sent);
+  });
+
+  /** The person writes: the 24-hour window opens, where the free request goes. */
+  const personWrites = (phone: string, id: string) =>
+    deliver(
+      {
+        contacts: [{ profile: { name: 'Elena' }, wa_id: phone }],
+        messages: [
+          { from: phone, id, timestamp: unix(new Date()), type: 'text', text: { body: 'Oi' } },
+        ],
+      },
+      'messages',
+    );
+
+  it('a request Meta refused does not count for the limit', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977300006', owner.id);
+    await personWrites('5521977300006', 'wamid.T033F');
+    expect((await ask(owner.cookies, leadId, {})).statusCode).toBe(201);
+    // Meta's "failed" status for it, as its webhook leaves it.
+    const [contact] = await db
+      .select()
+      .from(waContacts)
+      .where(eq(waContacts.phone, '5521977300006'));
+    await db
+      .update(waMessages)
+      .set({ status: 'failed' })
+      .where(and(eq(waMessages.contactId, contact!.id), eq(waMessages.direction, 'out')));
+    const again = await ask(owner.cookies, leadId, {});
+    expect(again.statusCode).toBe(201);
+    expect(posts.filter((p) => p.type === 'interactive')).toHaveLength(2);
+  });
+
+  it('two clicks at the same moment: one request goes, the other is refused', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977300007', owner.id);
+    await personWrites('5521977300007', 'wamid.T033D');
+    const both = await Promise.all([
+      ask(owner.cookies, leadId, {}),
+      ask(owner.cookies, leadId, {}),
+    ]);
+    expect(both.map((r) => r.statusCode).sort()).toEqual([201, 429]);
+    expect(both.find((r) => r.statusCode === 429)!.json()).toMatchObject({
+      error: 'call_request_limit',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(posts.filter((p) => p.type === 'interactive')).toHaveLength(1);
+    const [contact] = await db
+      .select()
+      .from(waContacts)
+      .where(eq(waContacts.phone, '5521977300007'));
+    const written = await db
+      .select()
+      .from(waMessages)
+      .where(and(eq(waMessages.contactId, contact!.id), eq(waMessages.direction, 'out')));
+    expect(written).toHaveLength(1);
   });
 
   it('a brand’s lead gets the Expansão template, not yet approved here: refused, nothing sent', async () => {
