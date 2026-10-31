@@ -8,7 +8,7 @@ CRM Vendas → Prospecção → aba **Instagram** (quem tem `prospecting.instagr
 
 1. **Colar comentários:** o link do post (obrigatório), o @ do dono (opcional) e o texto copiado à mão do Instagram. "Ler comentários" mostra a prévia: comentários reconhecidos, linhas ignoradas (por tipo), as 20 primeiras não reconhecidas e quem já é conhecido ("não contatar", cliente, lead, na lista de alguém). Nada é gravado nem vai para a IA nessa hora.
 2. **"Separar quem quer comprar (N comentários)":** grava a colagem (só contagens e o link) e, por comentário aproveitável, o trecho mascarado e o prospect, em **Quer comprar**, **Revisar** ou **Outros**.
-3. **Minhas listas:** em cada prospect, "Abrir no Instagram", "Copiar mensagem", "Abordei", "Criar lead", "Não contatar", "Descartar", "Mover para Quer comprar" e, para a gerência, "Transferir". Nada sai do sistema: a vendedora escreve pelo Direct da Wings.
+3. **Minhas listas:** em cada prospect, "Abrir no Instagram", "Copiar mensagem", "Abordei", "Criar lead", "Não contatar", "Descartar", "Mover para Quer comprar" e, para a gerência, "Transferir". Nada sai do sistema: a vendedora escreve pelo Direct da Wings. O "não me contate" do @ (canal Instagram ou todos) é conferido de novo na hora de "Copiar mensagem", "Abordei", "Mover para Quer comprar" e "Transferir": se existir, a ação responde 409 e os prospects abertos do @ fecham como "Não contatar". Um prospect fechado assim não volta para "Quer comprar", nem pela gerência.
 
 ## Onde está
 
