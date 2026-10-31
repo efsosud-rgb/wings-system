@@ -2,6 +2,8 @@
 
 Versão de 29/10/2026. Pedido e aprovação: Eric, 29/10/2026 às 16:35 ("Tudo aprovado"). Base de código: develop no commit `3a9a6f0f`; toda referência `arquivo:linha` é desse commit. Abreviações: `api` = `apps/api/src`, `web` = `apps/web/src`, `shared` = `packages/shared/src`, `worker` = `apps/worker/src`.
 
+**Estado (31/10/2026):** a Fase A (parte 2) foi construída e está desligada; o que existe e o que ficou diferente estão em [instagram-fase-a.md](instagram-fase-a.md). As Fases B e C seguem só especificação.
+
 **Só documentação.** As seções 7 (Meta) e 8 (LGPD) estão em [instagram-meta-lgpd.md](instagram-meta-lgpd.md). Nada aqui foi construído, ligado ou configurado: nenhum código, banco, app da Meta, staging ou produção mudou. Tudo o que toca a Meta é feito pelo Eric, na hora (§7).
 
 **De onde parte.** Esta especificação se apoia na especificação do Wings Prospect AI do PR #54 (branch `docs/prospect-ai-especificacao`, commit `4a21a456`, ainda aberto e em correção pela tarefa t023), chamada aqui de **"spec PA"**, e no código da Prospecção Google já mesclado (`docs/crm/prospeccao.md`, PR #55). Ela reaproveita as tabelas, o classificador, a trava de contato e o conector do Instagram da spec PA e só acrescenta o que as três partes pedem. Se a spec PA mudar na correção, vale a versão mesclada dela, e esta é ajustada no mesmo PR que construir a fase.

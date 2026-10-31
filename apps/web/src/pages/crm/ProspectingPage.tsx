@@ -63,6 +63,7 @@ import {
   ratingText,
   webUrl,
 } from './GooglePlacePanel.js';
+import { InstagramTab } from './InstagramProspecting.js';
 import { ApproachPanel } from './ProspectApproachPanel.js';
 import { HistoryTab, MetricsTab } from './ProspectingHistory.js';
 
@@ -178,6 +179,7 @@ const TABS = [
   { key: 'prospects', label: 'Meus prospects' },
   { key: 'history', label: 'Histórico' },
   { key: 'metrics', label: 'Números' },
+  { key: 'instagram', label: 'Instagram' },
   { key: 'settings', label: 'Ajustes' },
 ] as const;
 type TabKey = (typeof TABS)[number]['key'];
@@ -192,7 +194,12 @@ export function ProspectingPage() {
   const usage = useProspectingUsage();
   const [tab, setTab] = useState<TabKey>('search');
   const [form, setForm] = useState<SearchForm>(EMPTY_FORM);
-  const tabs = TABS.filter((item) => item.key !== 'settings' || canConfigure || canQuota);
+  const canInstagram = hasPermission(user, 'prospecting.instagram_paste');
+  const tabs = TABS.filter(
+    (item) =>
+      (item.key !== 'settings' || canConfigure || canQuota) &&
+      (item.key !== 'instagram' || canInstagram),
+  );
   const counts = usageOrDash(usage.data);
 
   return (
@@ -260,6 +267,13 @@ export function ProspectingPage() {
               />
             )}
             {tab === 'metrics' && <MetricsTab />}
+            {tab === 'instagram' && (
+              <InstagramTab
+                canPaste={hasPermission(user, 'leads.write')}
+                canManage={permissionScope(user, 'prospecting.instagram_paste') === 'all'}
+                canConfigure={hasPermission(user, 'prospect_ai.configure')}
+              />
+            )}
             {tab === 'settings' && <SettingsTab canConfigure={canConfigure} canQuota={canQuota} />}
           </div>
         </>

@@ -28,3 +28,4 @@ export * from './whatsapp.js';
 export * from './sofia.js';
 export * from './google-workspace.js';
 export * from './youtube.js';
+export * from './prospect-ai.js';

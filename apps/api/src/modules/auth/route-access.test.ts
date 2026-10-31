@@ -148,6 +148,8 @@ const PROBES = {
   agenda: '/agenda',
   // Prospecção: the Formatação seller and the managers (prospecting.use).
   prospecting: '/prospecting/usage',
+  // Prospecção Instagram, parte 2 (prospecting.instagram_paste): the same levels.
+  instagramProspecting: '/prospect-ai/instagram/status',
 } as const;
 type Probe = keyof typeof PROBES;
 
@@ -162,7 +164,7 @@ const LEVELS: { role: RoleKey; sector: SectorSlug; opens: Probe[] }[] = [
   {
     role: 'vendedor_formatacao',
     sector: 'comercial',
-    opens: ['leads', 'campaignLeads', 'projects', 'agenda', 'prospecting'],
+    opens: ['leads', 'campaignLeads', 'projects', 'agenda', 'prospecting', 'instagramProspecting'],
   },
   {
     role: 'gerente_comercial',
@@ -180,6 +182,7 @@ const LEVELS: { role: RoleKey; sector: SectorSlug; opens: Probe[] }[] = [
       'crmSettings',
       'agenda',
       'prospecting',
+      'instagramProspecting',
     ],
   },
   {
@@ -198,6 +201,7 @@ const LEVELS: { role: RoleKey; sector: SectorSlug; opens: Probe[] }[] = [
       'drive',
       'agenda',
       'prospecting',
+      'instagramProspecting',
     ],
   },
   { role: 'marketing', sector: 'marketing', opens: ['ads', 'projects', 'drive', 'agenda'] },

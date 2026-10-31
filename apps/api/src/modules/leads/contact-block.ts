@@ -299,12 +299,19 @@ export async function noteContactBlocked(
 }
 
 /**
- * For a list of search results at once: the oldest active "não me contate" reaching each place_id
- * or phone (the register and the WhatsApp SAIR), keyed `place_id:<id>` and `phone:<canonical>`.
+ * For a list of search results at once: the oldest active "não me contate" reaching each place_id,
+ * phone or Instagram @ (the register and the WhatsApp SAIR), keyed `place_id:<id>`,
+ * `phone:<canonical>` and `instagram_user:<@>`. With `channels`, only the entries that block one
+ * of them (or `all`) count, so another channel's older entry never hides the one asked.
  */
 export async function optOutsAmong(
   db: Executor,
-  given: { placeIds: string[]; phones: string[] },
+  given: {
+    placeIds: string[];
+    phones: string[];
+    instagramUsers?: string[];
+    channels?: ContactChannel[];
+  },
   tenantId = WINGS_TENANT_ID,
 ): Promise<Map<string, ContactOptOutEntry>> {
   const phones = [
@@ -314,7 +321,9 @@ export async function optOutsAmong(
     lead: [],
     phone: phones,
     email: [],
-    instagram_user: [],
+    instagram_user: (given.instagramUsers ?? [])
+      .map((u) => normalizeContactKey('instagram_user', u))
+      .filter((u) => u !== null),
     place_id: given.placeIds,
     cnpj: [],
   };
@@ -360,7 +369,12 @@ export async function optOutsAmong(
         since: row.since!.toISOString(),
       },
     })),
-  ].sort((a, b) => a.entry.since.localeCompare(b.entry.since));
+  ]
+    .filter(
+      ({ entry }) =>
+        !given.channels || entry.channel === 'all' || given.channels.includes(entry.channel),
+    )
+    .sort((a, b) => a.entry.since.localeCompare(b.entry.since));
   for (const { key, entry } of all) if (!found.has(key)) found.set(key, entry);
   return found;
 }

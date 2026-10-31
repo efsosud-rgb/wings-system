@@ -14,6 +14,7 @@ import { onLeadArrivedKick } from './modules/leads/crm-alerts.js';
 import { createCrmMailTransport } from './modules/leads/crm-mail.js';
 import { sendPendingNoticeMails } from './modules/leads/crm-notice-mail.js';
 import { startMetaLeadgenIntake } from './modules/leads/meta-intake.js';
+import { startInstagramHousekeeping } from './modules/prospect-ai/housekeeping.js';
 import { startProspectingRetentionScheduler } from './modules/prospecting/retention.js';
 import { startSofia } from './modules/sofia/engine.js';
 import { whatsappConfigOf } from './modules/whatsapp/graph.js';
@@ -228,6 +229,13 @@ async function main() {
       db,
       log: (facts) => app.log.info(facts),
     });
+    app.addHook('onClose', async () => stop());
+  }
+
+  // Prospecção Instagram (docs/prospeccao/instagram-meta-lgpd.md §8.4): a prospect that did not
+  // become a lead in 30 days is deleted with its comments, every hour. Runs even with the paste off.
+  {
+    const stop = startInstagramHousekeeping({ db, log: (facts) => app.log.info(facts) });
     app.addHook('onClose', async () => stop());
   }
 

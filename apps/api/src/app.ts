@@ -42,6 +42,7 @@ import { contactOptOutRoutes } from './modules/leads/contact-opt-out-routes.js';
 import { leadEmailRoutes } from './modules/leads/lead-email-routes.js';
 import { leadFilesRoutes } from './modules/leads/lead-files-routes.js';
 import { nucleoRoutes } from './modules/leads/nucleo-routes.js';
+import { instagramProspectingRoutes } from './modules/prospect-ai/instagram-routes.js';
 import { prospectingRoutes } from './modules/prospecting/routes.js';
 import { leadRoutes } from './modules/leads/routes.js';
 import { siteEventRoutes } from './modules/leads/site-events.js';
@@ -354,6 +355,7 @@ export async function buildApp(deps: {
   await app.register(contactOptOutRoutes);
   await app.register(nucleoRoutes);
   await app.register(prospectingRoutes);
+  await app.register(instagramProspectingRoutes);
   await app.register(leadFilesRoutes);
   await app.register(rdUserRoutes);
   await app.register(landingPageRoutes);

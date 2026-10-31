@@ -732,6 +732,43 @@ export async function convertProspect(
   }
 }
 
+export interface ProspectConsent {
+  legalBasis: 'consent' | 'legitimate_interest';
+  consentedAt: Date | null;
+  consentSource: 'prospeccao';
+  consentText: string;
+}
+
+/**
+ * Merged into an existing deal: today's answer replaces a prospecting one (so a "não" reaches
+ * the WhatsApp gate). A consent from another source survives a "sim" but not a "não": the
+ * latest explicit refusal wins (Eric, 28/10). Either way it goes on the timeline.
+ */
+export async function mergeProspectConsent(
+  db: Database,
+  actor: Actor,
+  lead: {
+    id: string;
+    legalBasis: string | null;
+    consentSource: string | null;
+    consentedAt: Date | null;
+  },
+  consent: ProspectConsent,
+  optIn: boolean,
+) {
+  const { legalBasis, consentSource, consentedAt } = lead;
+  const otherConsent = legalBasis === 'consent' && consentSource !== 'prospeccao';
+  if (!(otherConsent && optIn)) await db.update(leads).set(consent).where(eq(leads.id, lead.id));
+  if (otherConsent)
+    await addNote(db, {
+      leadId: lead.id,
+      body: optIn
+        ? `Prospecção: ${consent.consentText} Mantido o consentimento anterior, de outra origem.`
+        : `Prospecção: ${consent.consentText} Substituído o consentimento anterior (origem ${consentSource ?? 'não registrada'}${consentedAt ? `, de ${dayOf(consentedAt)}` : ''}) pela recusa explícita de hoje.`,
+      authorEmployeeId: actor.employeeId,
+    });
+}
+
 async function leadOfProspect(
   db: Database,
   actor: Actor,
@@ -741,12 +778,12 @@ async function leadOfProspect(
   now: Date,
 ): Promise<{ ok: true; leadId: string; created: boolean }> {
   const optIn = input.whatsappOptIn;
-  const consent = {
+  const consent: ProspectConsent = {
     legalBasis: optIn ? 'consent' : 'legitimate_interest',
     consentedAt: optIn ? now : null,
     consentSource: 'prospeccao',
     consentText: `${optIn ? 'Aceitou' : 'Não aceitou'} receber WhatsApp no primeiro contato (${dayOf(now)}). Empresa encontrada no Google Maps em ${dayOf(row.createdAt)}.`,
-  } as const;
+  };
   const result = await upsertLead(db, {
     source: 'google_places',
     externalId: row.placeId,
@@ -771,22 +808,7 @@ async function leadOfProspect(
     },
   });
   const leadId = result.lead.id;
-  // Merged into an existing deal: today's answer replaces a prospecting one (so a "não" reaches
-  // the WhatsApp gate). A consent from another source survives a "sim" but not a "não": the
-  // latest explicit refusal wins (Eric, 28/10). Either way it goes on the timeline.
-  if (!result.created) {
-    const { legalBasis, consentSource, consentedAt } = result.lead;
-    const otherConsent = legalBasis === 'consent' && consentSource !== 'prospeccao';
-    if (!(otherConsent && optIn)) await db.update(leads).set(consent).where(eq(leads.id, leadId));
-    if (otherConsent)
-      await addNote(db, {
-        leadId,
-        body: optIn
-          ? `Prospecção: ${consent.consentText} Mantido o consentimento anterior, de outra origem.`
-          : `Prospecção: ${consent.consentText} Substituído o consentimento anterior (origem ${consentSource ?? 'não registrada'}${consentedAt ? `, de ${dayOf(consentedAt)}` : ''}) pela recusa explícita de hoje.`,
-        authorEmployeeId: actor.employeeId,
-      });
-  }
+  if (!result.created) await mergeProspectConsent(db, actor, result.lead, consent, optIn);
   if (result.created && stageId && result.lead.stageId !== stageId)
     await changeLead(db, {
       leadId,
