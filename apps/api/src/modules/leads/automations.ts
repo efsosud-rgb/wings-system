@@ -6,6 +6,7 @@ import {
   automationSequenceConfigSchema,
   automationTaskConfigSchema,
   renderTemplate,
+  type LeadEmailAttachment,
   type LeadPipeline,
   leadHidesWings,
 } from '@wings/shared';
@@ -26,6 +27,7 @@ import {
 } from '../../db/schema/index.js';
 import { contactBlock, noteContactBlocked } from './contact-block.js';
 import { changeLead, createTask, nextInRotation } from './crm.js';
+import type { MailAttachment } from '../google-workspace/gmail.js';
 import {
   testTransport,
   type CrmMailMode,
@@ -359,6 +361,17 @@ export async function renderForLead(
   };
 }
 
+type SendRefusal = 'no_email' | 'brand_hidden' | 'contact_blocked' | 'send_failed';
+export type SendOutcome =
+  | { ok: true; outboxId: string; mode: CrmMailMode }
+  | {
+      ok: false;
+      reason: SendRefusal | 'template_gone' | 'template_off';
+      outboxId?: string;
+      /** Why a "não me contate" stopped it, for the screen. */
+      message?: string;
+    };
+
 /**
  * One template to one lead, through the transport, with the outbox row and
  * the timeline event written either way (a failed send is recorded as such,
@@ -373,32 +386,48 @@ export async function sendTemplateToLead(
     runId: string | null;
     sentBy: string | null;
   },
-): Promise<
-  | { ok: true; outboxId: string; mode: CrmMailMode }
-  | {
-      ok: false;
-      reason:
-        | 'template_gone'
-        | 'template_off'
-        | 'no_email'
-        | 'brand_hidden'
-        | 'contact_blocked'
-        | 'send_failed';
-      outboxId?: string;
-      /** Why a "não me contate" stopped it, for the screen. */
-      message?: string;
-    }
-> {
-  const { lead } = input;
+): Promise<SendOutcome> {
   const template = await db.query.crmEmailTemplates.findFirst({
     where: eq(crmEmailTemplates.id, input.templateId),
   });
   if (!template) return { ok: false, reason: 'template_gone' };
   if (!template.active) return { ok: false, reason: 'template_off' };
+  return sendToLead(db, {
+    ...input,
+    to: input.lead.email,
+    message: () => renderForLead(db, input.lead, template),
+    attachments: [],
+  });
+}
+
+/**
+ * Any e-mail to a deal (a template, or the person's own text): the brand rule
+ * and the "não me contate" first, then one send, the outbox row and the
+ * timeline event (with the subject and the attachments' names and sizes, for
+ * the deal's history). The attachments' bytes are read only when a message
+ * really leaves; in test mode only their names are recorded.
+ */
+export async function sendToLead(
+  db: Database,
+  input: {
+    lead: LeadRow;
+    to: string | null;
+    templateId: string | null;
+    message: () => Promise<{ subject: string; body: string }>;
+    attachments: LeadEmailAttachment[];
+    files?: () => Promise<MailAttachment[]>;
+    transport: CrmMailTransport;
+    runId: string | null;
+    sentBy: string | null;
+    /** An answer to a lead's e-mail: its Gmail thread (in the sender's own mailbox) and its Message-ID. */
+    reply?: { threadId: string | null; inReplyTo: string | null };
+  },
+): Promise<SendOutcome> {
+  const { lead, to } = input;
   // Expansão with a brand: no e-mail from a Wings address reaches the lead (the brand rule).
   if (leadHidesWings(lead)) return { ok: false, reason: 'brand_hidden' };
-  if (!lead.email) return { ok: false, reason: 'no_email' };
-  const block = await contactBlock(db, 'email', { leadId: lead.id });
+  if (!to) return { ok: false, reason: 'no_email' };
+  const block = await contactBlock(db, 'email', { leadId: lead.id, email: to });
   if (block.blocked) {
     await noteContactBlocked(
       db,
@@ -408,17 +437,22 @@ export async function sendTemplateToLead(
     );
     return { ok: false, reason: 'contact_blocked', message: block.reason ?? undefined };
   }
-  const { subject, body } = await renderForLead(db, lead, template);
+  const { subject, body } = await input.message();
   let status: 'recorded' | 'sent' | 'failed' =
     input.transport.mode === 'test' ? 'recorded' : 'sent';
   let sent: CrmMailSent | null = null;
   try {
+    const attachments =
+      input.transport.mode === 'test' || !input.files ? undefined : await input.files();
     // A person sends from their own Gmail; an automation sends from the lead's owner's.
     sent = await input.transport.send({
-      to: lead.email,
+      to,
       subject,
       text: body,
       senderEmployeeId: input.sentBy ?? lead.ownerEmployeeId,
+      attachments,
+      threadId: input.reply?.threadId ?? null,
+      inReplyTo: input.reply?.inReplyTo ?? null,
     });
   } catch {
     status = 'failed';
@@ -428,7 +462,7 @@ export async function sendTemplateToLead(
     .insert(crmEmailOutbox)
     .values({
       leadId: lead.id,
-      templateId: template.id,
+      templateId: input.templateId,
       runId: input.runId,
       subject,
       body,
@@ -439,14 +473,30 @@ export async function sendTemplateToLead(
       messageId: sent?.messageId ?? null,
       gmailMessageId: sent?.gmailMessageId ?? null,
       gmailThreadId: sent?.gmailThreadId ?? null,
+      toEmail: to,
+      attachments: input.attachments,
     })
     .returning({ id: crmEmailOutbox.id });
   if (!row) throw new Error('outbox_failed');
+  const sender = input.sentBy
+    ? await db.query.employees.findFirst({
+        where: eq(employees.id, input.sentBy),
+        columns: { fullName: true },
+      })
+    : null;
   await db.insert(leadEvents).values({
     leadId: lead.id,
     kind: 'lead.email_sent',
     actorEmployeeId: input.sentBy,
-    detail: { outboxId: row.id, templateId: template.id, mode, status },
+    detail: {
+      outboxId: row.id,
+      templateId: input.templateId,
+      mode,
+      status,
+      subject,
+      by: sender?.fullName ?? null,
+      attachments: input.attachments.map(({ name, byteSize }) => ({ name, byteSize })),
+    },
   });
   return status === 'failed'
     ? { ok: false, reason: 'send_failed', outboxId: row.id }

@@ -64,6 +64,8 @@ export interface SignupEvent {
   phoneNumberId: string | null;
   /** CANCEL: the step where the person stopped, or Meta's error text. */
   detail: string | null;
+  /** ERROR: Meta's error code (docs: "Embedded Signup Flow Errors"), for the message and support. */
+  errorCode: string | null;
 }
 
 const digits = (value: unknown) =>
@@ -96,11 +98,13 @@ export function signupEventOf(origin: string, raw: unknown): SignupEvent | null 
     unknown
   >;
   const detail = body.current_step ?? body.error_message;
+  const errorCode = typeof body.error_code === 'number' ? String(body.error_code) : body.error_code;
   return {
     event: message.event,
     wabaId: digits(body.waba_id),
     phoneNumberId: digits(body.phone_number_id),
     detail: typeof detail === 'string' ? detail.slice(0, 200) : null,
+    errorCode: digits(errorCode),
   };
 }
 
@@ -111,8 +115,9 @@ export type SignupOutcome =
   | { ok: true; code: string; wabaId: string; phoneNumberId: string | null }
   | {
       ok: false;
-      reason: 'cancelled' | 'meta_error' | 'other_flow' | 'no_account' | 'no_code';
+      reason: 'cancelled' | 'denied' | 'meta_error' | 'other_flow' | 'no_account' | 'no_code';
       detail: string | null;
+      errorCode?: string | null;
     };
 
 /** How long to wait for the session event after the code arrived (the code lives 30 s). */
@@ -145,7 +150,7 @@ export function runEmbeddedSignup(fb: FacebookSdk, configId: string): Promise<Si
       if (!read) return;
       if (read.event === 'CANCEL') finish({ ok: false, reason: 'cancelled', detail: read.detail });
       else if (read.event === 'ERROR')
-        finish({ ok: false, reason: 'meta_error', detail: read.detail });
+        finish({ ok: false, reason: 'meta_error', detail: read.detail, errorCode: read.errorCode });
       else if (read.event.startsWith('FINISH')) {
         session = read;
         settle();
@@ -163,7 +168,8 @@ export function runEmbeddedSignup(fb: FacebookSdk, configId: string): Promise<Si
           );
         } else {
           // A cancel event may still be on its way; it wins if it comes.
-          setTimeout(() => finish({ ok: false, reason: 'no_code', detail: null }), 1_000);
+          const reason = response.status === 'not_authorized' ? 'denied' : 'no_code';
+          setTimeout(() => finish({ ok: false, reason, detail: null }), 1_000);
         }
       },
       {

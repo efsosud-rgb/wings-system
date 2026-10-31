@@ -1,6 +1,7 @@
 import type { WaFailedEvent, WaNumber, WaNumbersView } from '@wings/shared';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../../api/client.js';
 import { WhatsAppNumbersPage } from './WhatsAppNumbersPage.js';
 
 /**
@@ -210,16 +211,85 @@ describe('Números de WhatsApp', () => {
         numberId: 'n1',
       }),
     );
-    expect(await screen.findByText(/Contatos e histórico pedidos à Meta/)).toBeTruthy();
+    // "Número conectado" at the top, focused, with the next step; closing it hides it.
+    const notice = await screen.findByText('Número conectado: Comercial Teste');
+    const box = notice.closest('[role="status"]') as HTMLElement;
+    expect(box.textContent).toContain('Sincronização do histórico em andamento');
+    expect(box.className).toContain('crm-ok');
+    await waitFor(() => expect(document.activeElement).toBe(box));
+    fireEvent.click(within(box).getByRole('button', { name: 'Fechar' }));
+    expect(screen.queryByText('Número conectado: Comercial Teste')).toBeNull();
   });
 
-  it('a closed window says nothing was connected', async () => {
+  it('connected but the webhooks were refused: the notice says what to do next', async () => {
     view = { signup, missing: [], people, numbers: [registered()] };
-    runEmbeddedSignup.mockResolvedValue({ ok: false, reason: 'cancelled', detail: null });
+    runEmbeddedSignup.mockResolvedValue({ ok: true, code: 'c', wabaId: '31', phoneNumberId: null });
+    connect.mockResolvedValue({
+      number: number({ webhooksSubscribed: false }),
+      steps: { webhooks: 'failed', contacts: 'skipped', history: 'skipped' },
+    });
     render(<WhatsAppNumbersPage />);
     fireEvent.click(await screen.findByRole('button', { name: 'Conectar pela Meta' }));
-    expect(await screen.findByText(/Nada foi conectado/)).toBeTruthy();
+    const box = (await screen.findByText('Número conectado: Comercial Teste')).closest(
+      '[role="status"]',
+    ) as HTMLElement;
+    expect(box.className).toContain('crm-error');
+    expect(box.textContent).toContain('use "Tentar de novo"');
+  });
+
+  it.each([
+    [{ reason: 'cancelled' }, /fechada antes do fim/],
+    [{ reason: 'denied' }, /permissões pedidas pela Meta não foram aceitas/],
+    [{ reason: 'meta_error', errorCode: '4563015' }, /versão 2\.24\.17 ou maior/],
+    [{ reason: 'meta_error', errorCode: '3441041' }, /ligado a outro portfólio/],
+    [{ reason: 'meta_error', errorCode: '999' }, /o código ES-999/],
+  ])('Meta’s window failing (%o) says why, and nothing is sent', async (failure, text) => {
+    view = { signup, missing: [], people, numbers: [registered()] };
+    runEmbeddedSignup.mockResolvedValue({ ok: false, detail: null, ...failure });
+    render(<WhatsAppNumbersPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Conectar pela Meta' }));
+    expect((await screen.findByRole('status')).textContent).toMatch(text);
     expect(connect).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Número conectado:/)).toBeNull();
+  });
+
+  it.each([
+    [
+      new ApiError(502, { error: 'code_refused', message: 'A autorização da Meta venceu.' }),
+      /A autorização da Meta venceu\./,
+    ],
+    [new ApiError(500, { error: 'Internal Server Error', message: 'boom' }), /o código API-500/],
+    [new TypeError('Failed to fetch'), /Sem resposta do sistema/],
+  ])('the API failing (%s) says why, with no "Número conectado"', async (error, text) => {
+    view = { signup, missing: [], people, numbers: [registered()] };
+    runEmbeddedSignup.mockResolvedValue({ ok: true, code: 'c', wabaId: '31', phoneNumberId: null });
+    connect.mockRejectedValue(error);
+    render(<WhatsAppNumbersPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Conectar pela Meta' }));
+    expect((await screen.findByRole('status')).textContent).toMatch(text);
+    expect(screen.queryByText(/Número conectado:/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Conectar pela Meta' })).toBeTruthy();
+  });
+
+  it('a new try clears the last "Número conectado"', async () => {
+    view = { signup, missing: [], people, numbers: [registered()] };
+    runEmbeddedSignup.mockResolvedValueOnce({
+      ok: true,
+      code: 'c',
+      wabaId: '31',
+      phoneNumberId: null,
+    });
+    connect.mockResolvedValue({
+      number: number(),
+      steps: { webhooks: 'ok', contacts: 'requested', history: 'requested' },
+    });
+    render(<WhatsAppNumbersPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Conectar pela Meta' }));
+    expect(await screen.findByText('Número conectado: Comercial Teste')).toBeTruthy();
+    runEmbeddedSignup.mockResolvedValueOnce({ ok: false, reason: 'cancelled', detail: null });
+    fireEvent.click(await screen.findByRole('button', { name: 'Conectar pela Meta' }));
+    expect(await screen.findByText(/fechada antes do fim/)).toBeTruthy();
+    expect(screen.queryByText('Número conectado: Comercial Teste')).toBeNull();
   });
 
   it('"Editar" fills the form; the connected number itself cannot change', async () => {

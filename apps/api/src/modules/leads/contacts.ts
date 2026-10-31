@@ -931,9 +931,26 @@ export async function leadsOfContact(
   }));
 }
 
-export async function leadsOfCompany(
+export const leadsOfCompany = (db: Executor, companyId: string, ownerEmployeeId?: string) =>
+  relatedLeads(db, eq(leads.companyId, companyId), ownerEmployeeId);
+
+/** The deals of every CRM company linked to a client of the Formatação register. */
+export const leadsOfClient = (db: Executor, clientId: string, ownerEmployeeId?: string) =>
+  relatedLeads(
+    db,
+    inArray(
+      leads.companyId,
+      db
+        .select({ id: crmCompanies.id })
+        .from(crmCompanies)
+        .where(eq(crmCompanies.clientId, clientId)),
+    ),
+    ownerEmployeeId,
+  );
+
+async function relatedLeads(
   db: Executor,
-  companyId: string,
+  where: SQL,
   ownerEmployeeId?: string,
 ): Promise<CrmRelatedLead[]> {
   const rows = await db
@@ -950,12 +967,7 @@ export async function leadsOfCompany(
     })
     .from(leads)
     .leftJoin(employees, eq(employees.id, leads.ownerEmployeeId))
-    .where(
-      and(
-        eq(leads.companyId, companyId),
-        ownerEmployeeId ? eq(leads.ownerEmployeeId, ownerEmployeeId) : undefined,
-      ),
-    )
+    .where(and(where, ownerEmployeeId ? eq(leads.ownerEmployeeId, ownerEmployeeId) : undefined))
     .orderBy(desc(leads.createdAt))
     .limit(100);
   return rows.map((row) => ({

@@ -108,7 +108,7 @@ const PROJECT_READ: RolePermissions = { 'projects.read': 'all' };
 const PROJECT_ALL: RolePermissions = { 'projects.read': 'all', 'projects.manage': 'all' };
 
 /**
- * The client's full record (Administração → Clientes → ficha). `clients.sensitive`
+ * The client's full record (Formatação → Clientes → ficha). `clients.sensitive`
  * is the partners' CPF, marital status and property regime: Jurídico, Diretoria
  * and Admin Master only, and every CPF reveal is audited.
  */

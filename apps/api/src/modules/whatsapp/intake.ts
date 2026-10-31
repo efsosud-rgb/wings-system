@@ -40,6 +40,7 @@ import { distribute } from './attendance.js';
 import { notifyCallsChanged } from './call-signal.js';
 import { callingOn } from './calling.js';
 import { callPermissionPayload, type WhatsAppConfig } from './graph.js';
+import { callRequestRefusal } from './call-request-limit.js';
 import { officialNumberLive } from './official-number.js';
 import { deliverWhatsApp, type Contact } from './outbox.js';
 import { contactBlock, noteContactBlocked, recordContactOptOut } from '../leads/contact-block.js';
@@ -608,7 +609,7 @@ const DAY_MS = 24 * 3_600_000;
  * now, and, with the official number live and calling on, Meta's call-permission
  * request goes at once (the tap just opened the 24 h window). Not again while
  * the person allows calls or within a day of the last request (Meta allows 1 a
- * day); sent once, never retried, nothing about the person logged.
+ * day, and 2 a week); sent once, never retried, nothing about the person logged.
  */
 async function answerCallRequest(
   deps: WhatsAppIntakeDeps,
@@ -660,7 +661,8 @@ async function answerCallRequest(
     state === 'permanent' ||
     askedToday ||
     !(await officialNumberLive(db)) ||
-    !(await callingOn(send.fetch, send.config))
+    !(await callingOn(send.fetch, send.config)) ||
+    (await callRequestRefusal(db, contact.id)) !== null
   )
     return;
   // The system asks on its own: a "não me contate" (or the Prospecção opt-in rule) stops it.

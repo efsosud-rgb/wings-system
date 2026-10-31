@@ -317,3 +317,69 @@ describe('when the record cannot be opened', () => {
     expect((await screen.findByRole('alert')).textContent).toMatch(/sem conexão com o servidor/);
   });
 });
+
+describe('Formatação → Clientes → ficha: negociações', () => {
+  const DEAL_ID = '33333333-3333-4333-8333-333333333333';
+  const withSession = (permissions: Record<string, string>) => {
+    get.mockImplementation(async (path: string) => {
+      if (path === '/auth/me') return { user: { permissions } };
+      if (path === `/clients/${CLIENT_ID}/record`) return current;
+      if (path === `/clients/${CLIENT_ID}/deals`)
+        return {
+          deals: [
+            {
+              id: DEAL_ID,
+              name: 'Negociação Aurora',
+              pipeline: 'formatacao',
+              brand: null,
+              stage: 'Reunião',
+              won: null,
+              ownerName: null,
+              valueCents: null,
+              createdAt: '2026-10-01T12:00:00.000Z',
+            },
+          ],
+        };
+      if (path === `/leads/${DEAL_ID}`)
+        return {
+          lead: { id: DEAL_ID, research: { state: 'idle' } },
+          events: [
+            {
+              id: 'e1',
+              kind: 'meeting.scheduled',
+              at: '2026-10-02T12:00:00.000Z',
+              detail: {},
+            },
+          ],
+          notes: [],
+          tasks: [],
+          history: [],
+          activities: [],
+        };
+      if (path === `/leads/${DEAL_ID}/files`) return { files: [] };
+      throw new Error(`unexpected GET ${path}`);
+    });
+  };
+
+  it('is not offered to who does not read the CRM', async () => {
+    withSession({ 'clients.read': 'all' });
+    renderPage();
+    await screen.findByText(/% preenchido/);
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/auth/me'));
+    expect(screen.queryByRole('tab', { name: 'Negociações' })).toBeNull();
+    expect(get).not.toHaveBeenCalledWith(`/clients/${CLIENT_ID}/deals`);
+  });
+
+  it('lists the client’s deals and shows the picked one’s timeline and files, read-only', async () => {
+    withSession({ 'clients.read': 'all', 'leads.read': 'all' });
+    renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Negociações' }));
+    expect(
+      (await screen.findByRole('link', { name: 'Negociação Aurora' })).getAttribute('href'),
+    ).toBe(`/crm-vendas/negociacoes/${DEAL_ID}`);
+    expect(await screen.findByText('Reunião marcada')).toBeTruthy();
+    fireEvent.click(screen.getByRole('tab', { name: 'Arquivos' }));
+    await waitFor(() => expect(get).toHaveBeenCalledWith(`/leads/${DEAL_ID}/files`));
+    expect(screen.queryByRole('button', { name: /Enviar/ })).toBeNull();
+  });
+});

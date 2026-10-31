@@ -46,6 +46,8 @@ nome), nome de quem envia, marca, empresa do lead, ou campo livre (dia, hora, li
 textos e exemplos enviados à Meta em 07/10 (`modelos-whatsapp-2026-10-07.json` e `modelos-arte-12-2026-10-07.json`).
 **A conferir com a lista do Sonnet.** Um modelo fora da tabela tem só campos livres, digitados como vão. A marca de
 uma conversa de marca é sempre a da conversa (campo travado na tela).
+Os dois modelos de pedido de ligação de 30/10 também estão na tabela: `expansao_pedir_ligacao` (lead, vendedor,
+marca) e `wings_formatacao_pedir_ligacao` (lead, vendedor); ver `modelos.md`, "Pedido de permissão para ligar".
 
 ## O que sai (`modules/whatsapp/template-send.ts`)
 

@@ -6,14 +6,17 @@
 // It creates a throwaway database with apps/api's test helper (wings_test_<hex>,
 // migrated and seeded; the seed runs again with a made-up Wings number so the
 // Wings "Site" link exists), builds the API the way the site-forms tests do and
-// listens on 127.0.0.1, runs e2e/run.mjs against it (API_BASE) at 1440x900 and
-// 390x844, checks in that database what the submissions left, and drops it on
-// the way out (also on Ctrl+C or SIGTERM). DATABASE_URL only names the server
-// where that database is made: no other database is read or written.
+// listens on 127.0.0.1, runs e2e/run.mjs against it (API_BASE) from the phones
+// it emulates (Android with Chrome and with the Instagram app's browser, iPhone
+// with Safari's user agent), checks in that database what the sent forms left
+// and that the refused ones left nothing, and drops it on the way out (also on
+// Ctrl+C or SIGTERM). DATABASE_URL only names the server where that database
+// is made: no other database is read or written.
 //
 // No request leaves this process: the API's network kill switch is the first
 // import, and Turnstile's siteverify is answered here (Cloudflare's public test
-// keys, the dummy token the page's fake widget hands out).
+// keys, the dummy token the page's fake widget hands out; two tokens of the
+// test's own make it refuse, or fail as if Cloudflare were down).
 import '../../api/src/test/no-network.js';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -23,15 +26,25 @@ import { join, resolve } from 'node:path';
 import {
   SITE_FORM_REVENUE_OPTIONS,
   SITE_FORM_REVENUE_QUESTION,
+  siteEventSchema,
   WINGS_CLIENT_ID,
   type SiteFormRevenue,
 } from '@wings/shared';
 import { buildApp } from '../../api/src/app.js';
 import { FALE_COM_A_WINGS, seed } from '../../api/src/db/seed.js';
 import { loadEnv } from '../../api/src/env.js';
+import { siteEventLineOf } from '../../api/src/modules/leads/site-events.js';
 import { siteWhatsappUrl } from '../../api/src/modules/leads/site-forms.js';
 import { createTestDatabase, type TestDatabase } from '../../api/src/test/db.js';
 import { TEST_CPF_KEY, TEST_INDEX_KEY } from '../../api/src/test/factories.js';
+
+// Without DATABASE_URL, the local development database of docker-compose.dev.yml (pnpm db:up).
+process.env.DATABASE_URL ??= 'postgresql://wings:wings_dev_only@127.0.0.1:5433/wings_system';
+// The throwaway database is made on this machine only: never on staging's or production's server.
+if (!['127.0.0.1', 'localhost', '::1'].includes(new URL(process.env.DATABASE_URL).hostname)) {
+  console.error('DATABASE_URL must name a local server (127.0.0.1 or localhost)');
+  process.exit(2);
+}
 
 const SLUG = FALE_COM_A_WINGS.pattern;
 const FORM_PATH = `/public/site-forms/${SLUG}`;
@@ -42,6 +55,8 @@ const TURNSTILE_TEST_SITE_KEY = '1x00000000000000000000AA';
 const TURNSTILE_TEST_SECRET = '1x0000000000000000000000000000000AA';
 /** The response token Cloudflare's test site keys give, which the page's fake widget hands out. */
 const DUMMY_TOKEN = 'XXXX.DUMMY.TOKEN.XXXX';
+/** A token of the test's own (run.mjs) on which siteverify is down (fetch throws); any other token but the dummy is refused. */
+const OFFLINE_TOKEN = 'XXXX.DUMMY.TOKEN.FORA';
 
 /**
  * The funnel each answer to "O que você procura?" leads to: the page's own
@@ -66,16 +81,26 @@ interface Submission {
   email: string;
   phone: string;
   sent: boolean;
+  /** The API's answer to the POST. */
+  status: number;
   /** The form ref the thank-you link carried after the code, or null. */
   ref: string | null;
+  /** The visit id the page kept in sessionStorage, on every event beacon. */
+  visit: string | null;
+  /** The device the API should read from the run's user agent. */
+  expect: { os: string; app: string } | null;
 }
 
 interface Report {
-  /** How many forms the browser run meant to send. */
+  /** How many forms the browser run meant to send, and how many it meant to have refused too. */
   planned: number;
+  attempts: number;
   consentShown: string;
   submissions: Submission[];
 }
+
+/** One accepted event beacon as the API's reader sees it (site-events.ts): event, step, visit, UTMs and the device read from the user agent. */
+type SiteEventLine = ReturnType<typeof siteEventLineOf>;
 
 interface ApiCall {
   method: string;
@@ -158,11 +183,13 @@ async function startApi(pageOrigin: string) {
   const captchaCalls: { secretOk: boolean; tokenOk: boolean }[] = [];
   const captchaFetch = (async (_url: string | URL | Request, init?: RequestInit) => {
     const params = new URLSearchParams(String(init?.body ?? ''));
+    const token = params.get('response');
     const call = {
       secretOk: params.get('secret') === TURNSTILE_TEST_SECRET,
-      tokenOk: params.get('response') === DUMMY_TOKEN,
+      tokenOk: token === DUMMY_TOKEN,
     };
     captchaCalls.push(call);
+    if (token === OFFLINE_TOKEN) throw new Error('siteverify down (e2e)');
     const success = call.secretOk && call.tokenOk;
     return new Response(
       JSON.stringify({ success, 'error-codes': success ? [] : ['invalid-input-response'] }),
@@ -185,11 +212,20 @@ async function startApi(pageOrigin: string) {
   const api = await buildApp({ env, db: database.db, captchaFetch });
   app = api;
 
-  // What reached /public/*: method, status and the CORS answer; never a body.
+  // What reached /public/*: method, status and the CORS answer; never a form's body.
   const calls: ApiCall[] = [];
+  // The event beacons the API accepted (204), read with the API's own reader (siteEventLineOf, what its
+  // log line would carry); the logger itself is silent under NODE_ENV test, so the log is not observed.
+  const siteEvents: SiteEventLine[] = [];
   api.addHook('onResponse', async (request, reply) => {
     const path = request.url.split('?')[0] ?? '';
     if (!path.startsWith('/public/')) return;
+    if (path === `${FORM_PATH}/events` && reply.statusCode === 204) {
+      const event = siteEventSchema.safeParse(JSON.parse(String(request.body)));
+      if (event.success) {
+        siteEvents.push(siteEventLineOf(SLUG, event.data, request.headers['user-agent']));
+      }
+    }
     calls.push({
       method: request.method,
       path,
@@ -205,7 +241,7 @@ async function startApi(pageOrigin: string) {
   const address = api.server.address();
   if (!address || typeof address === 'string') throw new Error('the API did not listen');
   const whatsappUrl = await siteWhatsappUrl(database.db, WINGS_CLIENT_ID, true, WINGS_NUMBER);
-  return { db: database.db, port: address.port, calls, captchaCalls, whatsappUrl };
+  return { db: database.db, port: address.port, calls, siteEvents, captchaCalls, whatsappUrl };
 }
 
 // ---------------------------------------------------------------- the browser run
@@ -230,20 +266,52 @@ async function checkDatabase(db: TestDatabase['db'], report: Report): Promise<vo
     where: (lead, { eq }) => eq(lead.landingPage, SLUG),
   });
   const sent = report.submissions.filter((submission) => submission.sent);
+  // the same phone sent twice is one lead (merged), so leads are counted by phone
+  const phones = new Set(sent.map((submission) => submission.phone));
   check(
-    `db: one lead per sent form (${sent.length} sent, ${report.planned} planned)`,
-    report.planned > 0 && sent.length === report.planned && rows.length === sent.length,
+    `db: one lead per phone (${sent.length} sent, ${phones.size} phones, ${report.planned} planned)`,
+    report.planned > 0 && sent.length === report.planned && rows.length === phones.size,
     `${rows.length} leads with landing_page ${SLUG}`,
   );
+  // a refused send leaves nothing: no lead for its phone; the captcha refusals are in the audit log
+  for (const refused of report.submissions.filter((submission) => !submission.sent)) {
+    check(
+      `db ${refused.label}: no lead for a send refused with ${refused.status}`,
+      !rows.some((row) => row.phone === `55${refused.phone}`),
+    );
+  }
+  const refusals = await db.query.auditLog.findMany({
+    where: (entry, { eq }) => eq(entry.action, 'site_form.captcha_refused'),
+  });
+  const outcomes = refusals
+    .map((entry) => (entry.metadata as { outcome?: string } | null)?.outcome ?? null)
+    .sort();
+  const expectedOutcomes = report.submissions
+    .flatMap((s) => (s.status === 403 ? ['refused'] : s.status === 503 ? ['unavailable'] : []))
+    .sort();
+  check(
+    `db: one site_form.captcha_refused audit entry per captcha refusal (${expectedOutcomes.join(', ')})`,
+    JSON.stringify(outcomes) === JSON.stringify(expectedOutcomes),
+    outcomes.join(', ') || 'none',
+  );
 
-  for (const submission of report.submissions) {
+  for (const submission of sent) {
     const label = `db ${submission.label} (${submission.answer})`;
-    const matches = rows.filter((row) => row.email === submission.email);
+    const matches = rows.filter((row) => row.phone === `55${submission.phone}`);
     const lead = matches[0];
-    check(`${label}: exactly one lead for this form`, matches.length === 1, `${matches.length}`);
+    check(`${label}: exactly one lead for this phone`, matches.length === 1, `${matches.length}`);
     if (!lead) continue;
-    const expected = EXPECTED_PIPELINE[submission.answer];
-    const option = spec.qualifierValues.find((entry) => entry.value === submission.answer)?.option;
+    // what this phone sent, in order: the first arrival sets the answer and the funnel, a later one
+    // fills only the gaps (e-mail, Instagram...), and every arrival gives the lead a new form ref
+    const sends = sent.filter((other) => other.phone === submission.phone);
+    const first = sends[0] ?? submission;
+    const last = sends[sends.length - 1] ?? submission;
+    const expectedEmail = sends.find((other) => other.email)?.email ?? null;
+    const expectedInstagram = sends.some((other) => other.instagramTyped) ? 'marca.teste' : null;
+    const expected = EXPECTED_PIPELINE[first.answer];
+    const ownPipeline = EXPECTED_PIPELINE[submission.answer];
+    const option = spec.qualifierValues.find((entry) => entry.value === first.answer)?.option;
+    const shown = spec.qualifierValues.find((entry) => entry.value === submission.answer)?.option;
     check(
       `${label}: source site_form, landing_page ${SLUG}, Wings Company`,
       lead.source === 'site_form' && lead.landingPage === SLUG && lead.clientId === WINGS_CLIENT_ID,
@@ -260,11 +328,17 @@ async function checkDatabase(db: TestDatabase['db'], report: Report): Promise<vo
       lead.phone === `55${submission.phone}` ? 'ok' : 'different',
     );
     check(
-      `${label}: Instagram typed as "${submission.instagramTyped}" kept as the bare username`,
-      lead.instagram === 'marca.teste',
+      `${label}: Instagram kept as ${expectedInstagram ?? 'null (none typed)'}`,
+      lead.instagram === expectedInstagram,
       `instagram ${lead.instagram ?? 'null'}`,
     );
-    const revenue = SITE_FORM_REVENUE_OPTIONS[submission.revenue];
+    // like the interest, the first arrival's faixa stays on the lead; a later send changes neither
+    const revenue = SITE_FORM_REVENUE_OPTIONS[first.revenue];
+    check(
+      `${label}: e-mail kept as ${expectedEmail ? 'the one typed' : 'null (none typed)'}`,
+      lead.email === expectedEmail,
+      `e-mail ${lead.email ? 'set' : 'null'}`,
+    );
     check(
       `${label}: form_answers holds each option's text under its question`,
       option !== undefined &&
@@ -274,30 +348,51 @@ async function checkDatabase(db: TestDatabase['db'], report: Report): Promise<vo
     );
     check(
       `${label}: the page shows the API's revenue text`,
-      submission.revenueText === revenue,
+      submission.revenueText === SITE_FORM_REVENUE_OPTIONS[submission.revenue],
       submission.revenueText,
     );
     check(
       `${label}: the page shows the API's option text`,
-      submission.answerText === option,
+      submission.answerText === shown,
       submission.answerText,
     );
     const events = await db.query.leadEvents.findMany({
       where: (event, { and, eq }) =>
         and(eq(event.leadId, lead.id), eq(event.kind, 'lead.received.site_form')),
     });
-    const detail = (events[0]?.detail ?? {}) as Record<string, unknown>;
+    const details = events.map((event) => (event.detail ?? {}) as Record<string, unknown>);
     check(
-      `${label}: lead.received.site_form event carries the code and the funnel`,
-      events.length === 1 &&
-        detail.qualifier === submission.answer &&
-        (detail.pipeline ?? null) === expected,
-      JSON.stringify({ qualifier: detail.qualifier, pipeline: detail.pipeline }),
+      `${label}: one lead.received.site_form event per send (${sends.length}), this send's with its code and funnel`,
+      events.length === sends.length &&
+        details.some(
+          (detail) =>
+            detail.qualifier === submission.answer && (detail.pipeline ?? null) === ownPipeline,
+        ),
+      JSON.stringify(details.map((d) => ({ qualifier: d.qualifier, pipeline: d.pipeline }))),
     );
+    const merges = await db.query.auditLog.findMany({
+      where: (entry, { and, eq }) =>
+        and(eq(entry.entityId, lead.id), eq(entry.action, 'lead.merged')),
+    });
     check(
-      `${label}: the thank-you link's ref is the one the lead keeps (form_ref)`,
-      submission.ref !== null && lead.formRef === submission.ref && lead.formRefAt !== null,
-      lead.formRef === submission.ref ? 'same ref' : 'different',
+      `${label}: ${sends.length - 1} lead.merged audit entries (one per repeat send)`,
+      merges.length === sends.length - 1,
+      `${merges.length}`,
+    );
+    if (sends.length > 1) {
+      check(
+        `${label}: the repeat send filled the gaps, e-mail among them`,
+        details.some((detail) => Array.isArray(detail.filled) && detail.filled.includes('email')),
+        JSON.stringify(details.map((d) => d.filled ?? null)),
+      );
+    }
+    check(
+      `${label}: this send got a ref, and the lead keeps the ref of this phone's last send (form_ref)`,
+      submission.ref !== null &&
+        last.ref !== null &&
+        lead.formRef === last.ref &&
+        lead.formRefAt !== null,
+      lead.formRef === last.ref ? 'same ref' : 'different',
     );
     check(
       `${label}: the lead keeps the consent line the page shows`,
@@ -320,7 +415,8 @@ async function checkConsentLine(api: NonNullable<typeof app>, report: Report): P
   check('api: the GET hands out the same consentText', fromGet === seeded, `GET "${fromGet}"`);
 }
 
-function checkCalls(calls: ApiCall[], pageOrigin: string, posts: number): void {
+function checkCalls(calls: ApiCall[], pageOrigin: string, report: Report): void {
+  const posts = report.attempts;
   const fromPage = calls.filter(
     (call) => call.browser && call.origin === pageOrigin && call.path === FORM_PATH,
   );
@@ -340,12 +436,17 @@ function checkCalls(calls: ApiCall[], pageOrigin: string, posts: number): void {
     gets.length >= posts && gets.every((call) => call.status === 200 && allowed(call)),
     `${gets.length} GETs: ${gets.map((call) => call.status).join(' ')}`,
   );
+  // 200 for every sent form, and the refusal each failing run asked for; CORS on all of them
+  const expectedStatuses = report.submissions.map((s) => s.status).sort();
   check(
-    'api: every POST from the page answered 200 with the page origin',
-    sends.length === posts && sends.every((call) => call.status === 200 && allowed(call)),
+    `api: the POSTs from the page answered ${expectedStatuses.join(' ')}, each with the page origin`,
+    sends.length === posts &&
+      JSON.stringify(sends.map((call) => call.status).sort()) ===
+        JSON.stringify(expectedStatuses) &&
+      sends.every(allowed),
     `${sends.length} POSTs: ${sends.map((call) => call.status).join(' ')}`,
   );
-  // the page's server events (sendBeacon): at least page_view, form_view, form_start, submit_attempt and submit_ok per run
+  // the page's server events (sendBeacon): at least page_view, form_view, form_start, submit_attempt and submit_ok/submit_error per run
   const events = calls.filter(
     (call) => call.browser && call.origin === pageOrigin && call.path === `${FORM_PATH}/events`,
   );
@@ -359,6 +460,60 @@ function checkCalls(calls: ApiCall[], pageOrigin: string, posts: number): void {
     'api: no answer allowed credentials',
     calls.every((call) => call.allowCredentials === null),
   );
+}
+
+/**
+ * The server events of each run the API accepted, read with its own reader: the
+ * visit's funnel in order (sent: through submit_ok and the thank-you's WhatsApp
+ * click; refused: submit_error with why, nothing after), form_view once, the
+ * UTMs of the ad link, and the device the API read from the user agent: the
+ * phone, its system and the Instagram browser when the run came from it.
+ */
+function checkSiteEvents(seen: SiteEventLine[], report: Report): void {
+  for (const run of report.submissions) {
+    const label = `events ${run.label}`;
+    const own = seen.filter((line) => line.visit === run.visit);
+    const names = own.map((line) => line.event);
+    const count = (name: string) => names.filter((n) => n === name).length;
+    const inOrder = (...expected: string[]) => {
+      let at = 0;
+      for (const name of names) if (name === expected[at]) at++;
+      return at === expected.length;
+    };
+    const funnel = run.sent
+      ? ['page_view', 'form_start', 'submit_attempt', 'submit_ok', 'whatsapp_click']
+      : ['page_view', 'form_start', 'submit_attempt', 'submit_error'];
+    check(
+      `${label}: the API accepted this visit's funnel in order (${funnel.join(', ')}), form_view once`,
+      run.visit !== null &&
+        inOrder(...funnel) &&
+        count('page_view') === 1 &&
+        count('form_view') === 1 &&
+        count('submit_ok') === (run.sent ? 1 : 0),
+      names.join(' ') || 'no event for this visit',
+    );
+    const errorSteps = own.filter((line) => line.event === 'submit_error').map((line) => line.step);
+    const stepOf: Record<number, string> = { 400: 'validation', 403: 'captcha', 503: 'network' };
+    const expectedSteps = run.sent ? [] : [stepOf[run.status] ?? null];
+    check(
+      `${label}: refusals counted with why (${expectedSteps.join(', ') || 'none'})`,
+      JSON.stringify(errorSteps) === JSON.stringify(expectedSteps),
+      errorSteps.join(' ') || 'none',
+    );
+    check(
+      `${label}: every event carries the ad's UTMs and the device read from the user agent (phone, ${run.expect?.os}, ${run.expect?.app})`,
+      own.length > 0 &&
+        own.every(
+          (line) =>
+            line.utm_source === 'e2e' &&
+            line.utm_campaign === 'lancamento' &&
+            line.device === 'phone' &&
+            line.os === run.expect?.os &&
+            line.app === run.expect?.app,
+        ),
+      JSON.stringify(own[0] && { device: own[0].device, os: own[0].os, app: own[0].app }),
+    );
+  }
 }
 
 // ---------------------------------------------------------------- main
@@ -392,14 +547,25 @@ async function main(): Promise<number> {
   }
   if (report) {
     // every planned form must have gone through: a run that stopped early fails here too
-    const posts = report.planned;
+    check(
+      `e2e: every run reported (${report.attempts} attempts, ${report.planned} to send)`,
+      report.submissions.length === report.attempts &&
+        report.submissions.filter((s) => s.sent).length === report.planned,
+      `${report.submissions.length} reported, ${report.submissions.filter((s) => s.sent).length} sent`,
+    );
     if (app) await checkConsentLine(app, report);
     await checkDatabase(api.db, report);
-    checkCalls(api.calls, pageOrigin, posts);
+    checkCalls(api.calls, pageOrigin, report);
+    checkSiteEvents(api.siteEvents, report);
+    // the phone is checked after the captcha, so the 400 run spent a token too; only the two bad tokens fail
+    const goodTokens = report.submissions.filter(
+      (s) => s.status !== 403 && s.status !== 503,
+    ).length;
     check(
-      'api: Turnstile checked once per sent form, with the test secret and the dummy token',
-      api.captchaCalls.length === posts &&
-        api.captchaCalls.every((call) => call.secretOk && call.tokenOk),
+      `api: Turnstile checked once per POST (${report.attempts}) with the test secret; ${goodTokens} dummy tokens passed`,
+      api.captchaCalls.length === report.attempts &&
+        api.captchaCalls.every((call) => call.secretOk) &&
+        api.captchaCalls.filter((call) => call.tokenOk).length === goodTokens,
       `${api.captchaCalls.length} siteverify calls`,
     );
   }

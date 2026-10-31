@@ -378,6 +378,58 @@ describe('the work numbers', () => {
     ).toBeNull();
   });
 
+  it('each refusal from Meta says what happened and what to do, by Meta’s code', async () => {
+    const refusal = async (step: 'exchange' | 'numbers', answer: Answer) => {
+      answers = defaults();
+      answers[step] = answer;
+      const res = await connect(admin.cookies, payload());
+      expect(res.statusCode).toBe(502);
+      return res.json<{ error: string; message: string; metaCode?: number }>();
+    };
+    const metaError = (code: number) => () => json({ error: { code, message: 'x' } }, 400);
+    expect((await refusal('exchange', metaError(100))).message).toContain(
+      'venceu (ela vale 30 segundos) ou já foi usada',
+    );
+    expect((await refusal('exchange', cut)).message).toContain('A Meta não respondeu');
+    expect((await refusal('numbers', metaError(100))).message).toContain(
+      'não reconheceu a conta do WhatsApp',
+    );
+    expect((await refusal('numbers', metaError(200))).message).toContain(
+      'aceite todas as permissões',
+    );
+    expect((await refusal('numbers', metaError(10))).message).toContain(
+      'aceite todas as permissões',
+    );
+    expect((await refusal('numbers', metaError(190))).message).toContain(
+      'O acesso dado pela Meta venceu',
+    );
+    expect((await refusal('numbers', metaError(2))).message).toContain('instabilidade');
+    expect((await refusal('numbers', metaError(80008))).message).toContain('Muitas tentativas');
+    expect((await refusal('numbers', metaError(368))).message).toContain('avise o Eric');
+    const unknown = await refusal('exchange', metaError(12345));
+    expect(unknown).toMatchObject({ error: 'code_refused', metaCode: 12345 });
+    expect(unknown.message).toContain('passe ao suporte o código META-12345');
+    const [row] = await db.select().from(waNumbers).where(eq(waNumbers.id, numberId));
+    expect(row).toMatchObject({ status: 'registered', tokenEnc: null });
+  });
+
+  it('a number already connected on another row of the list is refused as such', async () => {
+    const other = (await register({ phone: '(21) 98888-1111', label: 'Outro teste' })).json<{
+      number: { id: string };
+    }>().number.id;
+    await db
+      .update(waNumbers)
+      .set({ phoneNumberId: NUMBER, wabaId: WABA })
+      .where(eq(waNumbers.id, other));
+    const res = await connect(admin.cookies, payload());
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({
+      error: 'number_in_use',
+      message: expect.stringContaining('já está conectado em outro cadastro') as unknown,
+    });
+    expect(calls.some((c) => c.step === 'subscribe')).toBe(false);
+  });
+
   it('connects only a number the registry confirmed, before spending the code', async () => {
     await db
       .update(waNumbers)

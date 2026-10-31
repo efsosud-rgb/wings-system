@@ -9,7 +9,13 @@ describe('signupEventOf', () => {
   it('reads Meta’s session event, as a string or an object', () => {
     expect(
       signupEventOf('https://www.facebook.com', meta(COEXISTENCE_FINISH, { waba_id: WABA })),
-    ).toEqual({ event: COEXISTENCE_FINISH, wabaId: WABA, phoneNumberId: null, detail: null });
+    ).toEqual({
+      event: COEXISTENCE_FINISH,
+      wabaId: WABA,
+      phoneNumberId: null,
+      detail: null,
+      errorCode: null,
+    });
     expect(
       signupEventOf('https://web.facebook.com', {
         type: 'WA_EMBEDDED_SIGNUP',
@@ -17,6 +23,18 @@ describe('signupEventOf', () => {
         data: { current_step: 'PHONE_NUMBER_SETUP' },
       }),
     ).toMatchObject({ event: 'CANCEL', detail: 'PHONE_NUMBER_SETUP' });
+  });
+
+  it('reads the code of Meta’s ERROR event, as a number or a string', () => {
+    const error = (code: unknown) =>
+      signupEventOf('https://www.facebook.com', {
+        type: 'WA_EMBEDDED_SIGNUP',
+        event: 'ERROR',
+        data: { error_message: 'App too old', error_code: code, session_id: 's1' },
+      });
+    expect(error(4563015)).toMatchObject({ errorCode: '4563015', detail: 'App too old' });
+    expect(error('3441041')).toMatchObject({ errorCode: '3441041' });
+    expect(error('<b>')).toMatchObject({ errorCode: null });
   });
 
   it('ignores any other origin, plain http, other messages and bad ids', () => {
@@ -108,6 +126,33 @@ describe('runEmbeddedSignup', () => {
     );
     vi.advanceTimersByTime(1_000);
     await expect(closed).resolves.toMatchObject({ ok: false, reason: 'no_code' });
+  });
+
+  it('Meta’s ERROR event carries its code; a login without permission is "denied"', async () => {
+    const failed = runEmbeddedSignup(
+      {
+        init: vi.fn(),
+        login: () => post(meta('ERROR', { error_message: 'Number in use', error_code: '3441049' })),
+      },
+      '1',
+    );
+    await expect(failed).resolves.toEqual({
+      ok: false,
+      reason: 'meta_error',
+      detail: 'Number in use',
+      errorCode: '3441049',
+    });
+
+    vi.useFakeTimers();
+    const denied = runEmbeddedSignup(
+      {
+        init: vi.fn(),
+        login: (callback) => callback({ authResponse: null, status: 'not_authorized' }),
+      },
+      '1',
+    );
+    vi.advanceTimersByTime(1_000);
+    await expect(denied).resolves.toMatchObject({ ok: false, reason: 'denied' });
   });
 
   it('a message from another origin does not finish anything', async () => {

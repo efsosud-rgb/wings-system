@@ -112,7 +112,7 @@ describe('the new-lead pop-up', () => {
       url: '/crm/notifications/new-leads',
       cookies: await cookiesOf(other),
     });
-    expect(asOther.json()).toEqual({ leads: [], earlierCount: 0 });
+    expect(asOther.json()).toEqual({ leads: [], earlierCount: 0, emailReplies: [] });
     expect(
       (await app.inject({ method: 'GET', url: '/crm/notifications/new-leads' })).statusCode,
     ).toBe(401);
@@ -122,7 +122,11 @@ describe('the new-lead pop-up', () => {
     const boss = await createEmployee(db, { role: 'diretoria', sector: 'diretoria' });
     const born = await arrive(null);
     expect(born.lead.ownerEmployeeId).toBeNull();
-    expect(await newLeadPopupsOf(db, boss.id)).toEqual({ leads: [], earlierCount: 0 });
+    expect(await newLeadPopupsOf(db, boss.id)).toEqual({
+      leads: [],
+      earlierCount: 0,
+      emailReplies: [],
+    });
   });
 
   it('goes away once read, once the deal moves on or is closed, once it changes hands, or when stale', async () => {
@@ -148,11 +152,16 @@ describe('the new-lead pop-up', () => {
       stale.lead.id,
     ]);
     // The new owner has no notice of their own: nothing is raised for a hand-over.
-    expect(await newLeadPopupsOf(db, heir.id)).toEqual({ leads: [], earlierCount: 0 });
+    expect(await newLeadPopupsOf(db, heir.id)).toEqual({
+      leads: [],
+      earlierCount: 0,
+      emailReplies: [],
+    });
     // Hours later it is no longer "just arrived": no pop-up, one line in the summary.
     expect(await newLeadPopupsOf(db, owner.id, new Date(Date.now() + 3 * 3_600_000))).toEqual({
       leads: [],
       earlierCount: 1,
+      emailReplies: [],
     });
   });
 

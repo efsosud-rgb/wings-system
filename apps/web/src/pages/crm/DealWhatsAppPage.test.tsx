@@ -221,6 +221,7 @@ vi.mock('../../api/whatsapp.js', () => ({
   useSendWhatsAppText: () => mutation(textMutate),
   useSendWhatsAppTemplate: () => mutation(templateMutate),
   useSendWhatsAppFile: () => ({ ...mutation(), reset: vi.fn() }),
+  useSendWhatsAppVoice: () => ({ ...mutation(), reset: vi.fn() }),
   NO_DEAL_FOR_FILES: 'O arquivo fica nos arquivos da negociação.',
   useTemplatePreview: (_thread: unknown, input: { name: string } | null) => {
     if (input) previewCalls.push(input);
@@ -557,9 +558,7 @@ describe('the WhatsApp conversation screen', () => {
       footer: null,
       buttons: [],
       withArt: false,
-      notices: [
-        'Cadastre a arte do WhatsApp da Wings (Administração → Clientes, em Wings Company).',
-      ],
+      notices: ['Cadastre a arte do WhatsApp da Wings (Formatação → Clientes, em Wings Company).'],
       fields: [
         { index: 1, role: 'free', label: 'Campo {{1}}', value: 'Elena', locked: false },
         { index: 2, role: 'free', label: 'Campo {{2}}', value: '', locked: false },

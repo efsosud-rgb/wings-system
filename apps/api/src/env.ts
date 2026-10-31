@@ -249,6 +249,15 @@ const schema = z.object({
     (value) => value === undefined || value === 'true' || value === 'false',
     'must be "true" or "false"',
   ),
+  /**
+   * Reading the leads' e-mail replies from each seller's Gmail (t083, docs/crm/automacoes.md
+   * "E-mail recebido"): every 5 minutes, only the mailboxes whose consent includes
+   * `gmail.readonly`. Off unless "true": reading the sellers' mailboxes is Eric's switch.
+   */
+  CRM_EMAIL_REPLIES_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
   CRM_RD_FOLLOW_ENABLED: optionalString.refine(
     (value) => value === undefined || value === 'true' || value === 'false',
     'must be "true" or "false"',

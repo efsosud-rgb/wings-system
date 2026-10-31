@@ -36,8 +36,8 @@ whatsapp_business_app_onboarding` (o exemplo da página de coexistência da Meta
      guarda o vencimento que a Meta der (`expires_in`, em `token_expires_at`);
   3. lê com esse token os números da WABA (`GET /{waba}/phone_numbers`): um id do navegador só vale se a Meta o
      mostrar; `is_on_biz_app: false` é recusado; o número oficial (`WHATSAPP_PHONE_NUMBER_ID` ou o telefone de
-     `WINGS_WHATSAPP_NUMBER`) é recusado (409 `official_number`), e um número diferente do cadastrado também (409
-     `number_mismatch`);
+     `WINGS_WHATSAPP_NUMBER`) é recusado (409 `official_number`), um número diferente do cadastrado também (409
+     `number_mismatch`), e um número já conectado em outra linha da lista (409 `number_in_use`);
   4. lê o portfólio dono da WABA (`owner_business_info`);
   5. grava o número com o token **cifrado** (`secret-box.ts`, `INTEGRATIONS_ENCRYPTION_KEY`);
   6. assina os webhooks da WABA (`POST /{waba}/subscribed_apps`);
@@ -70,6 +70,24 @@ whatsapp_business_app_onboarding` (o exemplo da página de coexistência da Meta
   o progresso (e o erro 2593109 marca o histórico como "Recusado no celular"); mensagens, ecos
   (`smb_message_echoes`), as conversas do `history` e os contatos (`smb_app_state_sync`) entram na conversa do
   número com a pessoa, sem Sofia e sem triagem (`docs/whatsapp/central.md`). Os modelos desses números ficam de fora.
+
+## Erros e aviso de conclusão (t015, 29/10)
+
+- Cada falha diz o que aconteceu e o que fazer. A janela da Meta manda os próprios erros só ao navegador (evento
+  `ERROR` com `error_code` e `session_id`): `apps/web/src/lib/connect-errors.ts` traduz os códigos da página
+  "Embedded Signup Flow Errors" da Meta que um vendedor encontra (coexistência, conta compartilhada, código de
+  verificação, limite de tentativas, permissão, restrição, segurança da conta); um código fora da lista mostra
+  "passe ao suporte o código `ES-<código>`". Janela fechada (`CANCEL`), permissões recusadas (`FB.login` com
+  `not_authorized`), outro tipo de conclusão, sem conta e sem código têm texto próprio.
+- As recusas da API (`numbers-routes.ts`) já vêm com a mensagem; quando a Meta recusou a troca do código ou a leitura
+  da WABA, o texto sai do código da Meta (`refusalMessage`: 1/2 instabilidade, 4/17/32/613/80008 limite, 10/200
+  permissão, 190 acesso vencido, 368 bloqueio, sem resposta = rede ou Meta fora do ar); código desconhecido mostra
+  `META-<código>`. Um número já conectado em outra linha da lista é 409 `number_in_use`.
+- Erro do servidor sem código nosso (500, página do proxy) ou sem rede nunca mostra o texto cru: a tela pede para
+  conferir a lista (a conexão pode ter sido salva) e dá o código `API-<status>` ou `WEB`.
+- Concluído, aparece no topo da tela o aviso **Número conectado: <nome>**, focado, com o próximo passo
+  (sincronização do histórico em andamento, ou "Tentar de novo" se a Meta recusou os avisos). A lista é lida de novo
+  na hora, sem recarregar a página.
 
 ## Ordem de entrada
 

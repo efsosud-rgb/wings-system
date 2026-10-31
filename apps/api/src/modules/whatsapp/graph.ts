@@ -95,7 +95,7 @@ export type OutgoingPayload =
   | { type: 'text'; text: { body: string; preview_url: boolean } }
   | { type: 'image'; image: { id: string; caption?: string } }
   | { type: 'video'; video: { id: string; caption?: string } }
-  | { type: 'audio'; audio: { id: string } }
+  | { type: 'audio'; audio: { id: string; voice?: true } }
   | { type: 'document'; document: { id: string; caption?: string; filename: string } }
   | {
       type: 'interactive';
@@ -195,9 +195,12 @@ export const filePayload = (
   mediaId: string,
   caption: string,
   filename: string,
+  /** A recording made in the conversation: Meta shows it as a voice message (OGG/OPUS only). */
+  voice = false,
 ): OutgoingPayload => {
   const text = caption ? { caption } : {};
-  if (kind === 'audio') return { type: 'audio', audio: { id: mediaId } };
+  if (kind === 'audio')
+    return { type: 'audio', audio: { id: mediaId, ...(voice ? { voice: true as const } : {}) } };
   if (kind === 'video') return { type: 'video', video: { id: mediaId, ...text } };
   if (kind === 'document')
     return { type: 'document', document: { id: mediaId, ...text, filename } };

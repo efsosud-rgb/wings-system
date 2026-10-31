@@ -23,24 +23,32 @@ nome, canto superior direito). A partir daí, com a conta dela:
   resposta do lead chega na caixa dela. Quem não conectou cai no SMTP da empresa (`SMTP_FROM`);
   sem SMTP o envio é recusado e fica registrado como falho. Numa automação o remetente é o dono
   do lead. O outbox guarda `from_email`, `Message-ID`, `gmail_message_id` e `gmail_thread_id`.
+  Com anexos (Escrever e-mail, até 20 MB somados), a mensagem vai pelo envio por upload
+  (`upload/gmail/v1/users/me/messages/send?uploadType=multipart`: uma parte JSON com o `threadId` e
+  a mensagem `message/rfc822`), para a resposta com anexo ficar na mesma conversa. **Não
+  verificado** contra o Gmail real: só contra o Google simulado dos testes (`fake-google.ts`). Ver
+  `docs/crm/automacoes.md` (E-mail).
 - O módulo **Agenda** (a tela tipo Google Agenda, com a agenda da pessoa e a Wings Company) usa
   esta mesma conexão: ver [docs/agenda.md](../agenda.md).
-- (Etapa seguinte) as respostas do lead na linha do tempo: exige o escopo restrito
-  `gmail.readonly` e uma leitura periódica (`history.list`) por pessoa conectada.
+- **As respostas do lead** chegam na negociação (t083): com `CRM_EMAIL_REPLIES_ENABLED=true`, a
+  cada 5 minutos o sistema lê da caixa de cada pessoa conectada com `gmail.readonly` **só** as
+  respostas aos e-mails das negociações e os e-mails dos contatos delas (`history.list` a partir do
+  último ponto). Ver `docs/crm/automacoes.md` (E-mail recebido). Quem conectou antes do escopo novo vê
+  "Reconecte sua conta Google para receber os e-mails dos leads".
 
 O token é da pessoa e age só como ela: o sistema nunca cria evento nem manda e-mail em nome de
 outra. Quem não conectou continua marcando com o link colado.
 
 ## Padrão da equipe na agenda (81 eventos lidos em 07/10/2026)
 
-| | Expansão | Formatação |
-| --- | --- | --- |
-| Título | `@ <Nome do lead> ( <Marca> ) - CALL` | `@ Formatação ( <Empresa> - <Nome do lead> ) - CALL` |
-| Cor | a da agenda (sem `colorId`) | Banana (`colorId` 5) |
-| Meet | gerado | gerado |
-| Duração | 60 min | 60 min |
-| Convidados | nenhum (a equipe não põe o lead) | nenhum por padrão; "Convidar o lead" é opção |
-| Descrição | nenhuma | só o aviso de gravação, e só quando o lead é convidado |
+|            | Expansão                              | Formatação                                             |
+| ---------- | ------------------------------------- | ------------------------------------------------------ |
+| Título     | `@ <Nome do lead> ( <Marca> ) - CALL` | `@ Formatação ( <Empresa> - <Nome do lead> ) - CALL`   |
+| Cor        | a da agenda (sem `colorId`)           | Banana (`colorId` 5)                                   |
+| Meet       | gerado                                | gerado                                                 |
+| Duração    | 60 min                                | 60 min                                                 |
+| Convidados | nenhum (a equipe não põe o lead)      | nenhum por padrão; "Convidar o lead" é opção           |
+| Descrição  | nenhuma                               | só o aviso de gravação, e só quando o lead é convidado |
 
 O sistema escreve exatamente isso (`meetingTitleOf`, `MEETING_GOOGLE_COLOR` em
 `packages/shared/src/meetings.ts`): o título do evento no Google e no CRM vem do padrão, com o nome,
@@ -63,12 +71,12 @@ Na Formatação, "Convidar o lead por e-mail" continua como opção, desmarcada 
 
 ## Qual autorização é — e por que não a delegação de domínio
 
-| | Consentimento de cada pessoa (**escolhido**) | Delegação para todo o domínio |
-| --- | --- | --- |
-| Quem clica | Eric cria o cliente OAuth uma vez; cada pessoa clica "Conectar" uma vez | Thais (superadmin) autoriza um service account para **todos** |
-| O que o sistema pode | Só a agenda e a caixa de quem consentiu | Agir como **qualquer** pessoa do domínio |
-| Revisão do Google | Nenhuma: app **Interno** (só contas do Workspace da Wings) não passa por verificação nem mostra "app não verificado", mesmo com escopos sensíveis/restritos | Nenhuma, mas exige chave de service account — que a organização da Wings **bloqueia** (ver `lib/ga4.ts`) |
-| Recomendação do Google | É o caminho padrão para apps que agem pelo usuário | "Evite a delegação de domínio quando o fluxo de consentimento resolve" |
+|                        | Consentimento de cada pessoa (**escolhido**)                                                                                                                | Delegação para todo o domínio                                                                            |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Quem clica             | Eric cria o cliente OAuth uma vez; cada pessoa clica "Conectar" uma vez                                                                                     | Thais (superadmin) autoriza um service account para **todos**                                            |
+| O que o sistema pode   | Só a agenda e a caixa de quem consentiu                                                                                                                     | Agir como **qualquer** pessoa do domínio                                                                 |
+| Revisão do Google      | Nenhuma: app **Interno** (só contas do Workspace da Wings) não passa por verificação nem mostra "app não verificado", mesmo com escopos sensíveis/restritos | Nenhuma, mas exige chave de service account — que a organização da Wings **bloqueia** (ver `lib/ga4.ts`) |
+| Recomendação do Google | É o caminho padrão para apps que agem pelo usuário                                                                                                          | "Evite a delegação de domínio quando o fluxo de consentimento resolve"                                   |
 
 Fontes: [configurar a tela de consentimento](https://developers.google.com/workspace/guides/configure-oauth-consent),
 [delegação de domínio](https://knowledge.workspace.google.com/admin/apps/control-api-access-with-domain-wide-delegation),
@@ -98,9 +106,10 @@ Tudo em [console.cloud.google.com](https://console.cloud.google.com), logado com
    https://www.googleapis.com/auth/calendar.events
    https://www.googleapis.com/auth/calendar.calendarlist.readonly
    https://www.googleapis.com/auth/gmail.send
+   https://www.googleapis.com/auth/gmail.readonly
    ```
-   → "Adicionar à tabela" → Atualizar → Salvar. (Para a etapa das respostas do lead entra depois
-   `gmail.readonly`.)
+   → "Adicionar à tabela" → Atualizar → Salvar. (`gmail.readonly` é das respostas dos leads, t083:
+   escopo **restrito**, mas app **Interno** não passa por verificação nem avaliação de segurança.)
 6. **Cliente OAuth.** "Google Auth platform" → **Clients** → "Criar cliente" → Tipo: **Aplicativo
    da Web** → Nome `Wings System (staging e produção)` → em "URIs de redirecionamento
    autorizados" clique "Adicionar URI" duas vezes:
@@ -145,7 +154,7 @@ delegação de domínio.
 ## Como funciona por dentro
 
 - Rotas `GET /me/google`, `POST /me/google/connect`, `GET /me/google/callback`, `DELETE
-  /me/google` (`modules/google-workspace/routes.ts`), só da própria sessão.
+/me/google` (`modules/google-workspace/routes.ts`), só da própria sessão.
 - Tabela `google_workspace_connections` (migração 0078): uma linha por funcionário; `access_token_enc`,
   `refresh_token_enc` e o verificador PKCE em `pending` cifrados com `INTEGRATIONS_ENCRYPTION_KEY`
   (`lib/secret-box.ts`); `google_email` é a conta que consentiu; `last_error` é só um código. O
@@ -164,14 +173,15 @@ delegação de domínio.
 
 ## Variáveis
 
-| Nome | Onde | O que é |
-| --- | --- | --- |
-| `GOOGLE_WORKSPACE_CLIENT_ID` | api | ID do cliente OAuth "Aplicativo da Web" (passo 6) |
-| `GOOGLE_WORKSPACE_CLIENT_SECRET` | api | Chave secreta do mesmo cliente |
-| `GOOGLE_WORKSPACE_WINGS_CALENDAR_ID` | api | `thais@wingscompany.com.br` (a agenda "Wings Company") |
-| `INTEGRATIONS_ENCRYPTION_KEY` | api | Já existe (Kairogen); cifra os tokens |
-| `CRM_EMAIL_MODE` | api | `gmail` liga o envio pelo Gmail de cada pessoa (com `smtp` de reserva); `test` até os modelos serem aprovados |
-| `APP_BASE_URL` | api | Já existe; monta a URI de redirecionamento |
+| Nome                                 | Onde | O que é                                                                                                       |
+| ------------------------------------ | ---- | ------------------------------------------------------------------------------------------------------------- |
+| `GOOGLE_WORKSPACE_CLIENT_ID`         | api  | ID do cliente OAuth "Aplicativo da Web" (passo 6)                                                             |
+| `GOOGLE_WORKSPACE_CLIENT_SECRET`     | api  | Chave secreta do mesmo cliente                                                                                |
+| `GOOGLE_WORKSPACE_WINGS_CALENDAR_ID` | api  | `thais@wingscompany.com.br` (a agenda "Wings Company")                                                        |
+| `INTEGRATIONS_ENCRYPTION_KEY`        | api  | Já existe (Kairogen); cifra os tokens                                                                         |
+| `CRM_EMAIL_REPLIES_ENABLED`          | api  | `true` liga a leitura das respostas dos leads (t083); desligada quando vazia                                  |
+| `CRM_EMAIL_MODE`                     | api  | `gmail` liga o envio pelo Gmail de cada pessoa (com `smtp` de reserva); `test` até os modelos serem aprovados |
+| `APP_BASE_URL`                       | api  | Já existe; monta a URI de redirecionamento                                                                    |
 
 ## Limites conhecidos
 

@@ -6,6 +6,8 @@ Ampliado em 26/10 na branch `feat/maps-prospecting` (PR empilhado sobre o desta 
 
 Tela: `/crm-vendas/prospeccao` (menu CRM Vendas → Prospecção). Código: `apps/api/src/modules/prospecting/`, contrato em `packages/shared/src/prospecting.ts`, tela em `apps/web/src/pages/crm/ProspectingPage.tsx`, painel do lead em `apps/web/src/pages/crm/GooglePlacePanel.tsx`.
 
+**Prospecção Instagram** (especificação, ainda não construída): [`docs/prospeccao/instagram.md`](../prospeccao/instagram.md). A parte 3 de lá acrescenta a Business Discovery à nota desta busca.
+
 ## Regras do Google (Maps Platform) e como são cumpridas
 
 - **Só o `place_id` é guardado.** Nome, endereço, telefone, site, nota, avaliações, horário, tipos e link do Maps vêm ao vivo em cada resposta e não entram em tabela, log, auditoria nem linha do tempo do lead. As tabelas novas não têm coluna com esses nomes, e um teste (`prospecting.test.ts`) falha se uma aparecer; outro teste busca, reserva, abre a ficha, cria o lead e confere que nada do Google ficou no banco.

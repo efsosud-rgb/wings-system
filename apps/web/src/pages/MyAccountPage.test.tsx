@@ -33,6 +33,7 @@ const status = (over: Partial<GoogleWorkspaceStatus> = {}): { status: GoogleWork
     scopes: [],
     calendars: { mine: null, wings: null },
     wingsCalendarConfigured: true,
+    mailRead: 'off',
     lastError: null,
     ...over,
   },
@@ -101,6 +102,26 @@ describe('Minha conta — Google', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Desconectar agora' }));
     await waitFor(() => expect(del).toHaveBeenCalledWith('/me/google'));
     expect(await screen.findByText('Não conectado')).toBeTruthy();
+  });
+
+  it('asks a connection made before the reading to reconnect once, and reconnects', async () => {
+    get.mockResolvedValue(
+      status({ state: 'connected', email: 'daniele@wingscompany.com.br', mailRead: 'reconnect' }),
+    );
+    post.mockResolvedValue({ url: 'https://accounts.google.com/o/oauth2/v2/auth?state=r' });
+    const assign = vi.fn();
+    vi.spyOn(window, 'location', 'get').mockReturnValue({
+      ...window.location,
+      assign,
+    } as unknown as Location);
+    renderPage();
+    expect(
+      await screen.findByText(/Reconecte sua conta Google para receber os e-mails dos leads/),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Reconectar' }));
+    await waitFor(() =>
+      expect(assign).toHaveBeenCalledWith('https://accounts.google.com/o/oauth2/v2/auth?state=r'),
+    );
   });
 
   it('explains a refused return and a connection Google stopped accepting', async () => {

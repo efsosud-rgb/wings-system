@@ -8,6 +8,8 @@ import { startFormatacaoIntakeScheduler } from './modules/expansion/formatacao.j
 import { startExpansionIntakeScheduler } from './modules/expansion/scheduler.js';
 import { startInsightsScheduler } from './modules/insights/scheduler.js';
 import { startCrmAutomationsScheduler } from './modules/leads/automations-scheduler.js';
+import { startEmailRepliesScheduler } from './modules/leads/email-replies.js';
+import { googleWorkspaceDepsOf } from './modules/google-workspace/service.js';
 import { onLeadArrivedKick } from './modules/leads/crm-alerts.js';
 import { createCrmMailTransport } from './modules/leads/crm-mail.js';
 import { sendPendingNoticeMails } from './modules/leads/crm-notice-mail.js';
@@ -202,6 +204,21 @@ async function main() {
       onLeadArrivedKick(null);
       stop();
     });
+  }
+
+  // The leads' e-mail replies from the sellers' Gmail (docs/crm/automacoes.md "E-mail recebido"):
+  // every 5 minutes, only with CRM_EMAIL_REPLIES_ENABLED=true and the Google client configured.
+  const google = googleWorkspaceDepsOf(app.wings);
+  if (env.CRM_EMAIL_REPLIES_ENABLED === 'true' && google) {
+    const stop = startEmailRepliesScheduler({
+      db,
+      google,
+      storage: storageOf(app.wings),
+      maxFileBytes: env.DRIVE_MAX_FILE_BYTES,
+      minutes: 5,
+      log: (facts) => app.log.info(facts),
+    });
+    app.addHook('onClose', async () => stop());
   }
 
   // Prospecção: expired reservations back to free, old enrichment cleared, every

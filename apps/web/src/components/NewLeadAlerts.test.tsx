@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  */
 
 const popups = {
-  current: { leads: [], earlierCount: 0 } as NewLeadPopups | undefined,
+  current: { leads: [], earlierCount: 0, emailReplies: [] } as NewLeadPopups | undefined,
 };
 const earlierHidden = { current: 0 };
 const markRead = vi.fn();
@@ -85,7 +85,7 @@ const shell = () => (
 );
 
 beforeEach(() => {
-  popups.current = { leads: [], earlierCount: 0 };
+  popups.current = { leads: [], earlierCount: 0, emailReplies: [] };
   away.current = false;
   permission.current = 'default';
   stored.clear();
@@ -97,8 +97,33 @@ afterEach(() => {
 });
 
 describe('NewLeadAlerts', () => {
+  it('pops up a lead’s e-mail reply with the sound, the lock and "Abrir ficha"', () => {
+    const view = render(shell());
+    popups.current = {
+      leads: [],
+      earlierCount: 0,
+      emailReplies: [
+        {
+          noticeId: 'reply-1',
+          leadId: 'lead-9',
+          firstName: 'Paula',
+          createdAt: new Date().toISOString(),
+          blocked: 'Pediu para não ser contatado (E-mail; CRM).',
+        },
+      ],
+    };
+    view.rerender(shell());
+    expect(sound).toHaveBeenCalledTimes(1);
+    const card = screen.getByRole('article', { name: 'E-mail do lead' });
+    expect(card.textContent).toContain('Paula');
+    expect(card.textContent).toContain('Não me contate por e-mail: Pediu para não ser contatado');
+    fireEvent.click(screen.getByRole('button', { name: 'Abrir ficha' }));
+    expect(markRead).toHaveBeenCalledWith(['reply-1']);
+    expect(screen.getByTestId('where').textContent).toBe('/crm-vendas/negociacoes/lead-9');
+  });
+
   it('shows the first name, funnel, origin and the 1-hour deadline, with both buttons', () => {
-    popups.current = { leads: [lead(1)], earlierCount: 0 };
+    popups.current = { leads: [lead(1)], earlierCount: 0, emailReplies: [] };
     render(shell());
     expect(screen.getByText('Pessoa1')).toBeTruthy();
     expect(screen.getByText('Formatação')).toBeTruthy();
@@ -114,7 +139,7 @@ describe('NewLeadAlerts', () => {
     render(shell());
     expect(screen.queryByLabelText('Leads novos')).toBeNull();
     cleanup();
-    popups.current = { leads: [lead(1)], earlierCount: 0 };
+    popups.current = { leads: [lead(1)], earlierCount: 0, emailReplies: [] };
     user.permissions = {};
     render(shell());
     expect(screen.queryByText('Pessoa1')).toBeNull();
@@ -122,7 +147,11 @@ describe('NewLeadAlerts', () => {
   });
 
   it('stacks several, four at a time, with a line for the rest', () => {
-    popups.current = { leads: [1, 2, 3, 4, 5, 6].map((n) => lead(n)), earlierCount: 0 };
+    popups.current = {
+      leads: [1, 2, 3, 4, 5, 6].map((n) => lead(n)),
+      earlierCount: 0,
+      emailReplies: [],
+    };
     render(shell());
     expect(screen.getAllByRole('button', { name: 'Abrir ficha' })).toHaveLength(4);
     const more = screen.getByRole('link', { name: /\+ 2 leads novos — ver avisos/ });
@@ -130,7 +159,7 @@ describe('NewLeadAlerts', () => {
   });
 
   it('"Depois" puts it off in this browser and leaves the notice unread', () => {
-    popups.current = { leads: [lead(1), lead(2)], earlierCount: 0 };
+    popups.current = { leads: [lead(1), lead(2)], earlierCount: 0, emailReplies: [] };
     render(shell());
     fireEvent.click(screen.getAllByRole('button', { name: 'Depois' })[0]!);
     expect(screen.queryByText('Pessoa1')).toBeNull();
@@ -140,7 +169,7 @@ describe('NewLeadAlerts', () => {
   });
 
   it('"Abrir ficha" marks the notice read and opens the deal', () => {
-    popups.current = { leads: [lead(7)], earlierCount: 0 };
+    popups.current = { leads: [lead(7)], earlierCount: 0, emailReplies: [] };
     render(shell());
     fireEvent.click(screen.getByRole('button', { name: 'Abrir ficha' }));
     expect(markRead).toHaveBeenCalledWith(['notice-7']);
@@ -149,22 +178,22 @@ describe('NewLeadAlerts', () => {
   });
 
   it('plays the sound once for a lead that arrives while the tab is open, not again on the next answer', () => {
-    popups.current = { leads: [lead(1)], earlierCount: 0 };
+    popups.current = { leads: [lead(1)], earlierCount: 0, emailReplies: [] };
     const view = render(shell());
-    popups.current = { leads: [lead(2), lead(1)], earlierCount: 0 };
+    popups.current = { leads: [lead(2), lead(1)], earlierCount: 0, emailReplies: [] };
     view.rerender(shell());
     expect(sound).toHaveBeenCalledTimes(1);
-    popups.current = { leads: [lead(2), lead(1)], earlierCount: 0 };
+    popups.current = { leads: [lead(2), lead(1)], earlierCount: 0, emailReplies: [] };
     view.rerender(shell());
     expect(sound).toHaveBeenCalledTimes(1);
     expect(notify).not.toHaveBeenCalled();
   });
 
   it('adds the system notification only when the page is away, and its click opens the deal', () => {
-    popups.current = { leads: [], earlierCount: 0 };
+    popups.current = { leads: [], earlierCount: 0, emailReplies: [] };
     const view = render(shell());
     away.current = true;
-    popups.current = { leads: [lead(3)], earlierCount: 0 };
+    popups.current = { leads: [lead(3)], earlierCount: 0, emailReplies: [] };
     view.rerender(shell());
     expect(notify).toHaveBeenCalledTimes(1);
     const [notified, open] = notify.mock.calls[0] as [NewLeadPopup, () => void];
@@ -174,7 +203,7 @@ describe('NewLeadAlerts', () => {
   });
 
   it('offers the browser notification once, and stops offering after the answer', async () => {
-    popups.current = { leads: [lead(1)], earlierCount: 0 };
+    popups.current = { leads: [lead(1)], earlierCount: 0, emailReplies: [] };
     render(shell());
     fireEvent.click(screen.getByRole('button', { name: /em segundo plano/ }));
     expect(ask).toHaveBeenCalledTimes(1);
@@ -183,7 +212,7 @@ describe('NewLeadAlerts', () => {
   });
 
   it('shows the leads from before as one line, never a pop-up each, and plays nothing', () => {
-    popups.current = { leads: [], earlierCount: 3 };
+    popups.current = { leads: [], earlierCount: 3, emailReplies: [] };
     render(shell());
     expect(screen.queryByRole('article', { name: 'Lead novo' })).toBeNull();
     const line = screen.getByRole('article', { name: 'Leads de antes' });
@@ -195,26 +224,26 @@ describe('NewLeadAlerts', () => {
   });
 
   it('says it in the singular for one lead from before', () => {
-    popups.current = { leads: [], earlierCount: 1 };
+    popups.current = { leads: [], earlierCount: 1, emailReplies: [] };
     render(shell());
     expect(screen.getByText('1 lead chegou antes e ainda espera o primeiro contato.')).toBeTruthy();
   });
 
   it('puts the line off for the day, and brings it back only when more pile up', () => {
-    popups.current = { leads: [], earlierCount: 3 };
+    popups.current = { leads: [], earlierCount: 3, emailReplies: [] };
     const { rerender } = render(shell());
     fireEvent.click(screen.getByRole('button', { name: 'Depois' }));
     expect(screen.queryByRole('article', { name: 'Leads de antes' })).toBeNull();
     expect(earlierHidden.current).toBe(3);
     rerender(shell());
     expect(screen.queryByRole('article', { name: 'Leads de antes' })).toBeNull();
-    popups.current = { leads: [], earlierCount: 5 };
+    popups.current = { leads: [], earlierCount: 5, emailReplies: [] };
     rerender(shell());
     expect(screen.getByRole('article', { name: 'Leads de antes' })).toBeTruthy();
   });
 
   it('opens the notices from the line and puts it off', () => {
-    popups.current = { leads: [lead(1)], earlierCount: 2 };
+    popups.current = { leads: [lead(1)], earlierCount: 2, emailReplies: [] };
     render(shell());
     expect(screen.getByRole('article', { name: 'Lead novo' })).toBeTruthy();
     fireEvent.click(screen.getByRole('link', { name: 'Ver avisos' }));

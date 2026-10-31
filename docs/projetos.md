@@ -50,7 +50,7 @@ e a observação ficam nas tabelas do projeto, nunca nos metadados da auditoria.
 - Mudar para o status em que já está responde 409 `same_status`.
 - **Cliente desativado** mantém o projeto como está e sai do quadro; o filtro
   "Mostrar clientes inativos" (`?inactive=true`) traz de volta.
-  Administração → Clientes mostra todos.
+  Formatação → Clientes mostra todos.
 
 ## Permissões
 
@@ -72,7 +72,7 @@ da transação, com a linha do projeto travada.
 
 ## API
 
-Uma só, para o quadro, a etiqueta no Drive, Administração → Clientes e, depois,
+Uma só, para o quadro, a etiqueta no Drive, Formatação → Clientes e, depois,
 o Portal do Cliente:
 
 | Rota                                      | Quem                       | Faz                                                             |
@@ -96,7 +96,7 @@ pediu. Schemas e enums em `packages/shared/src/projects.ts`.
   verde concluída, vermelho bloqueada; borda laranja na etapa atual.
 - **Drive**: a pasta do cliente e as 01–08 mostram a etiqueta de status e a
   etapa atual; numa 01–08, também o andamento daquela etapa. Só leitura.
-- **Administração → Clientes**: coluna "Projeto" com status e etapa atual; o
+- **Formatação → Clientes**: coluna "Projeto" com status e etapa atual; o
   status abre a mesma janela do quadro.
 
 ## Staging

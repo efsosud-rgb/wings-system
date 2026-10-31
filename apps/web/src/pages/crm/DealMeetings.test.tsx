@@ -54,6 +54,7 @@ const { state, calls, mutation } = vi.hoisted(() => {
         scopes: [],
         calendars: { mine: null, wings: null },
         wingsCalendarConfigured: true,
+        mailRead: 'off',
         lastError: null,
       } as GoogleWorkspaceStatus,
     },

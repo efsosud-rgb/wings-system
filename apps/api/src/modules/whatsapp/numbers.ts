@@ -117,6 +117,7 @@ export type ConnectErrorCode =
   | 'phone_taken'
   | 'phone_locked'
   | 'number_mismatch'
+  | 'number_in_use'
   | 'not_registered'
   | 'not_eligible'
   | 'code_refused'
@@ -342,7 +343,7 @@ async function connectReserved(
     where: and(eq(waNumbers.phoneNumberId, number.id), ne(waNumbers.id, registered.id)),
     columns: { id: true },
   });
-  if (elsewhere) throw new ConnectError('number_mismatch');
+  if (elsewhere) throw new ConnectError('number_in_use');
   const owned = await readWabaOwner(deps.fetchImpl, token, input.wabaId);
 
   const now = deps.now();
