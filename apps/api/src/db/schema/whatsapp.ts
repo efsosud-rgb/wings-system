@@ -411,6 +411,26 @@ export const waConversationReads = pgTable(
 );
 
 /**
+ * One recorded voice note sent once (t084 review): the screen makes a key per recording, and a
+ * second click or a new try after the network dropped the answer finds this row, gets the
+ * message that went (`messageId`), or waits for it; never a second audio. A claim with no message
+ * is removed when the send was refused, so the same recording may be tried again.
+ */
+export const waVoiceSends = pgTable(
+  'wa_voice_sends',
+  {
+    tenantId: tenantId(),
+    employeeId: uuid('employee_id')
+      .notNull()
+      .references(() => employees.id),
+    key: uuid('key').notNull(),
+    messageId: uuid('message_id').references(() => waMessages.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.employeeId, table.key] })],
+);
+
+/**
  * Every webhook call Meta made, as it came (it carries phones and texts):
  * stored before the 200, processed by the queue (`whatsapp/intake.ts`), the
  * payload cleared after 90 days.

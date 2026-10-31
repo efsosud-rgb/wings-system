@@ -53,6 +53,7 @@ import {
   waNumberTemplates,
   waNumbers,
   waTemplates,
+  waVoiceSends,
 } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { createSecretBox } from '../../lib/secret-box.js';
@@ -87,8 +88,10 @@ import {
   textPayload,
   callPermissionPayload,
   readCallPermission,
+  uploadWhatsAppMedia,
   whatsappConfigOf,
   type OutgoingPayload,
+  type WhatsAppConfig,
 } from './graph.js';
 import { deliverWhatsApp, type Contact } from './outbox.js';
 import {
@@ -817,7 +820,7 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     | { kind: 'text'; text: string }
     | { kind: 'media'; fileId: string; caption: string }
     /** A recording made in the conversation: converted, kept in the deal's files, sent as voice. */
-    | { kind: 'voice'; recording: Buffer }
+    | { kind: 'voice'; recording: Buffer; key: string }
     | { kind: 'call_permission' }
     | {
         kind: 'template';
@@ -842,16 +845,18 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
   } as const;
 
   /**
-   * A recording turned into a voice note and kept in the deal's files, the way a file the person
-   * attaches gets there: only by who may edit the deal (`leads.write` in scope, the upload route's
-   * rule). Nothing is kept when the recording is refused.
+   * A recording turned into a voice note, up to Meta, and only then kept in the deal's files, the
+   * way a file the person attaches gets there: only by who may edit the deal (`leads.write` in
+   * scope, the upload route's rule). Nothing is kept when the recording is refused or Meta does
+   * not take it, so a new click keeps one audio, not two.
    */
   async function keepVoice(
     request: FastifyRequest,
     leadId: string,
     recording: Buffer,
+    config: WhatsAppConfig,
   ): Promise<
-    | { ok: true; fileId: string; seconds: number }
+    | { ok: true; fileId: string; seconds: number; mediaId: string }
     | { ok: false; status: number; body: { error: string; message: string } }
   > {
     const actor = request.session.actor;
@@ -875,12 +880,29 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       const [status, message] = VOICE_REFUSALS[note.why];
       return { ok: false, status, body: { error: `voice_${note.why}`, message } };
     }
+    const name = voiceFileName(now());
+    const up = await uploadWhatsAppMedia(fetchImpl(), config, {
+      bytes: note.bytes,
+      mimeType: 'audio/ogg',
+      filename: name,
+    });
+    if (!up.ok) {
+      const why = errorText(up.code, null);
+      return {
+        ok: false,
+        status: 502,
+        body: {
+          error: 'media_upload_failed',
+          message: `O áudio não subiu para a Meta${why ? ` (${why})` : ''}. Nada foi enviado nem guardado; tente de novo em instantes.`,
+        },
+      };
+    }
     try {
       const file = await storeLeadFile(
         { ...artDeps(), maxFileBytes: env.DRIVE_MAX_FILE_BYTES },
         access,
         lead,
-        { name: voiceFileName(now()), mimeType: 'audio/ogg', bytes: note.bytes },
+        { name, mimeType: 'audio/ogg', bytes: note.bytes },
       );
       await writeAudit(db, {
         actorEmployeeId: actor.employeeId,
@@ -890,7 +912,7 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
         ip: request.ip,
         metadata: { fileId: file.fileId, voice: true },
       });
-      return { ok: true, fileId: file.fileId, seconds: note.seconds };
+      return { ok: true, fileId: file.fileId, seconds: note.seconds, mediaId: up.data.id };
     } catch (error) {
       if (!(error instanceof DriveError)) throw error;
       return {
@@ -1060,10 +1082,10 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       // The file goes up to the deal's files first: a conversation no deal took yet has none.
       if (!target.leadId)
         return reply.status(422).send({ error: 'no_deal', message: NO_DEAL_FOR_FILES });
-      // A recording becomes one of the deal's files here, then goes like any other.
+      // A recording goes up to Meta and becomes one of the deal's files here, then goes like any other.
       const kept =
         outgoing.kind === 'voice'
-          ? await keepVoice(request, target.leadId, outgoing.recording)
+          ? await keepVoice(request, target.leadId, outgoing.recording, config)
           : null;
       if (kept && !kept.ok) return reply.status(kept.status).send(kept.body);
       const fileId = outgoing.kind === 'media' ? outgoing.fileId : kept!.fileId;
@@ -1104,10 +1126,12 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
         offBrand(caption) ??
         offBrand(file.name, 'o nome do arquivo cita a Wings; envie com outro nome');
       if (refused) return refused;
-      const media = await driveFileMediaId({ ...artDeps(), fetchImpl: fetchImpl(), config }, file, {
-        mimeType: goes.type,
-        filename: file.name,
-      });
+      const media = kept
+        ? { ok: true as const, mediaId: kept.mediaId }
+        : await driveFileMediaId({ ...artDeps(), fetchImpl: fetchImpl(), config }, file, {
+            mimeType: goes.type,
+            filename: file.name,
+          });
       if (!media.ok) {
         // On the upload, Meta's 100 is the file itself: a type or size WhatsApp does not take.
         const why =
@@ -1134,7 +1158,9 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       content = {
         media: { id: media.mediaId, mimeType: file.mimeType, filename: file.name },
         file: { fileId: file.id, version: file.version },
-        ...(kept ? { voice: { seconds: kept.seconds } } : {}),
+        ...(kept && outgoing.kind === 'voice'
+          ? { voice: { seconds: kept.seconds, key: outgoing.key } }
+          : {}),
       };
     } else {
       // Who asked not to receive messages gets no template, not even as a common message, by any
@@ -1291,6 +1317,17 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     });
     if (delivered instanceof CallRequestLimited) return callLimitReply(reply, delivered.why);
     const saved = delivered.row;
+    // The recording's key now answers with this message: a second try gets it, not a second audio.
+    if (outgoing.kind === 'voice')
+      await db
+        .update(waVoiceSends)
+        .set({ messageId: saved.id })
+        .where(
+          and(
+            eq(waVoiceSends.employeeId, request.session.actor.employeeId),
+            eq(waVoiceSends.key, outgoing.key),
+          ),
+        );
     const outcome = delivered.outcome;
     // Meta said the file behind the id is gone: the next send uploads it again (this one stays failed).
     const sentMediaId = planned?.mediaId ?? sentFile?.mediaId;
@@ -1355,16 +1392,78 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
 
   type Refusal = { status: number; error: string; message: string };
 
-  const voiceOf = (request: FastifyRequest): Outgoing | Refusal =>
-    waVoiceRecordingType(request.headers['content-type']) && Buffer.isBuffer(request.body)
-      ? request.body.length > 0
-        ? { kind: 'voice', recording: request.body }
-        : { status: 400, error: 'invalid', message: 'A gravação chegou vazia. Grave de novo.' }
-      : {
-          status: 415,
-          error: 'unsupported_audio',
-          message: 'Formato de gravação que o sistema não lê (aceita WebM, OGG e MP4 de áudio).',
-        };
+  /** The screen's key for one recording (`Idempotency-Key`): the same recording goes once. */
+  const voiceKey = z.uuid();
+
+  const voiceOf = (request: FastifyRequest): Outgoing | Refusal => {
+    if (!waVoiceRecordingType(request.headers['content-type']) || !Buffer.isBuffer(request.body))
+      return {
+        status: 415,
+        error: 'unsupported_audio',
+        message: 'Formato de gravação que o sistema não lê (aceita WebM, OGG e MP4 de áudio).',
+      };
+    if (request.body.length === 0)
+      return { status: 400, error: 'invalid', message: 'A gravação chegou vazia. Grave de novo.' };
+    const key = voiceKey.safeParse(request.headers['idempotency-key']);
+    if (!key.success)
+      return {
+        status: 400,
+        error: 'voice_key_missing',
+        message: 'Atualize a página e envie de novo: a gravação chegou sem a sua identificação.',
+      };
+    return { kind: 'voice', recording: request.body, key: key.data };
+  };
+
+  /**
+   * A recording goes once by its key: the first request claims it (the row's primary key decides
+   * between two at once), a later one gets the message that went, or hears that it is still
+   * going. A claim that sent nothing is removed, so the same recording may be tried again; one
+   * left by a crash is taken over after 5 minutes.
+   */
+  async function sendVoiceOnce(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    target: Parameters<typeof send>[2],
+    outgoing: Extract<Outgoing, { kind: 'voice' }>,
+  ) {
+    const mine = and(
+      eq(waVoiceSends.employeeId, request.session.actor.employeeId),
+      eq(waVoiceSends.key, outgoing.key),
+    );
+    const [claimed] = await db
+      .insert(waVoiceSends)
+      .values({ employeeId: request.session.actor.employeeId, key: outgoing.key })
+      .onConflictDoUpdate({
+        target: [waVoiceSends.employeeId, waVoiceSends.key],
+        set: { createdAt: sql`now()` },
+        setWhere: and(
+          isNull(waVoiceSends.messageId),
+          sql`${waVoiceSends.createdAt} < now() - interval '5 minutes'`,
+        ),
+      })
+      .returning();
+    if (!claimed) {
+      const [earlier] = await db
+        .select({ message: waMessages })
+        .from(waVoiceSends)
+        .innerJoin(waMessages, eq(waMessages.id, waVoiceSends.messageId))
+        .where(mine);
+      if (!earlier)
+        return reply.status(409).send({
+          error: 'voice_in_progress',
+          message: 'Este áudio já está sendo enviado. Espere um instante antes de tentar de novo.',
+        });
+      const authors = await authorsOf(db, [earlier.message]);
+      return reply.status(200).send({ message: toMessage(earlier.message, authors) });
+    }
+    try {
+      await send(request, reply, target, outgoing);
+    } finally {
+      // Refused (or failed) before any message was written: nothing went, the key is free again.
+      await db.delete(waVoiceSends).where(and(mine, isNull(waVoiceSends.messageId)));
+    }
+    return reply;
+  }
 
   const outgoingOf = (kind: 'text' | 'template' | 'media', body: unknown): Outgoing | string => {
     if (kind === 'text') {
@@ -1412,7 +1511,10 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
           .status(422)
           .send({ error: 'no_phone', message: 'A negociação não tem telefone.' });
       const contact = await contactOfPhone(db, lead.phone);
-      return send(request, reply, { leadId: lead.id, phone: lead.phone, contact }, outgoing);
+      const target = { leadId: lead.id, phone: lead.phone, contact };
+      return outgoing.kind === 'voice'
+        ? sendVoiceOnce(request, reply, target, outgoing)
+        : send(request, reply, target, outgoing);
     });
 
     app.post(`/whatsapp/conversations/:id/${kind}`, use, async (request, reply) => {
@@ -1427,18 +1529,16 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
         return reply
           .status(outgoing.status)
           .send({ error: outgoing.error, message: outgoing.message });
-      return send(
-        request,
-        reply,
-        {
-          leadId: found.conversation.leadId,
-          phone: found.contact.phone,
-          contact: found.contact,
-          conversationId: found.conversation.id,
-          numberId: found.conversation.numberId,
-        },
-        outgoing,
-      );
+      const target = {
+        leadId: found.conversation.leadId,
+        phone: found.contact.phone,
+        contact: found.contact,
+        conversationId: found.conversation.id,
+        numberId: found.conversation.numberId,
+      };
+      return outgoing.kind === 'voice'
+        ? sendVoiceOnce(request, reply, target, outgoing)
+        : send(request, reply, target, outgoing);
     });
   }
 
