@@ -1,7 +1,14 @@
+import { randomUUID } from 'node:crypto';
 import { WA_VOICE_MAX_SECONDS, WA_VOICE_UPLOAD_MAX_BYTES, type WaMessage } from '@wings/shared';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { auditLog, leadEvents, leadFiles, waMessages } from '../../db/schema/index.js';
+import {
+  auditLog,
+  leadEvents,
+  leadFiles,
+  waMessages,
+  waVoiceSends,
+} from '../../db/schema/index.js';
 import { setOfficialLive } from '../../test/factories.js';
 import { recordContactOptOut } from '../leads/contact-block.js';
 import {
@@ -15,9 +22,11 @@ import {
   seller,
   sends,
   sessionFor,
+  setNextUpload,
   startMediaSend,
   stopMediaSend,
   uploads,
+  json as metaAnswer,
   type Session,
 } from './media-send-fixtures.js';
 import { fakeRecording } from './voice-fixtures.js';
@@ -41,12 +50,19 @@ beforeAll(async () => {
 afterAll(stopMediaSend);
 beforeEach(resetMediaSend);
 
-const record = (session: Session, leadId: string, body: Buffer, type = 'audio/webm;codecs=opus') =>
+/** The screen's key goes with every recording; the same key is the same recording sent again. */
+const record = (
+  session: Session,
+  leadId: string,
+  body: Buffer,
+  type = 'audio/webm;codecs=opus',
+  key: string = randomUUID(),
+) =>
   app.inject({
     method: 'POST',
     url: `/leads/${leadId}/whatsapp/voice`,
     cookies: session.cookies,
-    headers: { 'content-type': type },
+    headers: { 'content-type': type, 'idempotency-key': key },
     payload: body,
   });
 
@@ -214,5 +230,77 @@ describe('what is refused, with nothing kept and nothing sent', () => {
     expect(reader.json()).toMatchObject({ error: 'files_forbidden' });
     expect(await filesOf(other.leadId)).toHaveLength(0);
     expect(sends).toHaveLength(1);
+  });
+});
+
+describe('one recording, one audio (review of t084)', () => {
+  it('a second try with the same key gets the message that went, not a second audio', async () => {
+    const { leadId } = await sellerDeal();
+    const key = randomUUID();
+    const first = await record(seller, leadId, recording, undefined, key);
+    expect(first.statusCode).toBe(201);
+    // The answer was lost on the way (a network error): the screen sends the same recording again.
+    const again = await record(seller, leadId, recording, undefined, key);
+    expect(again.statusCode).toBe(200);
+    expect(again.json<{ message: WaMessage }>().message.id).toBe(
+      first.json<{ message: WaMessage }>().message.id,
+    );
+    expect(sends).toHaveLength(1);
+    expect(uploads).toHaveLength(1);
+    expect(await filesOf(leadId)).toHaveLength(1);
+  });
+
+  it('two clicks at the same moment send one audio and keep one file', async () => {
+    const { leadId } = await sellerDeal();
+    const key = randomUUID();
+    const both = await Promise.all([
+      record(seller, leadId, recording, undefined, key),
+      record(seller, leadId, recording, undefined, key),
+    ]);
+    const codes = both.map((r) => r.statusCode).sort();
+    // The second one either waits for nothing (still going) or finds the message that went.
+    expect(codes[0] === 200 || codes[0] === 201).toBe(true);
+    expect([201, 409]).toContain(codes[1]);
+    expect(codes.filter((c) => c === 201)).toHaveLength(1);
+    expect(sends).toHaveLength(1);
+    expect(uploads).toHaveLength(1);
+    expect(await filesOf(leadId)).toHaveLength(1);
+  });
+
+  it('keeps nothing when Meta does not take the upload, and a new click keeps one audio', async () => {
+    const { leadId } = await sellerDeal();
+    const key = randomUUID();
+    setNextUpload(() =>
+      metaAnswer({ error: { code: 131053, message: 'Media upload error' } }, 400),
+    );
+    const failed = await record(seller, leadId, recording, undefined, key);
+    expect(failed.statusCode).toBe(502);
+    expect(failed.json()).toMatchObject({ error: 'media_upload_failed' });
+    expect(failed.json().message).toContain('Nada foi enviado nem guardado');
+    expect(await filesOf(leadId)).toHaveLength(0);
+    expect(sends).toHaveLength(0);
+    expect(await db.select().from(waVoiceSends).where(eq(waVoiceSends.key, key))).toHaveLength(0);
+    // The same recording again, once Meta takes it: one file, one audio.
+    setNextUpload(() => null);
+    const sent = await record(seller, leadId, recording, undefined, key);
+    expect(sent.statusCode).toBe(201);
+    expect(await filesOf(leadId)).toHaveLength(1);
+    expect(sends).toHaveLength(1);
+  });
+
+  it('refuses a recording without the key, with nothing kept and nothing sent', async () => {
+    const { leadId } = await sellerDeal();
+    const res = await app.inject({
+      method: 'POST',
+      url: `/leads/${leadId}/whatsapp/voice`,
+      cookies: seller.cookies,
+      headers: { 'content-type': 'audio/webm;codecs=opus' },
+      payload: recording,
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: 'voice_key_missing' });
+    expect(await filesOf(leadId)).toHaveLength(0);
+    expect(uploads).toHaveLength(0);
+    expect(sends).toHaveLength(0);
   });
 });

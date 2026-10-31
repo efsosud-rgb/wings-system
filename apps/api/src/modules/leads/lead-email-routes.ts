@@ -214,14 +214,17 @@ export const leadEmailRoutes: FastifyPluginAsync = async (app) => {
     const to = body.to.trim().toLowerCase();
     if (!(await dealAddressesOf(db, lead)).some((a) => a.email === to))
       return { ok: false as const, reason: 'not_a_contact' as const };
-    if (
-      body.templateId &&
-      !(await db.query.crmEmailTemplates.findFirst({
-        where: eq(crmEmailTemplates.id, body.templateId),
-        columns: { id: true },
-      }))
-    )
+    // Started from a template: the same as sending it as it is, a switched-off one does not go.
+    const template = body.templateId
+      ? await db.query.crmEmailTemplates.findFirst({
+          where: eq(crmEmailTemplates.id, body.templateId),
+          columns: { active: true },
+        })
+      : null;
+    if (body.templateId && !template)
       return { ok: false as const, reason: 'template_gone' as const };
+    if (template && !template.active)
+      return { ok: false as const, reason: 'template_off' as const };
     const files = await attachmentsFor(
       driveDeps,
       dealRouteAccessOf(request.session.actor),
@@ -259,11 +262,17 @@ export const leadEmailRoutes: FastifyPluginAsync = async (app) => {
   app.post('/leads/:id/emails', write, async (request, reply) => {
     const params = idParam.safeParse(request.params);
     const raw = typeof request.body === 'object' && request.body !== null ? request.body : {};
+    // Attachments and answers go only in a written e-mail; a bare template would drop them unseen.
     const body =
-      'to' in raw || 'subject' in raw || 'text' in raw
+      'to' in raw || 'subject' in raw || 'text' in raw || 'fileIds' in raw || 'replyToId' in raw
         ? leadEmailComposeSchema.safeParse(raw)
         : bodySchema.safeParse(raw);
     if (!params.success) return reply.status(400).send(invalid);
+    if (!('to' in raw) && ('fileIds' in raw || 'replyToId' in raw))
+      return reply.status(400).send({
+        ...invalid,
+        message: 'Anexo e resposta só vão no e-mail escrito: preencha Para, Assunto e Texto.',
+      });
     if (!body.success)
       return reply
         .status(400)

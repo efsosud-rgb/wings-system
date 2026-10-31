@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { leadFiles, waConversations } from '../../db/schema/index.js';
@@ -42,7 +43,7 @@ const record = (conversationId: string) =>
     method: 'POST',
     url: `/whatsapp/conversations/${conversationId}/voice`,
     cookies: owner.cookies,
-    headers: { 'content-type': 'audio/webm;codecs=opus' },
+    headers: { 'content-type': 'audio/webm;codecs=opus', 'idempotency-key': randomUUID() },
     payload: recording,
   });
 

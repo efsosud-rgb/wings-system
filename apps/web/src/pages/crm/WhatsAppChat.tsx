@@ -734,7 +734,10 @@ function TextCompose({
           }}
           onSend={() => {
             if (voice.state.step !== 'recorded' || sendVoice.isPending) return;
-            sendVoice.mutate(voice.state.blob, { onSuccess: () => voice.discard() });
+            sendVoice.mutate(
+              { recording: voice.state.blob, key: voice.state.key },
+              { onSuccess: () => voice.discard() },
+            );
           }}
         />
       ) : (

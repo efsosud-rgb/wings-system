@@ -156,6 +156,27 @@ describe('LeadEmailTab', () => {
     expect(form().queryByRole('list', { name: 'Anexos' })).toBeNull();
   });
 
+  it('takes no 11th attachment, from the deal’s files or the computer, and says why', async () => {
+    state.files = Array.from({ length: 11 }, (_, i) =>
+      fileOf({ fileId: `f${i + 1}`, name: `doc${i + 1}.pdf`, byteSize: 1024 }),
+    );
+    render(<LeadEmailTab leadId="l1" />);
+    const pick = form().getByLabelText('Anexar dos Arquivos da negociação');
+    for (let i = 1; i <= 11; i++) fireEvent.change(pick, { target: { value: `f${i}` } });
+    const list = form().getByRole('list', { name: 'Anexos' });
+    expect(within(list).getAllByRole('listitem')).toHaveLength(10);
+    expect(list.textContent).not.toContain('doc11.pdf');
+    expect(screen.getByText(/Um e-mail leva até 10 anexos/)).toBeTruthy();
+    expect(screen.getByText(/10 de 10 anexos/)).toBeTruthy();
+    // From the computer neither: refused before it is stored in the deal's files.
+    fireEvent.change(form().getByLabelText('Anexar do computador'), {
+      target: { files: [new File(['%PDF-1.4'], 'extra.pdf', { type: 'application/pdf' })] },
+    });
+    await waitFor(() => expect(screen.getByText(/Um e-mail leva até 10 anexos/)).toBeTruthy());
+    expect(state.upload).not.toHaveBeenCalled();
+    expect(within(list).getAllByRole('listitem')).toHaveLength(10);
+  });
+
   it('starts from a template: its text fills the fields, which stay editable', () => {
     state.preview = vi.fn((_id: string, options: { onSuccess: (f: object) => void }) =>
       options.onSuccess({ subject: 'Olá, Paula', body: 'Oi Paula.' }),

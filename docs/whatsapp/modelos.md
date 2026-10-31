@@ -55,7 +55,10 @@ campo estava fixo no código (`WA_TEMPLATE_FIELDS`, `packages/shared/src/whatsap
     vendedor para "Usar modelo" na conversa, onde dá para preencher.
 - **Limite da Meta:** 1 pedido por dia e 2 por semana por pessoa. O sistema conta os pedidos que saíram para o
   contato (livres ou por modelo; um que falhou não conta) e recusa o próximo com 429 `call_request_limit`, antes
-  de qualquer chamada à Meta. Atalho: a Meta zera a contagem depois de uma ligação atendida, e o sistema não.
+  de qualquer chamada à Meta. A contagem é refeita na mesma transação que grava o pedido, com uma trava
+  consultiva do Postgres por contato (`lockCallRequests`): dois cliques ao mesmo tempo, ou um clique e o pedido
+  automático do "Prefiro uma ligação", não passam os dois. Atalho: a Meta zera a contagem depois de uma ligação
+  atendida, e o sistema não.
 - **"Não me contate"** e o SAIR valem para o pedido por modelo como para qualquer modelo: recusa antes da Meta.
 - **Não verificado ao vivo:** o envio dos dois modelos segue a documentação da Meta (um modelo comum, só com os
   campos do corpo); nenhum foi aprovado nem enviado ainda.

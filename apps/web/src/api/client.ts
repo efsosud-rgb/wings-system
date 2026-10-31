@@ -94,11 +94,11 @@ export const api = {
   post: <T>(path: string, payload?: unknown) =>
     request<T>(path, { method: 'POST', body: payload ? JSON.stringify(payload) : undefined }),
   /** Sends a file as the raw request body, typed as the file says it is. */
-  upload: <T>(path: string, file: Blob) =>
+  upload: <T>(path: string, file: Blob, headers: Record<string, string> = {}) =>
     request<T>(path, {
       method: 'POST',
       body: file,
-      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      headers: { 'Content-Type': file.type || 'application/octet-stream', ...headers },
     }),
   put: <T>(path: string, payload: unknown) =>
     request<T>(path, { method: 'PUT', body: JSON.stringify(payload) }),

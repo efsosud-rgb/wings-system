@@ -13,7 +13,8 @@ export type VoiceState =
   | { step: 'idle' }
   | { step: 'asking' }
   | { step: 'recording'; seconds: number }
-  | { step: 'recorded'; blob: Blob; url: string; seconds: number };
+  /** `key` names this recording to the API: sent again, it is the same audio, not a second one. */
+  | { step: 'recorded'; blob: Blob; url: string; seconds: number; key: string };
 
 /** What each browser records in, best first: WebM (Chrome, Edge), OGG (Firefox), MP4 (Safari). */
 const RECORDING_TYPES = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4'];
@@ -96,7 +97,13 @@ export function useVoiceRecorder() {
       if (discard || !mounted.current) return setState({ step: 'idle' });
       const blob = new Blob(chunks, { type: recorder.mimeType || type || 'audio/webm' });
       url.current = URL.createObjectURL(blob);
-      setState({ step: 'recorded', blob, url: url.current, seconds: Math.max(1, elapsed()) });
+      setState({
+        step: 'recorded',
+        blob,
+        url: url.current,
+        seconds: Math.max(1, elapsed()),
+        key: crypto.randomUUID(),
+      });
     };
     live.current = {
       stop,

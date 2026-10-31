@@ -2,6 +2,8 @@ import type { WaMessageKind } from '@wings/shared';
 import { eq } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { waContacts, waConversations, waMessages } from '../../db/schema/index.js';
+import type { Executor } from '../leads/crm.js';
+import { lockCallRequests } from './call-request-limit.js';
 import {
   sendWhatsAppMessage,
   UNKNOWN_OUTCOME,
@@ -52,21 +54,30 @@ export async function deliverWhatsApp(
   delivery: Delivery,
 ): Promise<Delivered> {
   const { contact, at } = delivery;
-  const [row] = await db
-    .insert(waMessages)
-    .values({
-      conversationId: delivery.conversationId,
-      contactId: contact.id,
-      leadId: delivery.leadId,
-      direction: 'out',
-      author: delivery.author,
-      employeeId: delivery.employeeId,
-      kind: delivery.kind,
-      text: delivery.shown,
-      content: delivery.content,
-      status: 'pending',
-    })
-    .returning();
+  const write = (ex: Executor) =>
+    ex
+      .insert(waMessages)
+      .values({
+        conversationId: delivery.conversationId,
+        contactId: contact.id,
+        leadId: delivery.leadId,
+        direction: 'out',
+        author: delivery.author,
+        employeeId: delivery.employeeId,
+        kind: delivery.kind,
+        text: delivery.shown,
+        content: delivery.content,
+        status: 'pending',
+      })
+      .returning();
+  // A call-permission request is counted and written under the person's lock (Meta's limit).
+  const [row] =
+    delivery.content.callPermissionRequest === true
+      ? await db.transaction(async (tx) => {
+          await lockCallRequests(tx, contact.id);
+          return write(tx);
+        })
+      : await write(db);
 
   const result = await sendWhatsAppMessage(
     fetchImpl,

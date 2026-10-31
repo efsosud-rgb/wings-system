@@ -19,6 +19,7 @@ import {
   contactOptOuts,
   crmContacts,
   crmEmailOutbox,
+  crmEmailTemplates,
   driveFiles,
   leadContacts,
   leadEvents,
@@ -28,6 +29,7 @@ import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
 import { fakeGoogle } from '../google-workspace/fake-google.js';
+import { recordContactOptOut } from './contact-block.js';
 import { upsertLead } from './service.js';
 
 let harness: TestDatabase;
@@ -346,6 +348,79 @@ describe('free-text e-mail from the deal', () => {
       channel: 'email',
       path: 'email_manual',
     });
+  });
+
+  it('refuses another contact whose "não me contate" on every channel was recorded by phone only', async () => {
+    const lead = await arrive(seller.id);
+    const [contact] = await db
+      .insert(crmContacts)
+      .values({
+        name: 'Sócio Bloqueado',
+        email: `socio-tel${seq}@exemplo.com.br`,
+        phone: '5521977400001',
+      })
+      .returning();
+    await db.insert(leadContacts).values({ leadId: lead.id, contactId: contact!.id });
+    // Registered by the contact's phone alone: the e-mail address itself has no entry.
+    await recordContactOptOut(db, {
+      phone: contact!.phone,
+      channels: ['all'],
+      origin: 'crm',
+      reason: null,
+      createdBy: seller.id,
+    });
+    const refused = await compose(gmailApp, seller, lead.id, { to: contact!.email });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({ error: 'contact_blocked' });
+    expect(google.sentMail).toHaveLength(0);
+    expect(await db.$count(crmEmailOutbox, eq(crmEmailOutbox.leadId, lead.id))).toBe(0);
+    // The deal's own address, a person with no "não me contate", still goes.
+    expect((await compose(gmailApp, seller, lead.id, { to: lead.email })).statusCode).toBe(201);
+  });
+
+  it('refuses a written e-mail started from a switched-off template, as the template alone', async () => {
+    const lead = await arrive(seller.id);
+    const [template] = await db
+      .insert(crmEmailTemplates)
+      .values({ name: `Desativado ${seq}`, subject: 'Olá', body: 'Oi', active: false })
+      .returning();
+    const refused = await compose(gmailApp, seller, lead.id, {
+      to: lead.email,
+      templateId: template!.id,
+    });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({ error: 'template_off' });
+    const alone = await gmailApp.inject({
+      method: 'POST',
+      url: `/leads/${lead.id}/emails`,
+      cookies: seller.cookies,
+      payload: { templateId: template!.id },
+    });
+    expect(alone.json()).toMatchObject({ error: 'template_off' });
+    expect(google.sentMail).toHaveLength(0);
+    expect(await db.$count(crmEmailOutbox, eq(crmEmailOutbox.leadId, lead.id))).toBe(0);
+  });
+
+  it('refuses a template with attachments but no "Para", instead of dropping the files', async () => {
+    const lead = await arrive(seller.id);
+    const [template] = await db
+      .insert(crmEmailTemplates)
+      .values({ name: `Com anexo ${seq}`, subject: 'Olá', body: 'Oi' })
+      .returning();
+    const fileId = await dealFile(seller, lead.id, 'proposta.pdf', PDF);
+    const refused = await gmailApp.inject({
+      method: 'POST',
+      url: `/leads/${lead.id}/emails`,
+      cookies: seller.cookies,
+      payload: { templateId: template!.id, fileIds: [fileId] },
+    });
+    expect(refused.statusCode).toBe(400);
+    expect(refused.json()).toMatchObject({
+      error: 'invalid_request',
+      message: expect.stringContaining('Anexo e resposta só vão no e-mail escrito'),
+    });
+    expect(google.sentMail).toHaveLength(0);
+    expect(await db.$count(crmEmailOutbox, eq(crmEmailOutbox.leadId, lead.id))).toBe(0);
   });
 
   it('in test mode sends nothing and records the message with the attachments’ names', async () => {
