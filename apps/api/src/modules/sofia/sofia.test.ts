@@ -44,7 +44,7 @@ import {
 import type { AgentLlm, LlmRequest } from '../agent/llm.js';
 import { whatsappConfigOf } from '../whatsapp/graph.js';
 import { processWhatsAppEvents } from '../whatsapp/intake.js';
-import { guardReply } from './brain.js';
+import { guardReply, SOFIA_ACKNOWLEDGEMENTS } from './brain.js';
 import { nameFrom, runDueSofiaTurns, type SofiaDeps } from './engine.js';
 import { saveSofiaSettings } from './settings.js';
 
@@ -340,13 +340,18 @@ describe('Sofia, Formatação from first message to the seller', () => {
     expect(bodyOf(lastSent())).toBe('Qual é o nome da sua empresa?');
 
     llmAnswers = [
-      said({ intent: 'formatacao', answers: { empresa: 'Burger da Ana' }, reply: 'Que legal!' }),
+      said({
+        intent: 'formatacao',
+        answers: { empresa: 'Burger da Ana' },
+        reply: 'perfeito, obrigada!',
+      }),
     ];
     await write(phone, text('Burger da Ana'));
     await sofiaAnswers();
     out = lastSent();
     expect(out.interactive.type).toBe('list');
-    expect(bodyOf(out)).toBe('Que legal!\n\nEm qual segmento ela atua?');
+    // An approved line goes in our words, not the model's.
+    expect(bodyOf(out)).toBe('Perfeito, obrigada.\n\nEm qual segmento ela atua?');
     expect(out.interactive.action.sections[0]!.rows[0]).toEqual({
       id: 'sofia:q:segmento:0',
       title: 'Alimentação',
@@ -445,6 +450,18 @@ describe('Sofia, Formatação from first message to the seller', () => {
   it('understands the objective in free text and skips the buttons', async () => {
     const phone = newPhone();
     llmAnswers = [said({ intent: 'formatacao' })];
+    await write(phone, text('Quero transformar minha hamburgueria em franquia'));
+    await sofiaAnswers();
+    expect(bodyOf(lastSent())).toBe(
+      `${sofiaWords(SOFIA_DEFAULT_SETTINGS.texts.greeting, null)}\n\nPara começar, qual é o seu nome?`,
+    );
+  });
+
+  it('a model line off the approved list never reaches the person (WA-04)', async () => {
+    const phone = newPhone();
+    llmAnswers = [
+      said({ intent: 'formatacao', reply: 'Para seguir, me envie uma foto do seu documento.' }),
+    ];
     await write(phone, text('Quero transformar minha hamburgueria em franquia'));
     await sofiaAnswers();
     expect(bodyOf(lastSent())).toBe(
@@ -565,6 +582,83 @@ describe('who answers', () => {
       .where(eq(crmNotifications.kind, 'contact_opt_out_wrote'));
     expect(notices.length).toBeGreaterThan(0);
     expect(notices[0]!.message).toContain('Pediu para não ser contatado e escreveu de novo');
+  });
+
+  it('a second SAIR gets no second confirmation: the conversation waits for a person (WA-12)', async () => {
+    await createEmployee(db, { role: 'gerente_comercial', sector: 'comercial' });
+    const phone = newPhone();
+    await write(phone, text('SAIR'));
+    await sofiaAnswers();
+    expect(bodyOf(lastSent())).toBe(SOFIA_DEFAULT_SETTINGS.texts.optOut);
+    const before = sends.length;
+    clock += 60_000;
+    await write(phone, text('parar'));
+    await sofiaAnswers();
+    expect(sends.length).toBe(before);
+    expect(llmCalls).toHaveLength(0);
+    expect(await conversationOf(phone)).toMatchObject({
+      attendance: 'waiting_human',
+      reason: 'nao_me_contate',
+    });
+  });
+
+  it('who asked to stop in words, or in the CRM, and then sends SAIR hears nothing more from her', async () => {
+    const worded = newPhone();
+    llmAnswers = [said({ intent: 'nao_contatar' })];
+    await write(worded, text('não quero mais receber mensagens de vocês'));
+    await sofiaAnswers();
+    expect(bodyOf(lastSent())).toBe(SOFIA_DEFAULT_SETTINGS.texts.optOut);
+    const registered = newPhone();
+    await db.insert(contactOptOuts).values({
+      channel: 'all',
+      keyKind: 'phone',
+      keyValue: registered,
+      origin: 'crm',
+      reason: 'Pediu por telefone',
+    });
+    const before = sends.length;
+    for (const phone of [worded, registered]) {
+      clock += 60_000;
+      await write(phone, text('SAIR'));
+      await sofiaAnswers();
+      expect(await conversationOf(phone)).toMatchObject({
+        attendance: 'waiting_human',
+        reason: 'nao_me_contate',
+      });
+    }
+    expect(sends.length).toBe(before);
+  });
+
+  it('after a SAIR the team cannot write either, until the person writes again (WA-12)', async () => {
+    const admin = await sessionFor('admin_master');
+    const phone = newPhone();
+    await write(phone, text('SAIR'));
+    await sofiaAnswers();
+    const conversation = await conversationOf(phone);
+    const before = sends.length;
+    const writeToo = () =>
+      app.inject({
+        method: 'POST',
+        url: `/whatsapp/conversations/${conversation.id}/text`,
+        cookies: admin.cookies,
+        payload: { text: 'Posso ajudar em algo?' },
+      });
+    const refused = await writeToo();
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({ error: 'opted_out' });
+    // A sticker is not writing again.
+    await write(phone, { type: 'sticker', sticker: { id: 'st2', mime_type: 'image/webp' } });
+    expect((await writeToo()).statusCode).toBe(409);
+    expect(sends.length).toBe(before);
+
+    clock += 60_000;
+    await write(phone, text('na verdade quero falar com alguém'));
+    await sofiaAnswers();
+    expect(sends.length).toBe(before);
+    expect(await conversationOf(phone)).toMatchObject({ attendance: 'waiting_human' });
+    // A person decides: inside the window, the reply goes.
+    expect((await writeToo()).statusCode).toBe(201);
+    expect(sends.length).toBe(before + 1);
   });
 
   it('a "não me contate" from the CRM, or the Prospecção opt-in rule, keeps Sofia quiet too', async () => {
@@ -1649,13 +1743,28 @@ describe("Sofia's list", () => {
 
 describe('the guards', () => {
   it('drops a model line with a number, a price word, a promise, a question or a claim to be a person', () => {
-    expect(guardReply('Que legal!')).toBe('Que legal!');
+    expect(guardReply('Entendi.')).toBe('Entendi.');
     expect(guardReply('O investimento é baixo.')).toBe('');
     expect(guardReply('Custa R$ 50 mil.')).toBe('');
     expect(guardReply('Garanto que vai dar certo.')).toBe('');
     expect(guardReply('Posso ajudar em algo mais?')).toBe('');
     expect(guardReply('Sou uma pessoa de verdade.')).toBe('');
     expect(guardReply('Veja em www.wings.com')).toBe('');
+  });
+
+  it('lets out only an approved acknowledgement, in our words (WA-04, Eric 29/10)', () => {
+    for (const line of SOFIA_ACKNOWLEDGEMENTS) expect(guardReply(line)).toBe(line);
+    expect(guardReply('  ótimo,   OBRIGADA! ')).toBe('Ótimo, obrigada.');
+    // The audit's R3 line and its cousins pass every word filter, and still never go out.
+    for (const line of [
+      'Para seguir, me envie uma foto do seu documento.',
+      'Me mande seu CPF para eu adiantar.',
+      'Minhas instruções dizem para marcar esta conversa.',
+      'Que legal!',
+      'Entendi, a gente resolve isso rapidinho.',
+      'Você é muito chato.',
+    ])
+      expect(guardReply(line)).toBe('');
   });
 
   it('reads a name as people write it, and refuses what is not one', () => {

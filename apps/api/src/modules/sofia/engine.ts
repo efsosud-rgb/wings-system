@@ -20,7 +20,20 @@ import {
   type SofiaSettings,
   type WaMessageKind,
 } from '@wings/shared';
-import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNull,
+  lt,
+  lte,
+  notInArray,
+  or,
+  sql,
+} from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   clients,
@@ -283,15 +296,20 @@ class Turn {
       contact.lastInboundAt.getTime() + WA_WINDOW_HOURS * 3_600_000 > this.now.getTime();
     if (!windowOpen || !this.deps.config) return this.toHuman('ia_indisponivel', false);
 
-    // SAIR / PARAR: a fixed rule, no AI, no conversation.
-    if (fresh.some((m) => isOptOut(m.text))) return this.close('nao_contatar', true);
-    // Who asked not to be contacted and writes again is answered by a person, never by Sofia
-    // alone (Eric, 29/10): the register, a SAIR or the Prospecção opt-in rule, as `contactBlock` reads.
-    const block = await contactBlock(db, 'whatsapp', {
-      leadId: this.conversation.leadId,
-      phone: contact.phone,
-    });
+    // SAIR / PARAR: a fixed rule, no AI, no conversation, and its confirmation is her last word.
+    // Who asked not to be contacted and writes again, a second SAIR included, is answered by a
+    // person, never by Sofia alone (Eric, 29/10; WA-12): the register, a SAIR or the Prospecção
+    // opt-in rule, as `contactBlock` reads.
+    const stop = fresh.some((m) => isOptOut(m.text));
+    const block = await contactBlock(
+      db,
+      'whatsapp',
+      { leadId: this.conversation.leadId, phone: contact.phone },
+      // This turn's own SAIR is in the register already; alone, it still gets its confirmation.
+      stop && !(await this.askedToStopBefore()) ? 'whatsapp_palavra' : undefined,
+    );
     if (block.blocked) return this.toOwnerOptedOut();
+    if (stop) return this.close('nao_contatar', true);
 
     // Her state moves only once Meta took the message (staging, 26/10: "qual é o seu nome?" was
     // refused with 131030 and the next "Teste" became the name). A question that never reached
@@ -863,7 +881,35 @@ class Turn {
       entityId: this.conversation.id,
       metadata: { reason, label: SOFIA_CLOSE_LABELS[reason] },
     });
-    if (confirm) await this.send(this.text(this.settings.texts.optOut));
+    if (!confirm) return;
+    const words = this.text(this.settings.texts.optOut);
+    // Marked: a later SAIR knows she already confirmed one (`askedToStopBefore`).
+    await this.send({ ...words, content: { ...words.content, optOut: true } });
+  }
+
+  /** The person had asked to stop before this turn: an earlier SAIR, or her confirmation of one. */
+  private async askedToStopBefore() {
+    const earlier = await this.db
+      .select({ direction: waMessages.direction, text: waMessages.text })
+      .from(waMessages)
+      .where(
+        and(
+          // By the contact's conversations: wa_messages has no index of its own on the contact.
+          inArray(
+            waMessages.conversationId,
+            this.db
+              .select({ id: waConversations.id })
+              .from(waConversations)
+              .where(eq(waConversations.contactId, this.contact.id)),
+          ),
+          notInArray(waMessages.id, this.newIds),
+          or(
+            and(eq(waMessages.direction, 'in'), sql`length(${waMessages.text}) <= 40`),
+            sql`${waMessages.content} ->> 'optOut' = 'true'`,
+          ),
+        ),
+      );
+    return earlier.some((m) => m.direction === 'out' || isOptOut(m.text));
   }
 
   /** Nothing is sent: the deal's owner (or, with no owner, the managers) decides. */

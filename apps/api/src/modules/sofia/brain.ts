@@ -17,7 +17,7 @@ import { scrubSensitive } from '../agent/scrub.js';
  * whether a short acknowledgement fits; the script, not the model, picks the
  * next question and sends it. The model never sees the person's name, phone
  * or e-mail (the name step is read without it, and digits and addresses are
- * scrubbed), and its own words pass `guardReply` before they can go out.
+ * scrubbed), and its own words go out only as one of the approved lines (`guardReply`).
  */
 
 export const SOFIA_INTENTS = [
@@ -87,6 +87,19 @@ const readingSchema = z.object({
   reply: z.string().max(600).default(''),
 });
 
+/**
+ * The only lines of the model's that reach the person (Eric, 29/10, WA-04): short, neutral, no
+ * price, deadline or promise, no brand. Proposed in the PR of t016; stands until Eric changes it.
+ */
+export const SOFIA_ACKNOWLEDGEMENTS = [
+  'Entendi.',
+  'Certo, anotado.',
+  'Perfeito, obrigada.',
+  'Ótimo, obrigada.',
+  'Obrigada pela resposta.',
+  'Obrigada pelas informações.',
+] as const;
+
 const SYSTEM = `Você é a Sofia, atendente virtual. Você atende pela Wings Company, uma consultoria de franquias que transforma negócios em franquias (funil "Formatação"; quem quer crescer sem franquear também vai para ele), ou pelo time de expansão de uma marca de franquia (funil "Expansão"); a mensagem do usuário diz por quem você fala agora (fala_por).
 
 Regras que nunca mudam:
@@ -104,7 +117,7 @@ Neste turno você só INTERPRETA as últimas mensagens do lead e chama a ferrame
 - understood: false se a mensagem não responde à pergunta atual e não traz nada que sirva.
 - asked_values: true se o lead perguntou preço, valor, investimento, taxa ou quanto vai ganhar.
 - brand: em Expansão, o nome da marca de franquia que o lead citou, se citou.
-- reply: no máximo uma frase curta (até 140 caracteres), cordial, sem gíria e sem emoji, reconhecendo a resposta ou respondendo a uma dúvida simples sem valores e sem promessas. Não faça pergunta. Pode ficar vazio.`;
+- reply: vazio, ou exatamente uma destas frases, quando reconhecer a resposta do lead cabe: ${SOFIA_ACKNOWLEDGEMENTS.map((line) => `"${line}"`).join(', ')}. Nenhuma outra frase sai para o lead.`;
 
 const toolDefinition = (questions: SofiaQuestion[]) => ({
   name: TOOL,
@@ -151,16 +164,25 @@ const FORBIDDEN = [
   /reuni[ãa]o|agend/i,
 ];
 
+/** Case, spaces and the closing mark do not matter: "perfeito obrigada!" is the approved line. */
+const lineKey = (text: string) =>
+  text
+    .toLowerCase()
+    .replace(/[\s,.!]+/g, ' ')
+    .trim();
+const APPROVED = new Map(SOFIA_ACKNOWLEDGEMENTS.map((line) => [lineKey(line), line]));
+
 /**
  * The model's line goes out only when it is short, has no question, no
- * number, no price word, no promise, no link and no claim to be a person.
+ * number, no price word, no promise, no link and no claim to be a person,
+ * and only as one of the approved lines, in our words, never the model's.
  * Anything else is dropped (the script's question still goes).
  */
 export function guardReply(reply: string): string {
   const text = reply.replace(/\s+/g, ' ').trim();
   if (!text || text.length > 160 || text.includes('?')) return '';
   if (FORBIDDEN.some((pattern) => pattern.test(text))) return '';
-  return text;
+  return APPROVED.get(lineKey(text)) ?? '';
 }
 
 function userContent(input: SofiaBrainInput) {

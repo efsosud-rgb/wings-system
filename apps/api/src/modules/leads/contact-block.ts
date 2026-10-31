@@ -183,16 +183,24 @@ function decide(
   return OPEN;
 }
 
-/** Whether Wings may start a contact on this channel (or any of these), and why not. */
+/**
+ * Whether Wings may start a contact on this channel (or any of these), and why not. `except` leaves
+ * one origin out: Sofia asks it without the SAIR she is about to confirm.
+ */
 export async function contactBlock(
   db: Executor,
   channel: ContactChannel | ContactChannel[],
   keys: ContactKeys,
+  except?: ContactOptOutOrigin,
 ): Promise<ContactBlock> {
   const tenantId = keys.tenantId ?? WINGS_TENANT_ID;
   const lead = await leadOf(db, tenantId, keys.leadId);
   const entries = await entriesOf(db, tenantId, normalisedKeys(keys, lead));
-  return decide(entries, lead, [channel].flat());
+  return decide(
+    entries.filter((entry) => entry.origin !== except),
+    lead,
+    [channel].flat(),
+  );
 }
 
 /** A lead's badge: every active entry, and per channel whether a contact may start. */
