@@ -2,6 +2,7 @@ import {
   approximateAgoText,
   BUY_SIGNAL_LABELS,
   BUY_SIGNALS,
+  DO_NOT_CONTACT_REASON,
   instagramLeadSchema,
   instagramProspectingSettingsSchema,
   LEAD_PIPELINE_LABELS,
@@ -239,7 +240,8 @@ function ProspectCard({
               </button>
             </>
           )}
-          {(p.state === 'em_revisao' || p.state === 'rejeitada') && (
+          {(p.state === 'em_revisao' ||
+            (p.state === 'rejeitada' && p.decisionReason !== DO_NOT_CONTACT_REASON)) && (
             <button type="button" className="crm-btn is-small" onClick={() => run('promote')}>
               Mover para "Quer comprar"
             </button>

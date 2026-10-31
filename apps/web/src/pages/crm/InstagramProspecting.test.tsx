@@ -177,6 +177,24 @@ describe('InstagramTab', () => {
     expect(await screen.findByText(/a política de privacidade ainda não tem link/i)).toBeTruthy();
   });
 
+  it('a prospect closed by "Não contatar" has no way back to "Quer comprar"; a discarded one has', () => {
+    prospects.data = [
+      prospect({ id: 'p1', state: 'rejeitada', list: 'outros', decisionReason: 'Não contatar' }),
+      prospect({
+        id: 'p2',
+        username: 'usuario.teste02',
+        state: 'rejeitada',
+        list: 'outros',
+        decisionReason: 'sem perfil',
+      }),
+    ];
+    wrap(<InstagramTab canPaste canManage canConfigure={false} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Listas' }));
+    expect(screen.getAllByRole('button', { name: 'Mover para "Quer comprar"' })).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Mover para "Quer comprar"' }));
+    expect(actionMutate).toHaveBeenCalledWith({ id: 'p2', action: 'promote', body: undefined });
+  });
+
   it('Diretoria (no leads.write) reads the lists without any action', () => {
     prospects.data = [prospect({ mine: false })];
     wrap(<InstagramTab canPaste={false} canManage canConfigure={false} />);
