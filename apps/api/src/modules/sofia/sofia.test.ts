@@ -584,6 +584,83 @@ describe('who answers', () => {
     expect(notices[0]!.message).toContain('Pediu para não ser contatado e escreveu de novo');
   });
 
+  it('a second SAIR gets no second confirmation: the conversation waits for a person (WA-12)', async () => {
+    await createEmployee(db, { role: 'gerente_comercial', sector: 'comercial' });
+    const phone = newPhone();
+    await write(phone, text('SAIR'));
+    await sofiaAnswers();
+    expect(bodyOf(lastSent())).toBe(SOFIA_DEFAULT_SETTINGS.texts.optOut);
+    const before = sends.length;
+    clock += 60_000;
+    await write(phone, text('parar'));
+    await sofiaAnswers();
+    expect(sends.length).toBe(before);
+    expect(llmCalls).toHaveLength(0);
+    expect(await conversationOf(phone)).toMatchObject({
+      attendance: 'waiting_human',
+      reason: 'nao_me_contate',
+    });
+  });
+
+  it('who asked to stop in words, or in the CRM, and then sends SAIR hears nothing more from her', async () => {
+    const worded = newPhone();
+    llmAnswers = [said({ intent: 'nao_contatar' })];
+    await write(worded, text('não quero mais receber mensagens de vocês'));
+    await sofiaAnswers();
+    expect(bodyOf(lastSent())).toBe(SOFIA_DEFAULT_SETTINGS.texts.optOut);
+    const registered = newPhone();
+    await db.insert(contactOptOuts).values({
+      channel: 'all',
+      keyKind: 'phone',
+      keyValue: registered,
+      origin: 'crm',
+      reason: 'Pediu por telefone',
+    });
+    const before = sends.length;
+    for (const phone of [worded, registered]) {
+      clock += 60_000;
+      await write(phone, text('SAIR'));
+      await sofiaAnswers();
+      expect(await conversationOf(phone)).toMatchObject({
+        attendance: 'waiting_human',
+        reason: 'nao_me_contate',
+      });
+    }
+    expect(sends.length).toBe(before);
+  });
+
+  it('after a SAIR the team cannot write either, until the person writes again (WA-12)', async () => {
+    const admin = await sessionFor('admin_master');
+    const phone = newPhone();
+    await write(phone, text('SAIR'));
+    await sofiaAnswers();
+    const conversation = await conversationOf(phone);
+    const before = sends.length;
+    const writeToo = () =>
+      app.inject({
+        method: 'POST',
+        url: `/whatsapp/conversations/${conversation.id}/text`,
+        cookies: admin.cookies,
+        payload: { text: 'Posso ajudar em algo?' },
+      });
+    const refused = await writeToo();
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({ error: 'opted_out' });
+    // A sticker is not writing again.
+    await write(phone, { type: 'sticker', sticker: { id: 'st2', mime_type: 'image/webp' } });
+    expect((await writeToo()).statusCode).toBe(409);
+    expect(sends.length).toBe(before);
+
+    clock += 60_000;
+    await write(phone, text('na verdade quero falar com alguém'));
+    await sofiaAnswers();
+    expect(sends.length).toBe(before);
+    expect(await conversationOf(phone)).toMatchObject({ attendance: 'waiting_human' });
+    // A person decides: inside the window, the reply goes.
+    expect((await writeToo()).statusCode).toBe(201);
+    expect(sends.length).toBe(before + 1);
+  });
+
   it('a "não me contate" from the CRM, or the Prospecção opt-in rule, keeps Sofia quiet too', async () => {
     const registered = newPhone();
     await db.insert(contactOptOuts).values({

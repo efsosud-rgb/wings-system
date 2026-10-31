@@ -1013,6 +1013,19 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
         return reply.status(409).send({ error: CONTACT_BLOCKED_ERROR, message: block.reason });
       }
     }
+    // The person's last word on the official number was SAIR (a sticker after it changes nothing):
+    // a text or a file now is Wings starting again, inside the window the SAIR itself opened
+    // (WA-12). Once the person writes again, whoever answers decides.
+    if (
+      !numberId &&
+      (outgoing.kind === 'text' || outgoing.kind === 'media') &&
+      target.contact?.optOutAt
+    )
+      return reply.status(409).send({
+        error: 'opted_out',
+        message:
+          'A pessoa pediu para sair e não escreveu depois disso. Só dá para responder quando ela escrever de novo.',
+      });
     if (outgoing.kind === 'call_permission') {
       if (!window.open)
         return reply.status(409).send({
