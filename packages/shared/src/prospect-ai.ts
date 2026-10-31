@@ -365,3 +365,33 @@ export interface InstagramStatus {
   /** Pastes the actor made today (São Paulo) and the day's limit. */
   pastesToday: number;
 }
+
+// --- where a classified comment goes (§3.2, parte 2) -------------------------------------------
+
+export interface CommentClassification {
+  /** Null: no automatic classification (AI off, ceiling, invalid answer). */
+  signal: BuySignal | null;
+  confidence: number | null;
+  reviewReason: ProspectReviewReason | null;
+}
+
+/**
+ * "Quer comprar" (`nova`), "Revisar" (`em_revisao`) or "Outros" (`rejeitada`, only counted, the
+ * seller may move one back). Nothing here leads to a message: every approach is by hand.
+ */
+export function placeOfComment(
+  c: CommentClassification,
+  t: InstagramProspectingSettings['thresholds'],
+): { state: 'nova' | 'em_revisao' | 'rejeitada'; reviewReason: ProspectReviewReason | null } {
+  if (!c.signal || c.confidence === null)
+    return { state: 'em_revisao', reviewReason: c.reviewReason ?? 'ia_invalida' };
+  if (c.signal === 'elogio' || c.signal === 'reclamacao' || c.signal === 'spam')
+    return { state: 'rejeitada', reviewReason: null };
+  if (c.confidence < t.revisar) return { state: 'rejeitada', reviewReason: null };
+  if (c.signal === 'duvida') return { state: 'em_revisao', reviewReason: 'duvida' };
+  if (c.confidence >= t.listar) return { state: 'nova', reviewReason: null };
+  return { state: 'em_revisao', reviewReason: 'confianca_baixa' };
+}
+
+/** The decision reason an "Outros" comment is stored with, so the list can tell it from a discard. */
+export const OUTROS_REASON_PREFIX = 'Outros: ';

@@ -443,6 +443,27 @@ const schema = z.object({
     .default(DEFAULT_INSIGHTS_DAILY_USD)
     .or(z.literal('').transform(() => DEFAULT_INSIGHTS_DAILY_USD)),
   /**
+   * Prospecção Instagram, parte 2 (docs/prospeccao/instagram.md): pasting the comments of a
+   * competitor's post. Off unless "true": approaching real people waits for Jurídico (t066) and
+   * the privacy policy (t063). Off, every paste route but the status answers 503.
+   */
+  PROSPECT_AI_INSTAGRAM_PASTE_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
+  /** The buying-signal model (same OpenRouter key). Off unless "true": the rules still run. */
+  PROSPECT_AI_CLASSIFIER_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
+  /** The classifier's ceiling, US dollars a day for the whole company (São Paulo day). */
+  PROSPECT_AI_DAILY_USD: z.coerce
+    .number()
+    .positive()
+    .max(100)
+    .default(1)
+    .or(z.literal('').transform(() => 1)),
+  /**
    * The cron expression (5 fields, America/Sao_Paulo) the Coolify scheduled
    * task runs ingest-cli with. The API only reads it, to tell the screen when
    * the next ingestion is due and when one is overdue; it schedules nothing.
