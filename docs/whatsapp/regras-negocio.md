@@ -19,12 +19,12 @@ Versão de 04/10/2026. "Decidido" veio do Eric. "Proposta" é sugestão para ele
 
 ## 3. De onde o lead veio
 
-| Entrada | Como identificar | Exemplo |
-|---|---|---|
-| Botão do site | Texto pronto no link `wa.me/<número>?text=` com um código no fim | `Olá! Quero avaliar meu negócio. [W-SITE-HOME]` |
-| LP de marca cliente (franquia.wingscompany.com.br/marca) | Código com a marca | `[W-LP-CASALDOCHURROS]` |
-| Anúncio de clique para WhatsApp (Meta) | Objeto `referral` no webhook (anúncio, `source_id`, `ctwa_clid`) | gravado direto |
-| Contato direto, sem código | A Sofia pergunta "Como você conheceu a Wings?" | — |
+| Entrada                                                  | Como identificar                                                 | Exemplo                                         |
+| -------------------------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------- |
+| Botão do site                                            | Texto pronto no link `wa.me/<número>?text=` com um código no fim | `Olá! Quero avaliar meu negócio. [W-SITE-HOME]` |
+| LP de marca cliente (franquia.wingscompany.com.br/marca) | Código com a marca                                               | `[W-LP-CASALDOCHURROS]`                         |
+| Anúncio de clique para WhatsApp (Meta)                   | Objeto `referral` no webhook (anúncio, `source_id`, `ctwa_clid`) | gravado direto                                  |
+| Contato direto, sem código                               | A Sofia pergunta "Como você conheceu a Wings?"                   | —                                               |
 
 Decidido (30/09): o lead precisa responder "por onde conheceu a Wings" e "por meio de qual campanha ativa", com as campanhas ativas como opções. Na fase 1 a lista é fixa no Flow; na fase 2 vem do CRM.
 
@@ -55,7 +55,8 @@ Motivos de perda (proposta, tabela `dim_motivo_perda` do BI): pediu para não se
 
 - Dentro de 24 h da última mensagem do lead: resposta livre (sem custo de modelo na Meta).
 - Fora disso: só modelo aprovado (lembrete, retomada de contato). Cada modelo enviado é cobrado pela Meta por mensagem, conforme a categoria.
-- "SAIR" ou "PARAR": a Sofia confirma e o contato fica bloqueado para mensagens ativas.
+- "SAIR" ou "PARAR": a Sofia confirma (uma vez só) e o contato fica bloqueado para mensagens ativas. Depois disso a conversa fica bloqueada para a Sofia: quem escrever de novo, outro SAIR incluído, cai em "Aguardando atendente" e uma pessoa decide. A equipe também não escreve antes de a pessoa escrever de novo (Eric, 29/10, WA-12).
+- A frase escrita pela IA só chega ao lead se for uma das frases de reconhecimento aprovadas (Eric, 29/10, WA-04; lista em `sofia.md`).
 
 ## 8. Transição com o RD Station
 
