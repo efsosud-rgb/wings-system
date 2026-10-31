@@ -1,5 +1,6 @@
 import {
   commentOccurredAt,
+  DO_NOT_CONTACT_REASON,
   instagramExcerpt,
   listOfState,
   normalizeInstagram,
@@ -177,6 +178,67 @@ export type InstagramFound = NonNullable<Awaited<ReturnType<typeof instagramPros
 
 type Change = Partial<typeof prospectOpportunities.$inferInsert>;
 
+/** Closes every open prospect of this @ (whoever holds it) as "Não contatar"; returns how many. */
+async function closeOpenOf(db: Database, actor: Actor, username: string, now: Date) {
+  const closed = await db
+    .update(prospectOpportunities)
+    .set({
+      state: 'rejeitada',
+      decidedAt: now,
+      decidedBy: actor.employeeId,
+      decisionReason: DO_NOT_CONTACT_REASON,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        ofTenant,
+        inArray(prospectOpportunities.state, PROSPECT_OPEN_STATES),
+        inArray(
+          prospectOpportunities.evidenceId,
+          db
+            .select({ id: prospectEvidence.id })
+            .from(prospectEvidence)
+            .where(eq(prospectEvidence.authorUsername, username)),
+        ),
+      ),
+    )
+    .returning({ id: prospectOpportunities.id });
+  return closed.length;
+}
+
+/**
+ * "Não me contate" at the moment of the action (lições 3 e 4), not only at the paste: a prospect
+ * closed by it, or an @ in the register now (Instagram or every channel), refuses "Copiar
+ * mensagem", "Abordei", reopening and transfer; a register found now closes the @'s open prospects.
+ */
+export async function instagramOptOut(
+  db: Database,
+  actor: Actor,
+  found: InstagramFound,
+  now: Date,
+): Promise<Refusal | null> {
+  const blocked = (reason: string | null) =>
+    refusal(409, 'contact_blocked', reason ?? 'Pediu para não ser contatado.');
+  if (found.row.decisionReason === DO_NOT_CONTACT_REASON) return blocked(null);
+  const username = found.evidence.authorUsername;
+  const block = await contactBlock(db, 'instagram', {
+    instagramUser: username,
+    leadId: found.row.leadId,
+  });
+  if (!block.blocked) return null;
+  if (username) {
+    const closed = await closeOpenOf(db, actor, username, now);
+    await writeAudit(db, {
+      actorEmployeeId: actor.employeeId,
+      action: 'prospect_ai.instagram_closed_by_opt_out',
+      entity: 'prospect_opportunity',
+      entityId: found.row.id,
+      metadata: { closed },
+    });
+  }
+  return blocked(block.reason);
+}
+
 /** One conditional update: only from these states (and not while a lead is being created). */
 async function move(
   db: Database,
@@ -227,6 +289,8 @@ export async function markApproached(
   settings: InstagramProspectingSettings,
   now: Date,
 ) {
+  const blocked = await instagramOptOut(db, actor, found, now);
+  if (blocked) return blocked;
   const result = await move(
     db,
     actor,
@@ -243,9 +307,11 @@ export async function markApproached(
 
 /**
  * To "Quer comprar": a comment in "Revisar" or in "Outros" (the seller's own), and a discarded
- * one only by a manager ("reabre descartado", §1.6).
+ * one only by a manager ("reabre descartado", §1.6). Never one closed by "não me contate".
  */
 export async function promote(db: Database, actor: Actor, found: InstagramFound, now: Date) {
+  const blocked = await instagramOptOut(db, actor, found, now);
+  if (blocked) return blocked;
   const { row } = found;
   const outros =
     row.state === 'rejeitada' &&
@@ -310,35 +376,13 @@ export async function doNotContact(
     reason: reason || 'Pediu para não ser contatado (Prospecção Instagram).',
     createdBy: actor.employeeId,
   });
-  const closed = await db
-    .update(prospectOpportunities)
-    .set({
-      state: 'rejeitada',
-      decidedAt: now,
-      decidedBy: actor.employeeId,
-      decisionReason: 'Não contatar',
-      updatedAt: now,
-    })
-    .where(
-      and(
-        ofTenant,
-        inArray(prospectOpportunities.state, PROSPECT_OPEN_STATES),
-        inArray(
-          prospectOpportunities.evidenceId,
-          db
-            .select({ id: prospectEvidence.id })
-            .from(prospectEvidence)
-            .where(eq(prospectEvidence.authorUsername, username)),
-        ),
-      ),
-    )
-    .returning({ id: prospectOpportunities.id });
+  const closed = await closeOpenOf(db, actor, username, now);
   await writeAudit(db, {
     actorEmployeeId: actor.employeeId,
     action: 'prospect_ai.instagram_do_not_contact',
     entity: 'prospect_opportunity',
     entityId: found.row.id,
-    metadata: { closed: closed.length },
+    metadata: { closed },
   });
   const [fresh] = await prospectQuery(db).where(eq(prospectOpportunities.id, found.row.id));
   return { ok: true as const, prospect: toView(fresh!, actor) };
@@ -370,6 +414,8 @@ export async function transfer(
     return refusal(403, 'forbidden', 'Só a gerência transfere um prospect.');
   if (!(await instagramOwners(db)).some((o) => o.id === ownerEmployeeId))
     return refusal(400, 'invalid', 'Essa pessoa não trabalha a Prospecção Instagram.');
+  const blocked = await instagramOptOut(db, actor, found, now);
+  if (blocked) return blocked;
   const result = await move(
     db,
     actor,

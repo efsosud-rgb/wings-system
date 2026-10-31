@@ -403,3 +403,6 @@ export function placeOfComment(
 
 /** The decision reason an "Outros" comment is stored with, so the list can tell it from a discard. */
 export const OUTROS_REASON_PREFIX = 'Outros: ';
+
+/** The decision reason of a prospect closed by "não me contate": never reopened (lição 4). */
+export const DO_NOT_CONTACT_REASON = 'Não contatar';

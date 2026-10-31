@@ -26,6 +26,7 @@ import {
   discard,
   doNotContact,
   instagramOwners,
+  instagramOptOut,
   instagramProspectInReach,
   listInstagramProspects,
   type InstagramFound,
@@ -148,13 +149,18 @@ export const instagramProspectingRoutes: FastifyPluginAsync = async (app) => {
     return { owners: await instagramOwners(db) };
   });
 
-  /** "Copiar mensagem" (§8.2): the text with the seller's first name; null while no policy link. */
+  /**
+   * "Copiar mensagem" (§8.2): the text with the seller's first name; null while no policy link.
+   * The "não me contate" is checked here, at the moment the text is prepared (409 and closed).
+   */
   app.get('/prospect-ai/instagram/prospects/:id/message', write, async (request, reply) => {
     if (!env.PROSPECT_AI_INSTAGRAM_PASTE_ENABLED) return off(reply);
     const params = idParams.safeParse(request.params);
     if (!params.success) return notFound(reply);
     const found = await instagramProspectInReach(db, request.session.actor, params.data.id);
     if (!found) return notFound(reply);
+    const blocked = await instagramOptOut(db, request.session.actor, found, now());
+    if (blocked) return refused(reply, blocked);
     const me = await db.query.employees.findFirst({
       where: eq(employees.id, request.session.actor.employeeId),
     });

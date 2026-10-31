@@ -126,7 +126,12 @@ export async function crossBase(
   const tags = new Map<string, PasteCommentTag>();
   if (usernames.length === 0) return tags;
   const [optOuts, clientRows, leadRows, prospectRows] = await Promise.all([
-    optOutsAmong(db, { placeIds: [], phones: [], instagramUsers: usernames }),
+    optOutsAmong(db, {
+      placeIds: [],
+      phones: [],
+      instagramUsers: usernames,
+      channels: ['instagram'],
+    }),
     db
       .select({ username: igKey(sql`${clients.social}->>'instagram'`) })
       .from(clients)
@@ -169,9 +174,7 @@ export async function crossBase(
     });
   for (const row of clientRows) tags.set(row.username, { kind: 'cliente' });
   for (const username of usernames) {
-    const entry = optOuts.get(`instagram_user:${username}`);
-    if (entry && (entry.channel === 'all' || entry.channel === 'instagram'))
-      tags.set(username, { kind: 'nao_contatar' });
+    if (optOuts.has(`instagram_user:${username}`)) tags.set(username, { kind: 'nao_contatar' });
   }
   return tags;
 }
