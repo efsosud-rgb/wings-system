@@ -729,6 +729,13 @@
       "when": 1793405422935,
       "tag": "0105_prospect_instagram_paste",
       "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1793415079425,
+      "tag": "0106_prospect_instagram_discovery",
+      "breakpoints": true
     }
   ]
 }

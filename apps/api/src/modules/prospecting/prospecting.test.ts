@@ -330,8 +330,9 @@ describe('search', () => {
     expect(item(5).tags).toContainEqual({ kind: 'client', text: 'já é cliente' });
     expect(item(7).tags).toContainEqual({ kind: 'multi_unit', text: 'várias unidades' });
     expect(item(7).icp.reasons).toContain('Mesmo nome em mais de um endereço (+2)');
-    expect(item(7).icp.score).toBe(7);
-    expect(item(5).icp.score).toBe(6);
+    // 0 to 100 over the 9 Google points possible (no Instagram known here).
+    expect(item(7).icp).toMatchObject({ earned: 7, possible: 9, score: 78 });
+    expect(item(5).icp).toMatchObject({ earned: 6, possible: 9, score: 67 });
     const scores = body.items.map((i) => i.icp.score);
     expect(scores).toEqual([...scores].sort((a, b) => b - a));
     // The Google call: one per place, the segment "em" the place, page 1 each.
@@ -1126,7 +1127,11 @@ describe('without the Google key', () => {
   it('answers 503 on every call to Google and says so in the status', async () => {
     const seller = await loginAs(bare, 'vendedor_formatacao');
     const status = await call(seller, 'GET', '/prospecting/status', undefined, bare);
-    expect(status.json()).toEqual({ configured: false, aiConfigured: false });
+    expect(status.json()).toEqual({
+      configured: false,
+      aiConfigured: false,
+      instagramDiscovery: false,
+    });
     const notConfigured = {
       error: 'places_not_configured',
       message: 'Chave do Google não configurada.',
@@ -1168,6 +1173,7 @@ describe('without the Google key', () => {
     expect((await call(sellerA, 'GET', '/prospecting/status')).json()).toEqual({
       configured: true,
       aiConfigured: true,
+      instagramDiscovery: false,
     });
   });
 });

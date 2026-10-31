@@ -5,6 +5,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  smallint,
   text,
   timestamp,
   uniqueIndex,
@@ -96,3 +97,63 @@ export const prospectingSettings = pgTable('prospecting_settings', {
   updatedBy: uuid('updated_by').references(() => employees.id),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * What Business Discovery said about a company's Instagram business account
+ * (docs/prospeccao/instagram.md §2.2, parte 3). Numbers only, with the source
+ * and the date: never the name, bio, site, picture, captions or media ids, and
+ * never the place_id (the link with Google is made live, on the screen). A row
+ * is the cache of the score for `discovery.cacheDias`, and is deleted 30 days
+ * after `fetched_at` (prospect-ai housekeeping).
+ */
+export const instagramBusinessSnapshots = pgTable(
+  'instagram_business_snapshots',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: tenantId(),
+    /** normalizeInstagram: lower case, no @. */
+    username: text('username').notNull(),
+    status: text('status').notNull(),
+    followersCount: integer('followers_count'),
+    mediaCount: integer('media_count'),
+    recentMediaRead: smallint('recent_media_read'),
+    /** Average × 1000; null when no post brought the field. */
+    avgLikesMilli: integer('avg_likes_milli'),
+    avgCommentsMilli: integer('avg_comments_milli'),
+    /** Null when no post brought a timestamp. */
+    postsLast30d: smallint('posts_last_30d'),
+    lastPostAt: timestamp('last_post_at', { withTimezone: true }),
+    /** The Graph error code when status = 'erro'. */
+    errorCode: integer('error_code'),
+    source: text('source').notNull().default('meta_business_discovery'),
+    apiVersion: text('api_version').notNull(),
+    fetchedAt: timestamp('fetched_at', { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('instagram_business_snapshots_username_uq').on(table.tenantId, table.username),
+    index('instagram_business_snapshots_fetched_idx').on(table.fetchedAt),
+    check(
+      'instagram_business_snapshots_status_check',
+      sql`${table.status} in ('encontrada', 'nao_comercial', 'erro')`,
+    ),
+  ],
+);
+
+/**
+ * Append-only: one row per call to Business Discovery, written (under a lock)
+ * before the call goes, as the Google quota (`prospect_calls`). The daily
+ * ceiling `discovery.porDia` counts these rows; a call that failed still counts.
+ * Who asked and when, never the @.
+ */
+export const instagramDiscoveryCalls = pgTable(
+  'instagram_discovery_calls',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: tenantId(),
+    employeeId: uuid('employee_id')
+      .notNull()
+      .references(() => employees.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index('instagram_discovery_calls_created_idx').on(table.tenantId, table.createdAt)],
+);
