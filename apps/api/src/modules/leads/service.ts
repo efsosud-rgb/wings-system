@@ -637,9 +637,10 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
     )
       throw new ForeignLeadError();
     // Nor a number someone is attending with no deal yet: the screen's "busy", decided here (WA-03).
+    // A deal found by e-mail with no phone would take it as a gap, and the conversation with it.
     if (
       incoming.mergeOnlyIfOwnedBy !== undefined &&
-      !existing &&
+      !existing?.phone &&
       phone &&
       (await numberInAttendance(tx, phone))
     )

@@ -5,6 +5,8 @@ import {
   crmContacts,
   leadContacts,
   leadEvents,
+  leads,
+  leadTasks,
   waContacts,
   waConversations,
   waTemplates,
@@ -38,6 +40,8 @@ beforeAll(startCentral, 60_000);
 afterAll(stopCentral);
 beforeEach(async () => {
   await db.delete(leadContacts);
+  // A deal opened through POST /leads starts its stage's tasks.
+  await db.delete(leadTasks);
   await resetCentral();
   await db.delete(contactOptOuts);
   await db.delete(crmContacts);
@@ -104,18 +108,41 @@ describe("a number in attendance does not join a seller's deal as a contact (WA-
       undefined,
     );
 
-    // A contact of their own with the number is not a deal yet; linking it is.
+    // Nor as a contact of their own: a contact screen takes no number in attendance.
     const made = await app.inject({
       method: 'POST',
       url: '/crm/contacts',
       cookies: owner.cookies,
       payload: { name: 'Contato Fictício', phone },
     });
-    expect(made.statusCode).toBe(201);
-    const contactId = made.json<{ contact: { id: string } }>().contact.id;
+    expect(made.statusCode).toBe(409);
+    expect(made.json<{ error: string }>().error).toBe('number_in_attendance');
+    expect(await db.query.crmContacts.findFirst({ where: eq(crmContacts.phone, phone) })).toBe(
+      undefined,
+    );
+    // A contact of theirs that already had the number (made before this check) is not linked.
+    const [old] = await db
+      .insert(crmContacts)
+      .values({
+        name: 'Contato Fictício',
+        email: 'antigo-wa03@exemplo.invalid',
+        phone,
+        createdBy: owner.id,
+      })
+      .returning({ id: crmContacts.id });
+    const contactId = old!.id;
     const byId = await link(owner.cookies, leadId, { contactId });
     expect(byId.statusCode).toBe(409);
     expect(byId.json<{ error: string }>().error).toBe('number_in_attendance');
+    // Nor typed by its e-mail alone: refused before the job title fills that contact's gap.
+    const byEmail = await link(owner.cookies, leadId, {
+      contact: { email: 'antigo-wa03@exemplo.invalid', jobTitle: 'Sócio' },
+    });
+    expect(byEmail.statusCode).toBe(409);
+    expect(byEmail.json<{ error: string }>().error).toBe('number_in_attendance');
+    expect(
+      (await db.query.crmContacts.findFirst({ where: eq(crmContacts.id, contactId) }))?.jobTitle,
+    ).toBeNull();
 
     // A contact already on the deal does not take the number by an edit either.
     const other = await link(owner.cookies, leadId, {
@@ -146,6 +173,72 @@ describe("a number in attendance does not join a seller's deal as a contact (WA-
     // The person writes again: the conversation is still nobody's deal.
     await writes(phone, 'wamid.WA03-1');
     expect(await leadOf(chat)).toBeNull();
+  });
+
+  it("nor by giving the number, as a gap, to an e-mail already on the seller's deal", async () => {
+    const phone = '5521977770004';
+    const chat = await waiting(phone);
+    const leadId = await deal('5521977779004', owner.id);
+    const email = 'contato-wa03@exemplo.invalid';
+    const onDeal = await link(owner.cookies, leadId, {
+      contact: { name: 'Contato Fictício', email },
+    });
+    expect(onDeal.statusCode).toBe(201);
+
+    // The contact screen: the e-mail finds the linked contact, which would take the phone.
+    const saved = await app.inject({
+      method: 'POST',
+      url: '/crm/contacts',
+      cookies: owner.cookies,
+      payload: { email, phone },
+    });
+    expect(saved.statusCode).toBe(409);
+    expect(saved.json<{ error: string }>().error).toBe('number_in_attendance');
+    // The deal's contact form: the e-mail is refused before it fills anything either.
+    const typed = await link(owner.cookies, leadId, {
+      contact: { email, jobTitle: 'Sócio', phone },
+    });
+    expect(typed.statusCode).toBe(409);
+    expect(typed.json<{ error: string }>().error).toBe('number_in_attendance');
+    const contact = await db.query.crmContacts.findFirst({ where: eq(crmContacts.email, email) });
+    expect({ phone: contact?.phone, jobTitle: contact?.jobTitle }).toEqual({
+      phone: null,
+      jobTitle: null,
+    });
+
+    await writes(phone, 'wamid.WA03-4');
+    expect(await leadOf(chat)).toBeNull();
+  });
+
+  it("nor by giving the number, as a gap, to the seller's deal opened by e-mail", async () => {
+    const phone = '5521977770005';
+    const chat = await waiting(phone);
+    const email = 'negociacao-wa03@exemplo.invalid';
+    const create = (payload: Record<string, unknown>) =>
+      app.inject({
+        method: 'POST',
+        url: '/leads',
+        cookies: owner.cookies,
+        payload: { name: 'Negociação Fictícia', pipeline: 'expansao', ...payload },
+      });
+    const opened = await create({ email });
+    expect(opened.statusCode).toBe(201);
+    const leadId = opened.json<{ lead: { id: string } }>().lead.id;
+
+    // The same e-mail again, now with the number: it would fill the deal's empty phone.
+    const again = await create({ email, phone });
+    expect(again.statusCode).toBe(409);
+    expect(again.json<{ error: string }>().error).toBe('number_in_attendance');
+    expect((await db.query.leads.findFirst({ where: eq(leads.id, leadId) }))?.phone).toBeNull();
+    expect(await db.query.crmContacts.findFirst({ where: eq(crmContacts.phone, phone) })).toBe(
+      undefined,
+    );
+
+    await writes(phone, 'wamid.WA03-5');
+    expect(await leadOf(chat)).toBeNull();
+    // A phone that is nobody's conversation still fills the gap, as before.
+    const filled = await create({ email, phone: '5521977778005' });
+    expect(filled.statusCode).toBe(200);
   });
 
   it('whoever may assign deals still links it, and the conversation goes to that deal', async () => {

@@ -34,6 +34,7 @@ import {
   contactsOfCompany,
   duplicateCompanies,
   duplicateContacts,
+  findContact,
   findOrCreateCompany,
   findOrCreateContact,
   leadsOfCompany,
@@ -129,6 +130,18 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
     const normalized = normalizeBrazilianPhone(phone);
     return own !== undefined && normalized !== null && (await numberInAttendance(db, normalized));
   }
+  /**
+   * The same for a typed contact: its phone, or the phone of the contact its e-mail already names,
+   * which `findOrCreateContact` would fill or link. Asked before anything is written.
+   */
+  async function typedAttendedFor(
+    own: string | undefined,
+    typed: { email?: string | null; phone?: string | null },
+  ) {
+    if (own === undefined) return false;
+    if (await attendedFor(own, typed.phone)) return true;
+    return attendedFor(own, (await findContact(db, typed))?.phone);
+  }
 
   // --- contacts ---------------------------------------------------------------------------
 
@@ -151,6 +164,8 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
     if (!body.success) return reply.status(400).send(invalid(body.error.issues[0]?.message));
     const actor = request.session.actor.employeeId;
     const own = ownScope(request, 'leads.write');
+    if (await typedAttendedFor(own, body.data))
+      return reply.status(409).send(NUMBER_IN_ATTENDANCE_REPLY);
     const companyId = await resolveCompany(body.data, actor, own);
     if (companyId === 'not_found')
       return reply.status(400).send(invalid('Empresa não encontrada.'));
@@ -290,7 +305,7 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
     const own = ownScope(request, 'leads.write');
     let contactId = body.data.contactId ?? null;
     if (!contactId && body.data.contact) {
-      if (await attendedFor(own, body.data.contact.phone))
+      if (await typedAttendedFor(own, body.data.contact))
         return reply.status(409).send(NUMBER_IN_ATTENDANCE_REPLY);
       const companyId = await resolveCompany(body.data.contact, actor, own);
       if (companyId === 'not_found')
