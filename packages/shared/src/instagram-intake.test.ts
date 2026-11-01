@@ -66,4 +66,12 @@ describe('the private reply (docs/prospeccao/instagram.md §5.2 to §5.4)', () =
     expect(privateReplyChangeDenial(click, { ...click, modo: 'desligado' }, false)).toBeNull();
     expect(privateReplyChangeDenial(click, auto, true)).toBeNull();
   });
+
+  it("while it goes alone, the policy link (inside its text) is the Admin Master's too", () => {
+    const click = { ...DEFAULT_PRIVATE_REPLY_SETTINGS, modo: 'clique' as const };
+    expect(privateReplyChangeDenial(auto, auto, false, true)).toMatch(/link/);
+    expect(privateReplyChangeDenial(auto, click, false, true)).toMatch(/link/);
+    expect(privateReplyChangeDenial(click, click, false, true)).toBeNull();
+    expect(privateReplyChangeDenial(auto, auto, true, true)).toBeNull();
+  });
 });

@@ -4,17 +4,20 @@ import {
   whatsappOptInMissing,
   type InstagramProspect,
 } from '@wings/shared';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  contactOptOuts,
   igPeople,
   igPrivateReplies,
+  leadEvents,
   leads,
   prospectEvidence,
   prospectOpportunities,
 } from '../../db/schema/index.js';
 import { recordContactOptOut } from '../leads/contact-block.js';
+import { runInstagramHousekeeping } from '../prospect-ai/housekeeping.js';
 import { loadInstagramSettings } from '../prospect-ai/settings.js';
 import {
   call,
@@ -82,6 +85,23 @@ async function buying(text = 'quanto custa?', at?: Date, ai = false) {
 
 const click = (who: Session, id: string) => call(h, who, 'POST', `/prospects/${id}/private-reply`);
 const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
+const replyOf = async (commentId: string) =>
+  (await h.db.select().from(igPrivateReplies).where(eq(igPrivateReplies.commentId, commentId)))[0];
+/** The loop's retry of the replies Meta asked to wait for, at `now` (the switch on unless null). */
+const retry = async (now: Date, config: { token: string; accountId: string } | null = CONFIG) =>
+  retryPrivateReplies({
+    db: h.db,
+    fetch: h.app.wings.instagramFetch!,
+    config,
+    settings: await loadInstagramSettings(h.db),
+    now,
+  });
+const CONFIG = { token: 't', accountId: '17841400000000001' };
+const WAIT = { status: 400, body: { error: { code: 80006 } } };
+const MINUTE = 60_000;
+/** A comment whose 7 days (less Meta's hour of margin) end `minutes` from now. */
+const endingIn = (minutes: number) =>
+  new Date(h.clock.now.getTime() - (7 * 24 - 1) * 3_600_000 + minutes * MINUTE);
 
 describe('the click (§5.2, modo clique)', () => {
   it('nothing leaves without the button; the button sends once, the fixed text with the link', async () => {
@@ -314,5 +334,163 @@ describe('WhatsApp only when she asked (§5.5)', () => {
     const [after] = await h.db.select().from(leads).where(eq(leads.id, lead!.id));
     expect(after?.legalBasis).toBe('consent');
     expect(whatsappOptInMissing(after!)).toBe(false);
+  });
+});
+
+describe('the reply Meta asked to wait for (lição 4: every retry repeats the gates)', () => {
+  it('stops, with no call, when she asked to stop in between', async () => {
+    const { id, from, commentId } = await buying();
+    h.nextReplies.push(WAIT);
+    expect((await click(seller, id!)).json()).toEqual({ ok: true, status: 'rate_limited' });
+    await recordContactOptOut(h.db, {
+      instagramIgsid: from,
+      channels: ['instagram'],
+      origin: 'instagram',
+      reason: null,
+      createdBy: null,
+    });
+    const before = replyCalls(h).length;
+    expect(await retry(new Date(h.clock.now.getTime() + 6 * MINUTE))).toBe(0);
+    await settle();
+    expect(replyCalls(h).length).toBe(before);
+    expect(await replyOf(commentId)).toMatchObject({
+      status: 'failed',
+      lastError: 'nao_contatar',
+      nextAttemptAt: null,
+    });
+  });
+
+  it('stops, with no call, when the switch went off in between', async () => {
+    const { id, commentId } = await buying();
+    h.nextReplies.push(WAIT);
+    await click(seller, id!);
+    const before = replyCalls(h).length;
+    expect(await retry(new Date(h.clock.now.getTime() + 6 * MINUTE), null)).toBe(0);
+    expect(replyCalls(h).length).toBe(before);
+    expect(await replyOf(commentId)).toMatchObject({ status: 'failed', lastError: 'desligado' });
+  });
+
+  it('stops, with no call, when the 7 days ran out in between', async () => {
+    const { id, commentId } = await buying('quanto custa?', endingIn(10));
+    h.nextReplies.push(WAIT);
+    expect((await click(seller, id!)).json()).toEqual({ ok: true, status: 'rate_limited' });
+    const before = replyCalls(h).length;
+    expect(await retry(new Date(h.clock.now.getTime() + 11 * MINUTE))).toBe(0);
+    expect(replyCalls(h).length).toBe(before);
+    expect(await replyOf(commentId)).toMatchObject({ status: 'failed', lastError: 'prazo_meta' });
+  });
+
+  it('a wait that would end past the 7 days is not kept for later', async () => {
+    const { id, commentId } = await buying('quanto custa?', endingIn(3));
+    h.nextReplies.push(WAIT);
+    expect((await click(seller, id!)).json()).toEqual({ ok: true, status: 'failed' });
+    expect(await replyOf(commentId)).toMatchObject({ status: 'failed', nextAttemptAt: null });
+  });
+
+  it("waits again, with no call, while the hour's 600 are used", async () => {
+    const { id, commentId } = await buying();
+    h.nextReplies.push(WAIT);
+    await click(seller, id!);
+    const later = new Date(h.clock.now.getTime() + 6 * MINUTE);
+    await h.db.insert(igPrivateReplies).values(
+      Array.from({ length: 600 }, (_, i) => ({
+        opportunityId: null,
+        trigger: 'clique',
+        status: 'sent',
+        commentId: `hora-reenvio-${i}`,
+        commentCreatedAt: h.clock.now,
+        sentAt: later,
+      })),
+    );
+    const before = replyCalls(h).length;
+    expect(await retry(later)).toBe(0);
+    expect(replyCalls(h).length).toBe(before);
+    expect(await replyOf(commentId)).toMatchObject({ status: 'rate_limited' });
+    await h.db
+      .delete(igPrivateReplies)
+      .where(sql`${igPrivateReplies.commentId} like 'hora-reenvio-%'`);
+    expect(await retry(later)).toBe(1);
+    expect(replyCalls(h).length).toBe(before + 1);
+  });
+});
+
+describe('the echo of our own reply (§5.5)', () => {
+  it("is not a human answer; a seller's message in the Direct is", async () => {
+    const { id, from } = await buying();
+    expect((await click(seller, id!)).json()).toEqual({ ok: true, status: 'sent' });
+    const [row] = await h.db
+      .select()
+      .from(igPrivateReplies)
+      .where(eq(igPrivateReplies.opportunityId, id!));
+    const text = DEFAULT_PRIVATE_REPLY_TEXT.replace('{link_politica}', POLICY);
+    const answered = async () =>
+      (
+        await h.db
+          .select({ at: prospectOpportunities.respondedAt })
+          .from(prospectOpportunities)
+          .where(eq(prospectOpportunities.id, id!))
+      )[0]!.at;
+    // By Meta's id, and by the text when the echo's id is another.
+    await direct(h, { from, echo: true, text, mid: row!.graphMessageId! });
+    await direct(h, { from, echo: true, text });
+    expect(await answered()).toBeNull();
+    await direct(h, { from, echo: true, text: 'Oi! Aqui é da Wings, posso te ligar?' });
+    expect(await answered()).not.toBeNull();
+  });
+});
+
+describe('"Criar lead" on a comment (the click, not the Direct)', () => {
+  it('ties the person to the lead: her next comment goes on its timeline, never a reply alone', async () => {
+    const { id, from, commentId } = await buying('quero franquear', undefined, true);
+    const created = await call(h, seller, 'POST', `/prospects/${id}/lead`, {
+      contactName: 'Pessoa Teste',
+      phone: '11944443333',
+      whatsappOptIn: false,
+    });
+    expect(created.statusCode).toBe(200);
+    const leadId = (created.json() as { leadId: string }).leadId;
+    const [person] = await h.db.select().from(igPeople).where(eq(igPeople.igsid, from));
+    expect(person?.leadId).toBe(leadId);
+
+    await setReply(h, 'automatico');
+    const before = replyCalls(h).length;
+    const next = await comment(
+      h,
+      { from, username: `pessoa.${from}`, text: 'quero comprar conf95' },
+      true,
+    );
+    await settle();
+    expect(replyCalls(h).length).toBe(before);
+    const opportunities = await h.db
+      .select({ id: prospectOpportunities.id })
+      .from(prospectOpportunities)
+      .where(eq(prospectOpportunities.igPersonId, person!.id));
+    expect(opportunities).toHaveLength(1);
+    expect(
+      await h.db.select().from(prospectEvidence).where(eq(prospectEvidence.externalId, next)),
+    ).toEqual([]);
+    const seen = await h.db
+      .select()
+      .from(leadEvents)
+      .where(
+        and(eq(leadEvents.leadId, leadId), eq(leadEvents.kind, 'prospect.instagram_comment_seen')),
+      );
+    expect(seen).toHaveLength(1);
+    expect(commentId).not.toBe(next);
+
+    // A lead's person is not purged at 30 days, and her PARAR then takes the lead's keys too.
+    await runInstagramHousekeeping(h.db, new Date(h.clock.now.getTime() + 31 * 86_400_000));
+    expect(await h.db.select().from(igPeople).where(eq(igPeople.igsid, from))).toHaveLength(1);
+    await direct(h, { from, text: 'PARAR' });
+    const keys = await h.db
+      .select({ kind: contactOptOuts.keyKind, value: contactOptOuts.keyValue })
+      .from(contactOptOuts)
+      .where(eq(contactOptOuts.origin, 'instagram'));
+    expect(keys).toEqual(
+      expect.arrayContaining([
+        { kind: 'instagram_igsid', value: from },
+        { kind: 'phone', value: '5511944443333' },
+      ]),
+    );
   });
 });

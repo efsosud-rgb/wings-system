@@ -1,7 +1,8 @@
 import { whatsappOptInMissing, WINGS_CLIENT_ID } from '@wings/shared';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  auditLog,
   contactOptOuts,
   igPeople,
   igWebhookEvents,
@@ -169,7 +170,31 @@ describe('a comment on a Wings post (§1.4, §3.2)', () => {
       .select()
       .from(igWebhookEvents)
       .where(eq(igWebhookEvents.eventKey, `comment:${top}`));
-    expect(event?.status).toBe('done');
+    // Nothing is kept of a praise: not even the raw event waits the 30 days.
+    expect(event).toMatchObject({ status: 'done', lastError: null, payload: null });
+    const [kept] = await h.db
+      .select()
+      .from(igWebhookEvents)
+      .where(eq(igWebhookEvents.eventKey, `comment:${price}`));
+    expect(kept?.payload).not.toBeNull();
+  });
+
+  it("a comment on another account the app sees is not Wings': ignored, nothing kept", async () => {
+    const body = commentBody(
+      { from: '5110', username: 'pessoa.outra', text: 'quanto custa?' },
+      h.clock.now,
+    );
+    body.entry[0]!.id = '17841499999999999';
+    const value = body.entry[0]!.changes[0]!.value as { comment_id: string };
+    await deliver(h, body);
+    await runIntake(h);
+    expect(await opportunityOf(value.comment_id)).toBeNull();
+    const [event] = await h.db
+      .select()
+      .from(igWebhookEvents)
+      .where(eq(igWebhookEvents.eventKey, `comment:${value.comment_id}`));
+    expect(event).toMatchObject({ status: 'ignored', payload: null });
+    expect(await h.db.select().from(igPeople).where(eq(igPeople.igsid, '5110'))).toEqual([]);
   });
 
   it("ignores Wings' own comment", async () => {
@@ -201,6 +226,11 @@ describe('a comment on a Wings post (§1.4, §3.2)', () => {
     });
     expect(await opportunityOf(id)).toBeNull();
     expect(await h.db.select().from(igPeople).where(eq(igPeople.igsid, '5103'))).toEqual([]);
+    const [event] = await h.db
+      .select()
+      .from(igWebhookEvents)
+      .where(eq(igWebhookEvents.eventKey, `comment:${id}`));
+    expect(event).toMatchObject({ status: 'done', payload: null });
   });
 
   it('a second comment of the same person joins her open opportunity', async () => {
@@ -328,6 +358,33 @@ describe('the answer in the Direct (§5.5) and the ad (§5.6)', () => {
     expect(await opportunityOf(later)).toBeNull();
   });
 
+  it('a phone in the Direct that is under "não me contate" makes no lead (every key, lição 3)', async () => {
+    // With a funnel (the model's category), so only "não me contate" can stop the lead.
+    const id = await comment(
+      h,
+      { from: '5204', username: 'pessoa.fone', text: 'quero franquear minha marca' },
+      true,
+    );
+    expect((await opportunityOf(id))!.opportunity!.category).toBe('formatacao_franquias');
+    await recordContactOptOut(h.db, {
+      phone: '11955554444',
+      channels: ['all'],
+      origin: 'crm',
+      reason: null,
+      createdBy: null,
+    });
+    await direct(h, { from: '5204', text: 'meu número é 11 95555-4444', mid: 'mid.fone.1' });
+    expect(await h.db.select().from(leads).where(eq(leads.instagram, 'pessoa.fone'))).toEqual([]);
+    expect((await opportunityOf(id))!.opportunity).toMatchObject({ state: 'nova', leadId: null });
+    const [person] = await h.db.select().from(igPeople).where(eq(igPeople.igsid, '5204'));
+    expect(person?.leadId).toBeNull();
+    const [event] = await h.db
+      .select()
+      .from(igWebhookEvents)
+      .where(eq(igWebhookEvents.eventKey, 'message:mid.fone.1'));
+    expect(event).toMatchObject({ status: 'done', payload: null });
+  });
+
   it('a Direct from someone who never commented keeps nothing', async () => {
     await direct(h, { from: '5299', text: 'meu telefone é 11 97777-1111' });
     expect(await h.db.select().from(igPeople).where(eq(igPeople.igsid, '5299'))).toEqual([]);
@@ -353,6 +410,22 @@ describe('the 30 days (§8.4)', () => {
       sql`select count(*)::int as n from ig_webhook_events where payload::text like '%pessoa.expurgo%'`,
     );
     expect(raw.rows[0]?.n).toBe(0);
+  });
+
+  it('a person purged alone (no opportunity of hers) is counted in the audit too', async () => {
+    const later = new Date(h.clock.now.getTime() + 40 * 86_400_000);
+    await runInstagramHousekeeping(h.db, later);
+    const at = new Date(h.clock.now.getTime() - 86_400_000);
+    await h.db.insert(igPeople).values({ igsid: '5399', firstSeenAt: at, lastSeenAt: at });
+    const result = await runInstagramHousekeeping(h.db, later);
+    expect(result).toMatchObject({ ran: true, purged: 0, people: 1 });
+    const [audit] = await h.db
+      .select({ metadata: auditLog.metadata })
+      .from(auditLog)
+      .where(eq(auditLog.action, 'prospect_ai.instagram_purged'))
+      .orderBy(desc(auditLog.id))
+      .limit(1);
+    expect(audit?.metadata).toMatchObject({ count: 0, people: 1 });
   });
 
   it('an opportunity past its 7 days with no answer becomes prazo_vencido', async () => {

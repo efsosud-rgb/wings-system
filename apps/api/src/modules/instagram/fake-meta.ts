@@ -242,7 +242,10 @@ export async function comment(h: Harness, c: CommentInput, ai = false): Promise<
   return id;
 }
 
-export async function direct(h: Harness, m: { from: string; text?: string; echo?: boolean }) {
+export async function direct(
+  h: Harness,
+  m: { from: string; text?: string; echo?: boolean; mid?: string },
+) {
   const response = await deliver(h, messageBody(m, h.clock.now));
   if (response.statusCode !== 200) throw new Error(`webhook ${response.statusCode}`);
   await runIntake(h, true);
