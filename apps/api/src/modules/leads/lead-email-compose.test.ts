@@ -9,7 +9,7 @@ import {
   type LeadEmailSent,
   type LeadFile,
 } from '@wings/shared';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
@@ -376,6 +376,29 @@ describe('free-text e-mail from the deal', () => {
     expect(await db.$count(crmEmailOutbox, eq(crmEmailOutbox.leadId, lead.id))).toBe(0);
     // The deal's own address, a person with no "não me contate", still goes.
     expect((await compose(gmailApp, seller, lead.id, { to: lead.email })).statusCode).toBe(201);
+  });
+
+  it('"não me contate" on every channel from the deal\'s button: no e-mail, not a moment later; revoked, it goes', async () => {
+    const lead = await arrive(seller.id);
+    const recorded = await gmailApp.inject({
+      method: 'POST',
+      url: `/leads/${lead.id}/contact-opt-outs`,
+      cookies: seller.cookies,
+      payload: { channels: ['all'], reason: 'Pediu para não ser contatado' },
+    });
+    expect(recorded.statusCode).toBe(201);
+    const refused = await compose(gmailApp, seller, lead.id, { to: lead.email });
+    expect([refused.statusCode, refused.json().error]).toEqual([409, 'contact_blocked']);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(google.sentMail).toHaveLength(0);
+    expect(await db.$count(crmEmailOutbox, eq(crmEmailOutbox.leadId, lead.id))).toBe(0);
+    // The same e-mail, the lock revoked: it goes.
+    await db
+      .update(contactOptOuts)
+      .set({ revokedAt: new Date() })
+      .where(inArray(contactOptOuts.keyValue, [lead.id, lead.email!]));
+    expect((await compose(gmailApp, seller, lead.id, { to: lead.email })).statusCode).toBe(201);
+    expect(google.sentMail).toHaveLength(1);
   });
 
   it('refuses a written e-mail started from a switched-off template, as the template alone', async () => {

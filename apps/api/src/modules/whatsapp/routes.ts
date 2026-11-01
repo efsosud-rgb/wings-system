@@ -38,6 +38,7 @@ import {
   type WaCallPermission,
   type WaCallPermissionLive,
   CONTACT_BLOCKED_ERROR,
+  CONTACT_BLOCKED_TEXT,
 } from '@wings/shared';
 import { and, asc, eq, isNotNull, isNull, max, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
@@ -816,6 +817,46 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
   const callLimitReply = (reply: FastifyReply, why: string) =>
     reply.status(429).send({ error: 'call_request_limit', message: why });
 
+  /**
+   * Where a refused send is told on the timeline (`lead.contact_blocked`). Every kind of send has
+   * one: a new kind does not compile until it says where its refusal goes.
+   */
+  const BLOCKED_PATHS = {
+    text: 'texto',
+    media: 'arquivo',
+    voice: 'audio_gravado',
+    call_permission: 'pedido_ligacao',
+    template: 'modelo',
+  } as const satisfies Record<Outgoing['kind'], string>;
+
+  /**
+   * "Não me contate" or SAIR, by every key of the person and the deal: nothing goes to them by any
+   * of our numbers, a reply inside the 24 hours included (Eric, 30/10). Noted on the deal's
+   * timeline; the caller answers 409 and returns. Null: the send may go on.
+   */
+  async function contactRefusal(
+    request: FastifyRequest,
+    target: { leadId: string | null; phone: string; contact: Contact | null },
+    kind: Outgoing['kind'],
+  ): Promise<string | null> {
+    const block = await contactBlock(db, 'whatsapp', {
+      leadId: target.leadId,
+      phone: target.contact?.phone ?? target.phone,
+    });
+    if (!block.blocked) return null;
+    if (target.leadId)
+      await noteContactBlocked(
+        db,
+        target.leadId,
+        { channel: 'whatsapp', path: BLOCKED_PATHS[kind], origin: block.origin },
+        request.session.actor.employeeId,
+      );
+    return block.reason ?? CONTACT_BLOCKED_TEXT;
+  }
+
+  const contactBlockedReply = (reply: FastifyReply, why: string) =>
+    reply.status(409).send({ error: CONTACT_BLOCKED_ERROR, message: why });
+
   type Outgoing =
     | { kind: 'text'; text: string }
     | { kind: 'media'; fileId: string; caption: string }
@@ -947,6 +988,9 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       return reply
         .status(403)
         .send({ error: 'whatsapp_no_opt_in', message: WHATSAPP_OPT_IN_MISSING_TEXT });
+    // Before any write, upload or call to Meta, for every kind and every number (WA-12, nc01).
+    const blocked = await contactRefusal(request, target, outgoing.kind);
+    if (blocked) return contactBlockedReply(reply, blocked);
     // Someone else holds it: they answer, or this reader takes it first (attendance.ts).
     const known =
       target.conversationId ??
@@ -1002,52 +1046,6 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       artFileId: string | null;
     } | null = null;
     let sentFile: { fileId: string; kind: WaSendKind; mediaId: string } | null = null;
-    // A template or a call request starts a contact: the "não me contate" register decides first,
-    // on any of our numbers. A typed reply or a file inside the window keeps the rules above. A
-    // recorded voice note is refused too (the safer reading of t084, docs/whatsapp/cloud-api.md).
-    if (
-      outgoing.kind === 'template' ||
-      outgoing.kind === 'call_permission' ||
-      outgoing.kind === 'voice'
-    ) {
-      const block = await contactBlock(db, 'whatsapp', {
-        leadId: target.leadId,
-        phone: target.contact?.phone ?? target.phone,
-      });
-      // A SAIR keeps its own answer below (`opted_out`), as before.
-      if (block.blocked && !(outgoing.kind === 'template' && target.contact?.optOutAt)) {
-        if (target.leadId)
-          await noteContactBlocked(
-            db,
-            target.leadId,
-            {
-              channel: 'whatsapp',
-              path:
-                outgoing.kind === 'template'
-                  ? 'modelo'
-                  : outgoing.kind === 'voice'
-                    ? 'audio_gravado'
-                    : 'pedido_ligacao',
-              origin: block.origin,
-            },
-            request.session.actor.employeeId,
-          );
-        return reply.status(409).send({ error: CONTACT_BLOCKED_ERROR, message: block.reason });
-      }
-    }
-    // The person's last word on the official number was SAIR (a sticker after it changes nothing):
-    // a text or a file now is Wings starting again, inside the window the SAIR itself opened
-    // (WA-12). Once the person writes again, whoever answers decides.
-    if (
-      !numberId &&
-      (outgoing.kind === 'text' || outgoing.kind === 'media') &&
-      target.contact?.optOutAt
-    )
-      return reply.status(409).send({
-        error: 'opted_out',
-        message:
-          'A pessoa pediu para sair e não escreveu depois disso. Só dá para responder quando ela escrever de novo.',
-      });
     if (outgoing.kind === 'call_permission') {
       if (!window.open)
         return reply.status(409).send({
@@ -1163,14 +1161,6 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
           : {}),
       };
     } else {
-      // Who asked not to receive messages gets no template, not even as a common message, by any
-      // of our numbers: only what a person writes, inside the window.
-      if (target.contact?.optOutAt)
-        return reply.status(409).send({
-          error: 'opted_out',
-          message:
-            'A pessoa pediu para não receber mensagens. Só dá para responder quando ela escrever.',
-        });
       const context = await templateContextOf(
         db,
         {
@@ -1426,6 +1416,9 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     target: Parameters<typeof send>[2],
     outgoing: Extract<Outgoing, { kind: 'voice' }>,
   ) {
+    // Refused before the claim too: nothing is written for a person who asked not to be contacted.
+    const blocked = await contactRefusal(request, target, outgoing.kind);
+    if (blocked) return contactBlockedReply(reply, blocked);
     const mine = and(
       eq(waVoiceSends.employeeId, request.session.actor.employeeId),
       eq(waVoiceSends.key, outgoing.key),

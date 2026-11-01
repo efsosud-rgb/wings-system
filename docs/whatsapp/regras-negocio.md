@@ -55,7 +55,7 @@ Motivos de perda (proposta, tabela `dim_motivo_perda` do BI): pediu para não se
 
 - Dentro de 24 h da última mensagem do lead: resposta livre (sem custo de modelo na Meta).
 - Fora disso: só modelo aprovado (lembrete, retomada de contato). Cada modelo enviado é cobrado pela Meta por mensagem, conforme a categoria.
-- "SAIR" ou "PARAR": a Sofia confirma (uma vez só) e o contato fica bloqueado para mensagens ativas. Depois disso a conversa fica bloqueada para a Sofia: quem escrever de novo, outro SAIR incluído, cai em "Aguardando atendente" e uma pessoa decide. A equipe também não escreve antes de a pessoa escrever de novo (Eric, 29/10, WA-12).
+- "SAIR" ou "PARAR": a Sofia confirma (uma vez só) e o contato fica bloqueado para mensagens ativas. Depois disso a conversa fica bloqueada para a Sofia: quem escrever de novo, outro SAIR incluído, cai em "Aguardando atendente" e uma pessoa decide. A equipe também não envia nada (texto, arquivo, áudio, modelo), por nenhum número, nem dentro das 24 h e nem depois que a pessoa escreve de novo, até a gerência revogar o bloqueio na negociação, com motivo (Eric, 30/10 e 31/10).
 - A frase escrita pela IA só chega ao lead se for uma das frases de reconhecimento aprovadas (Eric, 29/10, WA-04; lista em `sofia.md`).
 
 ## 8. Transição com o RD Station

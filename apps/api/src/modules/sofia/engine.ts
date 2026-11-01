@@ -1,4 +1,5 @@
 import {
+  brazilianPhoneVariants,
   nextBusinessInstant,
   SOFIA_BRAND_BUTTONS,
   SOFIA_BUTTONS,
@@ -47,7 +48,7 @@ import {
 import { writeAudit } from '../../lib/audit.js';
 import type { AgentLlm, LlmUsage } from '../agent/llm.js';
 import { managersAndBoard } from '../leads/crm-alerts.js';
-import { contactBlock, recordContactOptOut } from '../leads/contact-block.js';
+import { contactBlock, recordContactOptOut, type OwnOptOut } from '../leads/contact-block.js';
 import { changeLead } from '../leads/crm.js';
 import { distribute, recordEvent } from '../whatsapp/attendance.js';
 import {
@@ -90,6 +91,8 @@ export interface SofiaDeps {
 
 /** A claim older than this was cut short by a restart. */
 const STALE_CLAIM_MS = 2 * 60_000;
+/** The SAIR's register row is written just before its message is stored (intake.ts). */
+const OWN_OPT_OUT_SLACK_MS = 60_000;
 /** The most one AI call may cost, reserved before it is made (a turn costs well under a cent). */
 export const SOFIA_RESERVE_MICRO_USD = 10_000;
 /** Lines of the conversation the AI reads. */
@@ -228,6 +231,8 @@ class Turn {
   private settings!: SofiaSettings;
   private contact!: Contact;
   private newIds: string[] = [];
+  /** This turn's own SAIR, left out of the "não me contate" check so it gets its confirmation. */
+  private ownOptOut: OwnOptOut | undefined;
   private parts: string[] = [];
 
   constructor(
@@ -300,15 +305,16 @@ class Turn {
     // Who asked not to be contacted and writes again, a second SAIR included, is answered by a
     // person, never by Sofia alone (Eric, 29/10; WA-12): the register, a SAIR or the Prospecção
     // opt-in rule, as `contactBlock` reads.
-    const stop = fresh.some((m) => isOptOut(m.text));
-    const block = await contactBlock(
-      db,
-      'whatsapp',
-      { leadId: this.conversation.leadId, phone: contact.phone },
-      // This turn's own SAIR is in the register already; alone, it still gets its confirmation.
-      stop && !(await this.askedToStopBefore()) ? 'whatsapp_palavra' : undefined,
-    );
-    if (block.blocked) return this.toOwnerOptedOut();
+    const stop = fresh.find((m) => isOptOut(m.text));
+    // This turn's own SAIR is in the register already; alone, it still gets its confirmation. Only
+    // that SAIR is left out: an older one by any key of the person (another phone of the deal, a
+    // "não quero mais" from before its mark) still blocks. Both times are the database's clock.
+    if (stop && !(await this.askedToStopBefore()))
+      this.ownOptOut = {
+        origin: 'whatsapp_palavra',
+        since: new Date(stop.createdAt.getTime() - OWN_OPT_OUT_SLACK_MS),
+      };
+    if ((await this.contactBlocked()).blocked) return this.toOwnerOptedOut();
     if (stop) return this.close('nao_contatar', true);
 
     // Her state moves only once Meta took the message (staging, 26/10: "qual é o seu nome?" was
@@ -887,20 +893,55 @@ class Turn {
     await this.send({ ...words, content: { ...words.content, optOut: true } });
   }
 
-  /** The person had asked to stop before this turn: an earlier SAIR, or her confirmation of one. */
+  /** "Não me contate" by every key of the person and the deal, but this turn's own SAIR. */
+  private contactBlocked() {
+    return contactBlock(
+      this.db,
+      'whatsapp',
+      { leadId: this.conversation.leadId, phone: this.contact.phone },
+      this.ownOptOut,
+    );
+  }
+
+  /**
+   * The person had asked to stop before this turn: an earlier SAIR, or her confirmation of one,
+   * from this phone (with or without the 9th digit), the deal's phone or any chat of the deal.
+   */
   private async askedToStopBefore() {
+    const [lead] = this.conversation.leadId
+      ? await this.db
+          .select({ phone: leads.phone })
+          .from(leads)
+          .where(eq(leads.id, this.conversation.leadId))
+      : [];
+    const phones = [this.contact.phone, lead?.phone]
+      .filter((phone): phone is string => !!phone)
+      .flatMap((phone) => brazilianPhoneVariants(phone));
     const earlier = await this.db
       .select({ direction: waMessages.direction, text: waMessages.text })
       .from(waMessages)
       .where(
         and(
-          // By the contact's conversations: wa_messages has no index of its own on the contact.
+          // By the person's conversations: wa_messages has no index of its own on the contact.
           inArray(
             waMessages.conversationId,
             this.db
               .select({ id: waConversations.id })
               .from(waConversations)
-              .where(eq(waConversations.contactId, this.contact.id)),
+              .where(
+                or(
+                  inArray(
+                    waConversations.contactId,
+                    this.db
+                      .select({ id: waContacts.id })
+                      .from(waContacts)
+                      .where(inArray(waContacts.phone, phones)),
+                  ),
+                  this.conversation.leadId
+                    ? eq(waConversations.leadId, this.conversation.leadId)
+                    : undefined,
+                ),
+              ),
           ),
           notInArray(waMessages.id, this.newIds),
           or(
@@ -1083,6 +1124,12 @@ class Turn {
       .from(waConversations)
       .where(eq(waConversations.id, this.conversation.id));
     if (now?.version !== this.savedVersion) {
+      this.stillHers = false;
+      return;
+    }
+    // A "não me contate" recorded while she read (the AI takes seconds) stops what is left to say.
+    // Her confirmation of an opt-out is the one word that still goes.
+    if (outgoing.content.optOut !== true && (await this.contactBlocked()).blocked) {
       this.stillHers = false;
       return;
     }
