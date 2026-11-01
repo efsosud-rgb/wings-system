@@ -16,6 +16,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const status: { data: InstagramStatus } = {
   data: {
     enabled: true,
+    webhookEnabled: true,
+    replyEnabled: true,
     aiEnabled: false,
     settings: DEFAULT_INSTAGRAM_PROSPECTING_SETTINGS,
     pastesToday: 2,
@@ -28,6 +30,8 @@ const confirmMutate = vi.fn();
 const actionMutate = vi.fn();
 const fetchMessage = vi.fn();
 const saveMutate = vi.fn();
+const replyMutate = vi.fn();
+const wings: { data: InstagramProspect[] } = { data: [] };
 const idle = { isPending: false, isError: false, isSuccess: false, reset: vi.fn() };
 
 vi.mock('../../api/prospect-ai.js', () => ({
@@ -42,6 +46,8 @@ vi.mock('../../api/prospect-ai.js', () => ({
   useCreateInstagramLead: () => ({ ...idle, mutate: vi.fn() }),
   useSaveInstagramSettings: () => ({ ...idle, mutate: saveMutate }),
   fetchFirstMessage: (id: string) => fetchMessage(id),
+  useWingsComments: () => ({ data: { prospects: wings.data }, isError: false }),
+  usePrivateReply: () => ({ ...idle, mutate: replyMutate }),
 }));
 
 const { InstagramTab } = await import('./InstagramProspecting.js');
@@ -56,7 +62,8 @@ afterEach(() => {
   vi.clearAllMocks();
   preview.data = undefined;
   prospects.data = [];
-  status.data = { ...status.data, enabled: true };
+  wings.data = [];
+  status.data = { ...status.data, enabled: true, webhookEnabled: true };
 });
 
 const prospect = (extra: Partial<InstagramProspect>): InstagramProspect => ({
@@ -84,6 +91,10 @@ const prospect = (extra: Partial<InstagramProspect>): InstagramProspect => ({
   moreComments: 0,
   purgeAt: new Date(Date.now() + 30 * 86_400_000).toISOString(),
   createdAt: new Date().toISOString(),
+  part: 2,
+  respondBy: null,
+  onAd: false,
+  privateReply: null,
   ...extra,
 });
 
@@ -91,7 +102,7 @@ describe('InstagramTab', () => {
   it('off: says why with "—", never an empty list', () => {
     status.data = { ...status.data, enabled: false };
     wrap(<InstagramTab canPaste canManage={false} canConfigure={false} />);
-    expect(screen.getByText(/Prospecção Instagram desligada/)).toBeTruthy();
+    expect(screen.getByText(/Colar comentários desligado/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Ler comentários' })).toBeNull();
   });
 
@@ -227,5 +238,60 @@ describe('Ajustes do Instagram', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Salvar' }));
     expect(screen.getByRole('alert')).toBeTruthy();
     expect(saveMutate).not.toHaveBeenCalled();
+  });
+});
+
+describe('Comentários da Wings (parte 1)', () => {
+  const wingsProspect = (extra: Partial<InstagramProspect>) =>
+    prospect({
+      batchId: null,
+      postOwner: null,
+      part: 1,
+      occurredAtPrecision: 'exata',
+      respondBy: new Date(Date.now() + 6 * 86_400_000).toISOString(),
+      purgeAt: null,
+      ...extra,
+    });
+  const openWings = () => {
+    wrap(<InstagramTab canPaste canManage={false} canConfigure={false} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Comentários da Wings' }));
+  };
+
+  it('shows even with the paste off, and says why when the webhook is off', () => {
+    status.data = { ...status.data, enabled: false, webhookEnabled: false };
+    wrap(<InstagramTab canPaste canManage={false} canConfigure={false} />);
+    expect(screen.getByText(/Comentários da Wings desligados/)).toBeTruthy();
+  });
+
+  it('the private reply asks for a confirmation before it is sent, once', () => {
+    wings.data = [wingsProspect({})];
+    openWings();
+    expect(screen.getByText(/responder até/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar resposta privada' }));
+    expect(replyMutate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmar envio' }));
+    expect(replyMutate).toHaveBeenCalledWith('p1');
+  });
+
+  it('no button once the reply was tried, nor past the deadline, nor outside "Quer comprar"', () => {
+    wings.data = [
+      wingsProspect({ id: 'a', privateReply: { status: 'unknown', sentAt: null, alone: false } }),
+      wingsProspect({ id: 'b', respondBy: new Date(Date.now() - 60_000).toISOString() }),
+      wingsProspect({ id: 'c', state: 'em_revisao', list: 'revisar' }),
+    ];
+    openWings();
+    expect(screen.queryByRole('button', { name: 'Enviar resposta privada' })).toBeNull();
+    expect(screen.getByText(/Envio não confirmado/)).toBeTruthy();
+  });
+
+  it('a lead from the Direct offers "pediu contato por WhatsApp", marked by the seller', () => {
+    wings.data = [wingsProspect({ state: 'aprovada', leadId: 'l1' })];
+    openWings();
+    fireEvent.click(screen.getByRole('button', { name: 'A pessoa pediu contato por WhatsApp' }));
+    expect(actionMutate).toHaveBeenCalledWith({
+      id: 'p1',
+      action: 'whatsapp-asked',
+      body: undefined,
+    });
   });
 });

@@ -8,6 +8,8 @@ import {
   LEAD_PIPELINE_LABELS,
   LEAD_PIPELINES,
   pipelineOfCategory,
+  PRIVATE_REPLY_MODE_LABELS,
+  PRIVATE_REPLY_MODES,
   PROSPECT_REVIEW_REASON_LABELS,
   PROSPECT_STATE_LABELS,
   type BuySignal,
@@ -15,6 +17,7 @@ import {
   type InstagramProspectingSettings,
   type InstagramProspectList,
   type LeadPipeline,
+  type PrivateReplyMode,
 } from '@wings/shared';
 import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
@@ -310,7 +313,13 @@ function ProspectCard({
   );
 }
 
-function LeadModal({ prospect, onClose }: { prospect: InstagramProspect; onClose: () => void }) {
+export function LeadModal({
+  prospect,
+  onClose,
+}: {
+  prospect: InstagramProspect;
+  onClose: () => void;
+}) {
   const create = useCreateInstagramLead();
   const [form, setForm] = useState({
     contactName: '',
@@ -500,6 +509,42 @@ export function InstagramSettings({ settings }: { settings: InstagramProspecting
                 ...c,
                 messages: { ...c.messages, linkPolitica: e.target.value.trim() || null },
               }))
+            }
+          />
+        </label>
+        <label className="crm-field">
+          <span>Resposta privada (comentários nos posts e anúncios da Wings)</span>
+          <select
+            className="crm-select"
+            value={form.privateReply.modo}
+            onChange={(e) =>
+              setForm((c) => ({
+                ...c,
+                privateReply: { ...c.privateReply, modo: e.target.value as PrivateReplyMode },
+              }))
+            }
+          >
+            {PRIVATE_REPLY_MODES.map((mode) => (
+              <option key={mode} value={mode}>
+                {PRIVATE_REPLY_MODE_LABELS[mode]}
+              </option>
+            ))}
+          </select>
+        </label>
+        {num('Confiança para a resposta sair sozinha', form.privateReply.confiancaAutomatica, (n) =>
+          setForm((c) => ({ ...c, privateReply: { ...c.privateReply, confiancaAutomatica: n } })),
+        )}
+        <label className="crm-field is-wide">
+          <span>
+            Texto da resposta privada (uma mensagem só; ligar a resposta sozinha e trocar o texto é
+            só do Admin Master)
+          </span>
+          <textarea
+            className="crm-input"
+            rows={5}
+            value={form.privateReply.texto}
+            onChange={(e) =>
+              setForm((c) => ({ ...c, privateReply: { ...c.privateReply, texto: e.target.value } }))
             }
           />
         </label>
