@@ -33,6 +33,8 @@ const PUBLIC_ROUTES = [
   'POST /integrations/zapi/webhook',
   'GET /integrations/meta/leadgen/webhook',
   'POST /integrations/meta/leadgen/webhook',
+  'GET /integrations/instagram/webhook',
+  'POST /integrations/instagram/webhook',
   'POST /integrations/tiktok/leads/webhook',
   'POST /integrations/google-ads/leads/webhook',
   'GET /integrations/whatsapp/webhook',

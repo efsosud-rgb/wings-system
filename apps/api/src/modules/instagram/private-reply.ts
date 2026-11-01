@@ -111,6 +111,16 @@ async function claim(
 ): Promise<{ id: string } | { block: IgPrivateReplyBlock | 'ja_tratado' }> {
   return deps.db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${LOCK_KEY}))`);
+    const [done] = await tx
+      .select({ id: igPrivateReplies.id })
+      .from(igPrivateReplies)
+      .where(
+        and(
+          eq(igPrivateReplies.tenantId, WINGS_TENANT_ID),
+          eq(igPrivateReplies.commentId, comment.commentId),
+        ),
+      );
+    if (done) return { block: 'ja_tratado' as const };
     const sinceDay = new Date(deps.now.getTime() - PRIVATE_REPLY_SAME_PERSON_DAYS * DAY_MS);
     const counted = and(
       eq(igPrivateReplies.tenantId, WINGS_TENANT_ID),
