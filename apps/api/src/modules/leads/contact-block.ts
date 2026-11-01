@@ -91,8 +91,29 @@ function registerMatch(keys: ReturnType<typeof normalisedKeys>): SQL | undefined
   );
 }
 
+/**
+ * Entries one event made, left out of a check: the origin, and the moment the event arrived (the
+ * database's clock, as `contact_opt_outs.created_at`). A register row of that origin from before
+ * `since` still counts; the older sources of that origin (`wa_contacts.opt_out_at`, rewritten by
+ * every SAIR) never do.
+ */
+export interface OwnOptOut {
+  origin: ContactOptOutOrigin;
+  since: Date;
+}
+
+const isOwn = (entry: ContactOptOutEntry, own: OwnOptOut | undefined) =>
+  !!own &&
+  entry.origin === own.origin &&
+  (entry.id === null || entry.since >= own.since.toISOString());
+
 /** Every active "não me contate" that reaches these keys, oldest first, one per channel and origin. */
-async function entriesOf(db: Executor, tenantId: string, keys: ReturnType<typeof normalisedKeys>) {
+async function entriesOf(
+  db: Executor,
+  tenantId: string,
+  keys: ReturnType<typeof normalisedKeys>,
+  own?: OwnOptOut,
+) {
   const match = registerMatch(keys);
   const [register, waOptOuts, prospectRows] = await Promise.all([
     match
@@ -153,7 +174,10 @@ async function entriesOf(db: Executor, tenantId: string, keys: ReturnType<typeof
       reason: row.reason,
       since: row.since.toISOString(),
     })),
-  ].sort((a, b) => a.since.localeCompare(b.since));
+  ]
+    // Left out before one per channel and origin is kept: an older row of the same origin stays.
+    .filter((entry) => !isOwn(entry, own))
+    .sort((a, b) => a.since.localeCompare(b.since));
   const seen = new Set<string>();
   return all.filter((entry) => {
     const key = `${entry.channel}:${entry.origin}`;
@@ -185,22 +209,19 @@ function decide(
 
 /**
  * Whether Wings may start a contact on this channel (or any of these), and why not. `except` leaves
- * one origin out: Sofia asks it without the SAIR she is about to confirm.
+ * out what one event made: Sofia asks it without the SAIR she is about to confirm, and only that
+ * one (an older SAIR, by any key of the person, still blocks).
  */
 export async function contactBlock(
   db: Executor,
   channel: ContactChannel | ContactChannel[],
   keys: ContactKeys,
-  except?: ContactOptOutOrigin,
+  except?: OwnOptOut,
 ): Promise<ContactBlock> {
   const tenantId = keys.tenantId ?? WINGS_TENANT_ID;
   const lead = await leadOf(db, tenantId, keys.leadId);
-  const entries = await entriesOf(db, tenantId, normalisedKeys(keys, lead));
-  return decide(
-    entries.filter((entry) => entry.origin !== except),
-    lead,
-    [channel].flat(),
-  );
+  const entries = await entriesOf(db, tenantId, normalisedKeys(keys, lead), except);
+  return decide(entries, lead, [channel].flat());
 }
 
 /** A lead's badge: every active entry, and per channel whether a contact may start. */
