@@ -80,7 +80,8 @@ beforeAll(async () => {
 /**
  * pg warns (and pg 9 will refuse) when a query starts on a connection still busy with another, which
  * is what two reads side by side inside one transaction do. The return path reads the "não me
- * contate" register through the pool for that reason; any warning here means it slid back inside.
+ * contate" register through the transaction, one query at a time; any warning here means reads
+ * went side by side again.
  */
 const busyClientWarnings: string[] = [];
 const onWarning = (warning: Error) => {

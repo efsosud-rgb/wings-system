@@ -1,5 +1,4 @@
 import { sql } from 'drizzle-orm';
-import type { Database } from '../../db/client.js';
 import { announceLeadReturned } from './crm-alerts.js';
 import { ensureReturnTask, type Executor, type ReturnTaskResult } from './crm.js';
 import { contactBlock } from './contact-block.js';
@@ -44,19 +43,19 @@ export async function registerLeadReturn(
     suspectClearedAt: Date | null;
   },
   given: { phone: string | null; email: string | null },
-  reader: Database,
   now = new Date(),
 ): Promise<LeadReturnOutcome> {
   await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`lead:returned:${lead.id}`}))`);
   if (lead.suspectAt && !lead.suspectClearedAt)
     return { held: 'suspect', blocked: false, task: 'held', notice: 'held' };
-  // Read through the pool, not the transaction: `contactBlock` runs its reads side by side, which one
-  // transaction connection does not take (deprecated, and removed in pg 9). The register is only read, never part of
-  // what this transaction writes. The lead's own keys come with its id; the phone and e-mail typed this time, when they differ, are
+  // Read through `tx`, one query at a time (`contactBlock`): a read through the pool would ask for a
+  // second connection while this transaction holds the lead's lock on the first, and with as many
+  // submissions at once as the pool has connections every one waits for another (the API stops). The
+  // lead's own keys come with its id; the phone and e-mail typed this time, when they differ, are
   // added, so a block registered on either reaches the person.
   let blocked = true;
   for (const channel of CHANNELS) {
-    const check = await contactBlock(reader, channel, {
+    const check = await contactBlock(tx, channel, {
       leadId: lead.id,
       phone: given.phone,
       email: given.email,

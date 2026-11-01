@@ -71,7 +71,8 @@ beforeAll(async () => {
 /**
  * pg warns (and pg 9 will refuse) when a query starts on a connection still busy with another, which
  * is what two reads side by side inside one transaction do. The return path reads the "não me
- * contate" register through the pool for that reason; any warning here means it slid back inside.
+ * contate" register through the transaction, one query at a time; any warning here means reads
+ * went side by side again.
  */
 const busyClientWarnings: string[] = [];
 const onWarning = (warning: Error) => {
@@ -241,6 +242,27 @@ describe('the 24 h limit on a lead that fills the site form again', () => {
     expect(await noticesOf(who.lead.id, 'lead_returned')).toHaveLength(1);
     expect(await eventsOf(who.lead.id, 'lead.received.site_form')).toHaveLength(6);
   });
+
+  it('more submissions at the same moment than the pool has connections still all answer, with one task and one notice', async () => {
+    // The pool has 10 connections (`createDb`). A read through the pool inside the transaction that
+    // holds the lead's lock made 10 or more of these wait on each other until the API stopped.
+    const who = await born();
+    const sends = 12;
+    const answered = Promise.all(
+      Array.from({ length: sends }, (_, i) =>
+        post(fale({ ...who.person, companyName: `Pool ${i}` }), `10.3.0.${i + 1}`),
+      ),
+    );
+    const timeout = new Promise<'stuck'>((resolve) => setTimeout(() => resolve('stuck'), 20_000));
+    const responses = await Promise.race([answered, timeout]);
+    expect(responses).not.toBe('stuck');
+    expect((responses as { statusCode: number }[]).map((r) => r.statusCode)).toEqual(
+      Array(sends).fill(200),
+    );
+    expect(await returnTasksOf(who.lead.id)).toHaveLength(1);
+    expect(await noticesOf(who.lead.id, 'lead_returned')).toHaveLength(1);
+    expect(await eventsOf(who.lead.id, 'lead.received.site_form')).toHaveLength(sends + 1);
+  }, 40_000);
 
   it('a lead marked as a robot gets the answer on the timeline but no task and no notice; clearing the mark brings them back', async () => {
     const who = await born();

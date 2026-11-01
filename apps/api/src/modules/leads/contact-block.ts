@@ -115,29 +115,30 @@ async function entriesOf(
   own?: OwnOptOut,
 ) {
   const match = registerMatch(keys);
-  const [register, waOptOuts, prospectRows] = await Promise.all([
-    match
-      ? db
-          .select()
-          .from(contactOptOuts)
-          .where(
-            and(eq(contactOptOuts.tenantId, tenantId), isNull(contactOptOuts.revokedAt), match),
-          )
-      : [],
-    keys.phone.length
-      ? db
-          .select({ since: waContacts.optOutAt })
-          .from(waContacts)
-          .where(
-            and(
-              eq(waContacts.tenantId, tenantId),
-              inArray(waContacts.phone, keys.phone),
-              isNotNull(waContacts.optOutAt),
-            ),
-          )
-      : [],
+  // One read at a time: a transaction's connection takes one query at a time (side by side, pg warns
+  // and pg 9 refuses), and a caller inside a transaction must read through it, never through the pool
+  // (a second connection held while the first waits is how the pool runs dry).
+  const register = match
+    ? await db
+        .select()
+        .from(contactOptOuts)
+        .where(and(eq(contactOptOuts.tenantId, tenantId), isNull(contactOptOuts.revokedAt), match))
+    : [];
+  const waOptOuts = keys.phone.length
+    ? await db
+        .select({ since: waContacts.optOutAt })
+        .from(waContacts)
+        .where(
+          and(
+            eq(waContacts.tenantId, tenantId),
+            inArray(waContacts.phone, keys.phone),
+            isNotNull(waContacts.optOutAt),
+          ),
+        )
+    : [];
+  const prospectRows =
     keys.place_id.length || keys.lead.length
-      ? db
+      ? await db
           .select({ reason: prospects.reason, since: prospects.updatedAt })
           .from(prospects)
           .where(
@@ -150,8 +151,7 @@ async function entriesOf(
               ),
             ),
           )
-      : [],
-  ]);
+      : [];
   const all: ContactOptOutEntry[] = [
     ...register.map((row) => ({
       id: row.id,

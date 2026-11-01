@@ -732,7 +732,7 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
         incoming.source === 'site_form' &&
         Date.now() - lead.createdAt.getTime() >= SITE_FORM_RETURN_MIN_AGE_MS;
       const returnOutcome = returned
-        ? await registerLeadReturn(tx, lead, { phone, email }, db)
+        ? await registerLeadReturn(tx, lead, { phone, email })
         : undefined;
       // RD's echo of a site form submission queues no research (`RD_ECHO_WINDOW_MS`): decided here,
       // on the lead this transaction found, never from a read before it.

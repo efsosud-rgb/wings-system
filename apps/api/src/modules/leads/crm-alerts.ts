@@ -747,6 +747,7 @@ export async function announceLeadReturned(
               where: and(
                 eq(leadTasks.leadId, lead.id),
                 eq(leadTasks.title, RETURN_TASK_TITLE),
+                eq(leadTasks.auto, true),
                 isNull(leadTasks.doneAt),
               ),
               columns: { dueAt: true },
