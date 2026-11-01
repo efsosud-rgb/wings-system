@@ -2,7 +2,7 @@ import type { Lead, LeadEvent } from '@wings/shared';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { LoadedLead } from '../../api/leads.js';
-import { entriesOf, EVENT_LABELS, meetingBody, Timeline } from './DealTabs.js';
+import { entriesOf, EVENT_LABELS, meetingBody, siteFormBody, Timeline } from './DealTabs.js';
 import { formatDateTime } from './format.js';
 
 /**
@@ -251,6 +251,41 @@ describe('the history entries of a meeting', () => {
     expect(within(list).getByText(`Para ${formatDateTime(START)}`)).toBeTruthy();
     expect(within(list).getByText('Reunião cancelada')).toBeTruthy();
     expect(within(list).queryByText('Resumo gerado pela IA')).toBeNull();
+  });
+});
+
+describe('entriesOf — the site form filled again', () => {
+  const submitted = {
+    answers: { 'O que você procura?': 'Consultoria para o meu negócio' },
+    companyName: 'Padaria Dois',
+    instagram: 'padaria.dois',
+    website: 'https://padaria-dois.example.com',
+    utm: { source: 'instagram', medium: null, campaign: 'segunda', content: null, term: null },
+  };
+
+  it('titles the arrival matched to an existing lead as a return, with what the form said', () => {
+    const again = event({
+      id: 'e9',
+      kind: 'lead.received.site_form',
+      detail: { matched: 'existing', submitted },
+    });
+    const [entry] = entriesOf(loaded([again]));
+    expect(entry).toMatchObject({
+      tone: 'event',
+      title: 'Preencheu o formulário do site de novo',
+      body: 'O que você procura?: Consultoria para o meu negócio · Empresa: Padaria Dois · Instagram: padaria.dois · Site: https://padaria-dois.example.com · UTM: source=instagram campaign=segunda',
+    });
+  });
+
+  it('keeps the first arrival as "Chegou pelo formulário do site" and has no body without the answers', () => {
+    const first = event({ id: 'e8', kind: 'lead.received.site_form', detail: { matched: 'new' } });
+    expect(entriesOf(loaded([first]))[0]).toMatchObject({
+      title: EVENT_LABELS['lead.received.site_form'],
+      body: null,
+    });
+    expect(
+      siteFormBody(event({ id: 'e7', kind: 'lead.received.site_form', detail: { submitted: {} } })),
+    ).toBe(null);
   });
 });
 

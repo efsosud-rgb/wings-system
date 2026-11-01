@@ -86,6 +86,7 @@ import { instagramCheckOf } from './instagram-check.js';
 import { franchiseLpHosts } from './landing-base.js';
 import { markSuspectsAround } from './suspect.js';
 import { enqueueTriage } from './triage-queue.js';
+import { registerLeadReturn, type LeadReturnOutcome } from './lead-return.js';
 import { TRIAGE_SOURCES, leadTriageEnabled, scheduleLeadTriage } from './triage-schedule.js';
 import {
   announceStageEntered,
@@ -396,6 +397,13 @@ export interface UpsertResult {
    * transaction): the door then leaves the arrival notice to the triage.
    */
   triageQueued?: boolean;
+  /**
+   * A lead that already existed, older than `SITE_FORM_RETURN_MIN_AGE_MS`, came back through the
+   * site form; `returnOutcome` says what its seller was given (`registerLeadReturn`, in the same
+   * transaction as the answer).
+   */
+  returned?: boolean;
+  returnOutcome?: LeadReturnOutcome;
 }
 
 /**
@@ -540,6 +548,35 @@ export class ForeignLeadError extends Error {
   constructor() {
     super('foreign_lead');
   }
+}
+
+/**
+ * A lead younger than this whose person fills the site form again sent the same form twice (a
+ * double click, a retry on a slow network), not a person coming back: the answer stays on the
+ * timeline, nobody is told and no return task is made (review of PR #13, 21/10/2026).
+ */
+export const SITE_FORM_RETURN_MIN_AGE_MS = 10 * 60 * 1000;
+
+/**
+ * RD Marketing logs each site form submission as a conversion of its own, 44 s to a few minutes
+ * later. An RD arrival on a lead with a site form arrival this recent is that echo, and the site
+ * form's own switch (`SITE_FORM_RESEARCH_ENABLED`) already decided whether to pay for the research:
+ * the echo queues none. Later than this it is the person converting again, researched as before
+ * when the lead never was.
+ */
+export const RD_ECHO_WINDOW_MS = 60 * 60 * 1000;
+
+/** Whether the lead had a site form arrival within `RD_ECHO_WINDOW_MS`. */
+async function recentSiteFormArrival(tx: Executor, leadId: string): Promise<boolean> {
+  const event = await tx.query.leadEvents.findFirst({
+    where: and(
+      eq(leadEvents.leadId, leadId),
+      eq(leadEvents.kind, 'lead.received.site_form'),
+      gte(leadEvents.at, new Date(Date.now() - RD_ECHO_WINDOW_MS)),
+    ),
+    columns: { id: true },
+  });
+  return event !== undefined;
 }
 
 /** The phone is in a conversation Sofia or the team is attending, with no deal yet (WA-03). */
@@ -687,8 +724,22 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
           filled: Object.keys(patch),
         },
       });
+      // The person of a lead that already exists filled the site form again: their seller gets a
+      // return task and the notice, at most one of each per lead a day (`registerLeadReturn`). Only
+      // this door, by Eric's decision of 21/10/2026, and not for the same form sent twice in a row.
+      // The answer is on the timeline above whatever the limit decides.
+      const returned =
+        incoming.source === 'site_form' &&
+        Date.now() - lead.createdAt.getTime() >= SITE_FORM_RETURN_MIN_AGE_MS;
+      const returnOutcome = returned
+        ? await registerLeadReturn(tx, lead, { phone, email })
+        : undefined;
+      // RD's echo of a site form submission queues no research (`RD_ECHO_WINDOW_MS`): decided here,
+      // on the lead this transaction found, never from a read before it.
+      const echo = incoming.source === 'rd_station' && (await recentSiteFormArrival(tx, lead.id));
       const needsResearch =
         !incoming.skipResearch &&
+        !echo &&
         (lead.enrichmentState === 'none' || lead.enrichmentState === 'failed');
       const researched = needsResearch ? await enqueueResearch(tx, lead.id, null) : null;
       return {
@@ -696,6 +747,8 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
         created: false,
         researchQueued: researched !== null,
         filled: Object.keys(patch),
+        returned,
+        returnOutcome,
       };
     }
 

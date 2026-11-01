@@ -70,7 +70,8 @@ describe('arrival notices', () => {
       where: and(eq(leadTasks.leadId, born.lead.id), eq(leadTasks.kind, 'first_contact')),
     });
     expect(task).toBeTruthy();
-    // The same person arriving again is a merge, not a new lead: no second notice.
+    // The same person arriving again right away is a merge, not a new lead: no second notice (a
+    // return through the site form is told only after SITE_FORM_RETURN_MIN_AGE_MS).
     const again = await arrive({ phone: '5511900009999' });
     expect(again.created).toBe(false);
     expect(await noticesOf(born.lead.id)).toHaveLength(1);

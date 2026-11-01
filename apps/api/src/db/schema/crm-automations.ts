@@ -236,7 +236,7 @@ export const crmNotifications = pgTable(
       .notNull()
       .references(() => employees.id),
     leadId: uuid('lead_id').references(() => leads.id),
-    /** automation | first_contact_overdue | task_overdue | stage_stuck | new_lead | lead_unassigned | lead_whatsapp | lead_email | backfill_assigned | backfill_unassigned | meeting_soon */
+    /** automation | first_contact_overdue | task_overdue | stage_stuck | new_lead | lead_unassigned | lead_whatsapp | lead_email | lead_returned | backfill_assigned | backfill_unassigned | meeting_soon */
     kind: text('kind').notNull(),
     message: text('message').notNull(),
     /** One notice per condition and person: a later pass finding the same overdue task adds nothing. */

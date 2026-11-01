@@ -43,7 +43,10 @@ Turnstile de verdade; o envio vai para a API; o `robots` passou a vir do ambient
    palavra por palavra, e é a que o lead guarda (um teste da API confere a página contra o seed). O construtor de
    campanhas não lista nem altera esta página (409 `landing_page_spec`). O resto (dono pelo rodízio, avisos, Turnstile
    conferido no servidor, limite por IP) é o formulário do site de sempre
-   ([../leads/formularios.md](../leads/formularios.md)).
+   ([../leads/formularios.md](../leads/formularios.md)). Uma pessoa que o CRM já tem (mesmo telefone ou e-mail) não
+   vira lead novo: o dono recebe aviso no sino e uma tarefa de retorno, e a resposta nova fica na linha do tempo; o
+   mesmo formulário enviado duas vezes seguidas (lead com menos de 10 minutos) só fica na linha do tempo, e no máximo 1 aviso e 1 tarefa por lead a cada 24 h (a resposta nova é sempre guardada)
+   ([../crm/aviso-lead-novo.md](../crm/aviso-lead-novo.md), "Lead que preenche o formulário de novo").
 
 ## Diagnóstico gratuito (27/10/2026)
 

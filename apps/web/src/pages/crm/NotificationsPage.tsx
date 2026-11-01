@@ -18,6 +18,7 @@ const KIND_LABEL: Record<string, string> = {
   new_lead: 'Novo lead',
   lead_unassigned: 'Lead sem dono',
   lead_whatsapp: 'Lead chamou no WhatsApp',
+  lead_returned: 'Lead preencheu o formulário de novo',
   whatsapp_assigned: 'Conversa do WhatsApp',
   whatsapp_webhook_failed: 'Aviso da Meta com falha',
   whatsapp_send_unknown: 'Mensagem sem resposta da Meta',
