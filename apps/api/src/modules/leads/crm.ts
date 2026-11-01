@@ -16,7 +16,7 @@ import {
   type LeadTaskKind,
   type Seller,
 } from '@wings/shared';
-import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { contactNameSql, listConditions, nextTaskSql, type LeadListFilter } from './service.js';
 import {
@@ -821,17 +821,29 @@ export async function ensureFirstContactTask(
 export const RETURN_TASK_TITLE = 'Retornar: o lead preencheu o formulário do site de novo';
 
 /**
- * The return task (docs/crm/aviso-lead-novo.md, "Lead que preenche o formulário de novo"): one open
- * per lead, for its owner, due in `firstContactSlaHours` like the first contact. A submission while it
- * is still open adds no task (the assignee follows the owner, as the first-contact task does); once the
- * seller marks it done, the next submission makes a new one. Without an owner there is nobody to give it to.
+ * One return task, and one return notice, per lead in this long (Eric, 29/10/2026: "no máximo 1
+ * aviso e 1 tarefa por lead a cada 24 h"): a form sent over and over cannot pile tasks on a seller.
+ * Counted from the moment the previous one was made, finished or not.
+ */
+export const RETURN_LIMIT_MS = 24 * 60 * 60 * 1000;
+
+/** What `ensureReturnTask` did: made one, found one still open, or held back by the 24 h limit. */
+export type ReturnTaskResult = 'created' | 'open' | 'limit' | 'no_owner';
+
+/**
+ * The return task (docs/crm/aviso-lead-novo.md, "Lead que preenche o formulário de novo"): for the
+ * lead's owner, due in `firstContactSlaHours` like the first contact. A submission while one is still
+ * open adds no task (the assignee follows the owner, as the first-contact task does), and neither does
+ * one within `RETURN_LIMIT_MS` of the last return task made, even if the seller already finished it.
+ * Without an owner there is nobody to give it to. The caller holds the lead's lock (`registerLeadReturn`),
+ * so the check and the insert are one step.
  */
 export async function ensureReturnTask(
   db: Executor,
   lead: { id: string; ownerEmployeeId: string | null },
   now = new Date(),
-): Promise<void> {
-  if (!lead.ownerEmployeeId) return;
+): Promise<ReturnTaskResult> {
+  if (!lead.ownerEmployeeId) return 'no_owner';
   const open = await db.query.leadTasks.findFirst({
     where: and(
       eq(leadTasks.leadId, lead.id),
@@ -847,8 +859,18 @@ export async function ensureReturnTask(
         .set({ assigneeEmployeeId: lead.ownerEmployeeId })
         .where(eq(leadTasks.id, open.id));
     }
-    return;
+    return 'open';
   }
+  const recent = await db.query.leadTasks.findFirst({
+    where: and(
+      eq(leadTasks.leadId, lead.id),
+      eq(leadTasks.title, RETURN_TASK_TITLE),
+      eq(leadTasks.auto, true),
+      gt(leadTasks.createdAt, new Date(now.getTime() - RETURN_LIMIT_MS)),
+    ),
+    columns: { id: true },
+  });
+  if (recent) return 'limit';
   const [row] = await db
     .insert(leadTasks)
     .values({
@@ -859,6 +881,7 @@ export async function ensureReturnTask(
       assigneeEmployeeId: lead.ownerEmployeeId,
       auto: true,
       createdBy: null,
+      createdAt: now,
     })
     .returning();
   if (row) {
@@ -875,6 +898,7 @@ export async function ensureReturnTask(
       },
     });
   }
+  return 'created';
 }
 
 // --- distribution --------------------------------------------------------------------

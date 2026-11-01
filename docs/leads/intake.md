@@ -61,8 +61,12 @@ conversão no RD, mais tarde, pesquisa como sempre.
 
 Pelo **formulário do site**, um lead que já existe há mais de 10 minutos
 (`SITE_FORM_RETURN_MIN_AGE_MS`) ainda ganha a tarefa de retorno para o dono e
-o aviso no sino, e a resposta nova fica na linha do tempo (`detail.submitted`);
-o mesmo formulário enviado duas vezes seguidas só fica na linha do tempo:
+o aviso no sino, **no máximo 1 aviso e 1 tarefa por lead a cada 24 h** (Eric,
+29/10/2026), e a resposta nova fica na linha do tempo (`detail.submitted`)
+sempre, dentro ou fora das 24 h; o mesmo formulário enviado duas vezes seguidas
+só fica na linha do tempo, e lead suspeito de robô
+([suspeitos.md](suspeitos.md)) ou que pediu "não me contate" em todos os canais
+não ganha tarefa:
 [../crm/aviso-lead-novo.md](../crm/aviso-lead-novo.md), "Lead que preenche o
 formulário de novo". Dono, funil e etapa não mudam.
 

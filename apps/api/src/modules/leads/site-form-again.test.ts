@@ -16,7 +16,8 @@ import {
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
-import { RETURN_TASK_TITLE } from './crm.js';
+import { recordContactOptOut } from './contact-block.js';
+import { RETURN_LIMIT_MS, RETURN_TASK_TITLE } from './crm.js';
 import { SITE_FORM_RETURN_MIN_AGE_MS } from './service.js';
 
 /**
@@ -77,10 +78,23 @@ beforeAll(async () => {
   });
 }, 60_000);
 
+/**
+ * pg warns (and pg 9 will refuse) when a query starts on a connection still busy with another, which
+ * is what two reads side by side inside one transaction do. The return path reads the "não me
+ * contate" register through the pool for that reason; any warning here means it slid back inside.
+ */
+const busyClientWarnings: string[] = [];
+const onWarning = (warning: Error) => {
+  if (/already executing a query/.test(warning.message)) busyClientWarnings.push(warning.message);
+};
+process.on('warning', onWarning);
+
 afterAll(async () => {
   vi.useRealTimers();
+  process.off('warning', onWarning);
   await app?.close();
   await harness?.drop();
+  expect(busyClientWarnings).toEqual([]);
 });
 
 /** Everything the page makes required, filled with made-up data; each call changes what it needs. */
@@ -274,24 +288,25 @@ describe('a lead that already exists fills the site form again', () => {
     expect(await noticesOf(lead!.id, 'lead_returned')).toHaveLength(1);
     expect(await returnTasksOf(lead!.id)).toHaveLength(1);
 
-    // Once the seller marks the return done, the next submission opens a new task; the notice
-    // stays one per day.
+    // Even once the seller marks the return done, a submission within 24 h of the task makes no
+    // new one (Eric, 29/10/2026); the notice stays one as well.
     await db
       .update(leadTasks)
       .set({ doneAt: new Date(), doneBy: seller.id })
       .where(and(eq(leadTasks.leadId, lead!.id), eq(leadTasks.title, RETURN_TASK_TITLE)));
     const fourth = await post(fale({ companyName: 'Padaria Quatro' }));
     expect(fourth.statusCode).toBe(200);
-    const tasks = await returnTasksOf(lead!.id);
-    expect(tasks).toHaveLength(2);
-    expect(tasks.filter((task) => task.doneAt === null)).toHaveLength(1);
+    expect(await returnTasksOf(lead!.id)).toHaveLength(1);
     expect(await noticesOf(lead!.id, 'lead_returned')).toHaveLength(1);
+    // The answer is kept all the same.
+    expect(await eventsOf(lead!.id, 'lead.received.site_form')).toHaveLength(5);
   });
 
-  it('the next day the owner is told again (one notice per day); the open task absorbs the submission', async () => {
+  it('24 h after the last return the owner is told again and, the first task being done, gets a new one', async () => {
     const [lead] = await leadsOfPhone(PHONE);
-    // Only the clock moves: a day later, across midnight in São Paulo, whatever the hour now.
-    vi.setSystemTime(Date.now() + 24 * 60 * 60 * 1000);
+    const [first] = await returnTasksOf(lead!.id);
+    // Only the clock moves, to just past 24 h after the first task and notice.
+    vi.setSystemTime(first!.createdAt.getTime() + 24 * 60 * 60 * 1000 + 60_000);
     try {
       const tomorrow = await post(fale({ companyName: 'Padaria Cinco' }));
       expect(tomorrow.statusCode).toBe(200);
@@ -404,5 +419,188 @@ describe('a lead that already exists fills the site form again', () => {
     expect(after!.enrichmentJobId).not.toBeNull();
     expect(await eventsOf(lead!.id, 'research.queued')).toHaveLength(1);
     expect(await researchJobs()).toHaveLength(1);
+  });
+});
+
+/**
+ * Eric, 29/10/2026: "no máximo 1 aviso e 1 tarefa por lead a cada 24 h". A form sent over and over
+ * cannot pile tasks on a seller; the answer is kept every time. A lead marked as a robot's
+ * (docs/leads/suspeitos.md) and a person who asked not to be contacted (docs/crm/nao-me-contate.md)
+ * get no task.
+ */
+describe('the 24 h limit on a lead that fills the site form again', () => {
+  const HOUR = 60 * 60 * 1000;
+  let n = 0;
+  /** A lead of its own (phone, e-mail and address of the request), already old enough to be a return. */
+  const born = async (extra: Record<string, unknown> = {}) => {
+    n += 1;
+    const person = {
+      phone: `(21) 97777-20${String(n).padStart(2, '0')}`,
+      email: `limite.${n}@example.com`,
+      companyName: `Loja ${n}`,
+      ...extra,
+    };
+    const ip = `10.1.0.${n}`;
+    expect((await post(fale(person), ip)).statusCode).toBe(200);
+    const [lead] = await leadsOfPhone(`55${String(person.phone).replace(/\D/g, '')}`);
+    await ageLead(lead!.id);
+    return { lead: lead!, person, ip };
+  };
+  /** Sends the form again with the clock at `at`; only the clock moves. */
+  const sendAt = async (
+    who: { person: Record<string, unknown>; ip: string },
+    at: number,
+    company: string,
+  ) => {
+    vi.setSystemTime(at);
+    try {
+      expect((await post(fale({ ...who.person, companyName: company }), who.ip)).statusCode).toBe(
+        200,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  };
+
+  it('holds a task and a notice made 23 h 59 min before, keeps every answer, and lets the next one through after 24 h', async () => {
+    const who = await born();
+    const start = Date.now();
+    await sendAt(who, start, 'Resposta 1');
+    const [task] = await returnTasksOf(who.lead.id);
+    expect(task).toBeDefined();
+    expect(await noticesOf(who.lead.id, 'lead_returned')).toHaveLength(1);
+    // The seller finishes it at once: the limit counts from when it was made, not from when it is open.
+    await db
+      .update(leadTasks)
+      .set({ doneAt: new Date(start), doneBy: seller.id })
+      .where(eq(leadTasks.id, task!.id));
+
+    await sendAt(who, start + HOUR, 'Resposta 2');
+    await sendAt(who, start + RETURN_LIMIT_MS - 60_000, 'Resposta 3');
+    expect(await returnTasksOf(who.lead.id)).toHaveLength(1);
+    expect(await noticesOf(who.lead.id, 'lead_returned')).toHaveLength(1);
+    // Every answer is on the timeline, the limited ones too (one arrival of the lead, one of each send).
+    const answers = (await eventsOf(who.lead.id, 'lead.received.site_form'))
+      .map((event) => (event.detail as { submitted?: { companyName?: string } }).submitted)
+      .map((submitted) => submitted?.companyName)
+      .filter((company) => company?.startsWith('Resposta'))
+      .sort();
+    expect(answers).toEqual(['Resposta 1', 'Resposta 2', 'Resposta 3']);
+
+    await sendAt(who, start + RETURN_LIMIT_MS + 60_000, 'Resposta 4');
+    expect(await returnTasksOf(who.lead.id)).toHaveLength(2);
+    expect(await noticesOf(who.lead.id, 'lead_returned')).toHaveLength(2);
+    // And the limit starts over from that task and notice.
+    await sendAt(who, start + RETURN_LIMIT_MS + 2 * HOUR, 'Resposta 5');
+    expect(await noticesOf(who.lead.id, 'lead_returned')).toHaveLength(2);
+  });
+
+  it('a lead nobody owns: the board and managers are told once in 24 h, not once per submission', async () => {
+    n += 1;
+    const phone = `552197777${3000 + n}`;
+    const [orphan] = await db
+      .insert(leads)
+      .values({
+        clientId: WINGS_CLIENT_ID,
+        clientMapped: true,
+        name: 'Sem Dono Limite',
+        phone,
+        source: 'rd_crm',
+        pipeline: 'formatacao',
+      })
+      .returning();
+    await ageLead(orphan!.id);
+    const who = {
+      person: { phone: `(21) 9777-7${3000 + n}`, email: `orfao.${n}@example.com` },
+      ip: `10.2.0.${n}`,
+    };
+    const start = Date.now();
+    await sendAt(who, start, 'Orfão 1');
+    await sendAt(who, start + 2 * HOUR, 'Orfão 2');
+    expect(await noticesOf(orphan!.id, 'lead_returned')).toHaveLength(3);
+    await sendAt(who, start + RETURN_LIMIT_MS + 60_000, 'Orfão 3');
+    expect(await noticesOf(orphan!.id, 'lead_returned')).toHaveLength(6);
+    expect(await returnTasksOf(orphan!.id)).toHaveLength(0);
+  });
+
+  it('five submissions at the same moment make one task and one notice', async () => {
+    const who = await born();
+    const responses = await Promise.all(
+      [1, 2, 3, 4, 5].map((i) => post(fale({ ...who.person, companyName: `Junto ${i}` }), who.ip)),
+    );
+    expect(responses.map((r) => r.statusCode)).toEqual([200, 200, 200, 200, 200]);
+    expect(await returnTasksOf(who.lead.id)).toHaveLength(1);
+    expect(await noticesOf(who.lead.id, 'lead_returned')).toHaveLength(1);
+    expect(await eventsOf(who.lead.id, 'lead.received.site_form')).toHaveLength(6);
+  });
+
+  it('a lead marked as a robot gets the answer on the timeline but no task and no notice; clearing the mark brings them back', async () => {
+    const who = await born();
+    await db
+      .update(leads)
+      .set({ suspectAt: new Date(), suspectReasons: ['robot_email', 'burst'] })
+      .where(eq(leads.id, who.lead.id));
+    await post(fale({ ...who.person, companyName: 'Robô 1' }), who.ip);
+    expect(await returnTasksOf(who.lead.id)).toHaveLength(0);
+    expect(await noticesOf(who.lead.id, 'lead_returned')).toHaveLength(0);
+    expect(await eventsOf(who.lead.id, 'lead.received.site_form')).toHaveLength(2);
+
+    await db.update(leads).set({ suspectClearedAt: new Date() }).where(eq(leads.id, who.lead.id));
+    await post(fale({ ...who.person, companyName: 'Não é robô' }), who.ip);
+    expect(await returnTasksOf(who.lead.id)).toHaveLength(1);
+    expect(await noticesOf(who.lead.id, 'lead_returned')).toHaveLength(1);
+  });
+
+  it('"não me contate" on every channel, registered on the lead\'s e-mail while the form came by phone: no task, the owner is told once', async () => {
+    const who = await born();
+    // The block is under the e-mail the lead had; the new submission types another e-mail.
+    await recordContactOptOut(db, {
+      channels: ['all'],
+      email: who.person.email as string,
+      origin: 'crm',
+      reason: null,
+      createdBy: null,
+    });
+    const other = { ...who, person: { ...who.person, email: `outro.${n}@example.com` } };
+    await post(fale({ ...other.person, companyName: 'Bloqueado 1' }), who.ip);
+    await post(fale({ ...other.person, companyName: 'Bloqueado 2' }), who.ip);
+    expect(await returnTasksOf(who.lead.id)).toHaveLength(0);
+    const notices = await noticesOf(who.lead.id, 'lead_returned');
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({ recipientEmployeeId: seller.id, emailState: 'none' });
+    expect(notices[0]!.message).toContain('pediu para não ser contatado');
+    expect(notices[0]!.message).toContain('Nenhuma tarefa');
+    expect(await eventsOf(who.lead.id, 'lead.received.site_form')).toHaveLength(3);
+  });
+
+  it('a block registered only on the e-mail the person typed this time still holds the task', async () => {
+    const who = await born();
+    const typed = `digitado.${n}@example.com`;
+    await recordContactOptOut(db, {
+      channels: ['all'],
+      email: typed,
+      origin: 'crm',
+      reason: null,
+      createdBy: null,
+    });
+    await post(fale({ ...who.person, email: typed, companyName: 'Outro e-mail' }), who.ip);
+    expect(await returnTasksOf(who.lead.id)).toHaveLength(0);
+    expect(await noticesOf(who.lead.id, 'lead_returned')).toHaveLength(1);
+  });
+
+  it('"não me contate" on one channel only leaves the task: the seller can still reach the person elsewhere', async () => {
+    const who = await born();
+    await recordContactOptOut(db, {
+      channels: ['whatsapp'],
+      leadId: who.lead.id,
+      origin: 'crm',
+      reason: null,
+      createdBy: null,
+    });
+    await post(fale({ ...who.person, companyName: 'Só WhatsApp' }), who.ip);
+    expect(await returnTasksOf(who.lead.id)).toHaveLength(1);
+    const notices = await noticesOf(who.lead.id, 'lead_returned');
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.message).toContain('Retorno até');
   });
 });

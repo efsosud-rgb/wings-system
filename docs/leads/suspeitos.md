@@ -22,6 +22,7 @@ O código fica em `apps/api/src/modules/leads/suspect.ts`; os textos dos motivos
   - se não for, clica em **Não é robô**. A marca sai da ficha, os motivos ficam guardados e a ação vai para a auditoria (`lead.suspect_cleared`).
 - Um lead em que alguém já tirou a marca não é marcado de novo.
 - Cada marca grava o evento `lead.suspect_marked` no lead.
+- Um lead com a marca que preenche o formulário do site de novo só ganha a linha do tempo: sem tarefa de retorno nem aviso ([../crm/aviso-lead-novo.md](../crm/aviso-lead-novo.md)). A rajada olha leads que nascem; um reenvio não conta.
 
 ## Os leads que já estavam no banco
 

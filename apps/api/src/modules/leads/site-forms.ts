@@ -440,7 +440,7 @@ export const siteFormRoutes: FastifyPluginAsync = async (app) => {
             submitted: {
               answers: answers.formAnswers,
               companyName: body.data.companyName ?? null,
-              instagram: answers.instagram ?? null,
+              instagram: instagramUsernameOf(answers.instagram) ?? answers.instagram ?? null,
               website: body.data.siteUrl ?? null,
               utm: {
                 source: attribution?.utmSource ?? null,

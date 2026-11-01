@@ -25,9 +25,11 @@ import type { Database } from '../../db/client.js';
 import { LEAD_ADMIN_ROLE_KEYS } from './access.js';
 import { contactBlock } from './contact-block.js';
 import {
+  type Executor,
   firstContactOverdueSql,
   inEntryStageSql,
   LEADS_ID,
+  RETURN_LIMIT_MS,
   RETURN_TASK_TITLE,
   trackedTaskSql,
 } from './crm.js';
@@ -588,7 +590,7 @@ const ARRIVAL_SOURCES = new Set([
 ]);
 
 /** Who hears of a lead with no owner: Admin Master, Diretoria and the commercial managers (sector manager of Comercial, or the sales manager role); active only. */
-export async function managersAndBoard(db: Database): Promise<string[]> {
+export async function managersAndBoard(db: Executor): Promise<string[]> {
   const rows = await db
     .select({ id: employees.id })
     .from(employees)
@@ -710,48 +712,73 @@ const deadlineOf = (at: Date) =>
  * The person of a lead that already exists filled the site form again (Eric, 21/10/2026): the
  * owner hears it in the bell, with the return task's deadline (`ensureReturnTask`); with no owner,
  * Diretoria and the commercial managers hear it, as for a lead with no owner, and nobody is given
- * the lead. One notice per lead, person and day in São Paulo (`dedupe_key`): a double submission,
- * or RD's echo of it, adds nothing; a submission on another day is told again. The bell only: no
- * e-mail (`email_state` stays `none`) and no pop-up (that one is for `new_lead`). Best effort.
+ * the lead. **One notice per lead in `RETURN_LIMIT_MS`** (Eric, 29/10/2026), whoever it was told to:
+ * a form sent again within a day of the last notice adds nothing. A person who asked not to be
+ * contacted on any channel (`blocked`) still tells the owner, in words that say no task was made
+ * and the lead is not to be contacted. The bell only: no e-mail (`email_state` stays `none`) and no
+ * pop-up (that one is for `new_lead`). Runs inside the transaction that saved the answer, holding
+ * the lead's lock, so the limit and the insert are one step; the insert is a savepoint of its own,
+ * so a failure here never loses the lead or its timeline line.
  */
 export async function announceLeadReturned(
-  db: Database,
+  db: Executor,
   lead: { id: string; ownerEmployeeId: string | null },
-  now = new Date(),
-): Promise<void> {
+  options: { now?: Date; blocked?: boolean } = {},
+): Promise<'sent' | 'limit' | 'failed'> {
+  const now = options.now ?? new Date();
   try {
-    const day = now.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
-    const task = lead.ownerEmployeeId
-      ? await db.query.leadTasks.findFirst({
-          where: and(
-            eq(leadTasks.leadId, lead.id),
-            eq(leadTasks.title, RETURN_TASK_TITLE),
-            isNull(leadTasks.doneAt),
+    return await db.transaction(async (tx) => {
+      const recent = await tx
+        .select({ id: crmNotifications.id })
+        .from(crmNotifications)
+        .where(
+          and(
+            eq(crmNotifications.leadId, lead.id),
+            eq(crmNotifications.kind, 'lead_returned'),
+            gt(crmNotifications.createdAt, new Date(now.getTime() - RETURN_LIMIT_MS)),
           ),
-          columns: { dueAt: true },
-        })
-      : undefined;
-    const people = lead.ownerEmployeeId ? [lead.ownerEmployeeId] : await managersAndBoard(db);
-    if (people.length === 0) return;
-    const message = lead.ownerEmployeeId
-      ? `O lead preencheu o formulário do site de novo. A resposta nova está no histórico.${
-          task ? ` Retorno até ${deadlineOf(task.dueAt)} (1 hora útil).` : ''
-        }`
-      : 'Um lead sem dono preencheu o formulário do site de novo. Atribua alguém.';
-    await db
-      .insert(crmNotifications)
-      .values(
-        people.map((person) => ({
-          recipientEmployeeId: person,
-          leadId: lead.id,
-          kind: 'lead_returned',
-          message,
-          dedupeKey: `lead_returned:${lead.id}:${person}:${day}`,
-        })),
-      )
-      .onConflictDoNothing();
+        )
+        .limit(1);
+      if (recent.length > 0) return 'limit' as const;
+      const day = now.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+      const task =
+        lead.ownerEmployeeId && !options.blocked
+          ? await tx.query.leadTasks.findFirst({
+              where: and(
+                eq(leadTasks.leadId, lead.id),
+                eq(leadTasks.title, RETURN_TASK_TITLE),
+                isNull(leadTasks.doneAt),
+              ),
+              columns: { dueAt: true },
+            })
+          : undefined;
+      const people = lead.ownerEmployeeId ? [lead.ownerEmployeeId] : await managersAndBoard(tx);
+      if (people.length === 0) return 'failed' as const;
+      const message = options.blocked
+        ? 'O lead preencheu o formulário do site de novo, mas pediu para não ser contatado. Nenhuma tarefa de retorno foi criada: veja a ficha e decida.'
+        : lead.ownerEmployeeId
+          ? `O lead preencheu o formulário do site de novo. A resposta nova está no histórico.${
+              task ? ` Retorno até ${deadlineOf(task.dueAt)} (1 hora útil).` : ''
+            }`
+          : 'Um lead sem dono preencheu o formulário do site de novo. Atribua alguém.';
+      await tx
+        .insert(crmNotifications)
+        .values(
+          people.map((person) => ({
+            recipientEmployeeId: person,
+            leadId: lead.id,
+            kind: 'lead_returned',
+            message,
+            dedupeKey: `lead_returned:${lead.id}:${person}:${day}`,
+            createdAt: now,
+          })),
+        )
+        .onConflictDoNothing();
+      return 'sent' as const;
+    });
   } catch {
     // The lead and its timeline line are already saved; the return task still shows on the deal.
+    return 'failed';
   }
 }
 

@@ -73,7 +73,7 @@ import {
   rdUserMap,
 } from '../../db/schema/index.js';
 import { activitiesOf } from './activities.js';
-import { announceLeadReturned, announceNewLead } from './crm-alerts.js';
+import { announceNewLead } from './crm-alerts.js';
 import {
   attachLeadContact,
   contactOnForeignDeal,
@@ -86,11 +86,11 @@ import { instagramCheckOf } from './instagram-check.js';
 import { franchiseLpHosts } from './landing-base.js';
 import { markSuspectsAround } from './suspect.js';
 import { enqueueTriage } from './triage-queue.js';
+import { registerLeadReturn, type LeadReturnOutcome } from './lead-return.js';
 import { TRIAGE_SOURCES, leadTriageEnabled, scheduleLeadTriage } from './triage-schedule.js';
 import {
   announceStageEntered,
   ensureFirstContactTask,
-  ensureReturnTask,
   entryStageOf,
   firstContactOverdueSql,
   nextInRotation,
@@ -399,9 +399,11 @@ export interface UpsertResult {
   triageQueued?: boolean;
   /**
    * A lead that already existed, older than `SITE_FORM_RETURN_MIN_AGE_MS`, came back through the
-   * site form: the door tells its owner after the commit (`announceLeadReturned`).
+   * site form; `returnOutcome` says what its seller was given (`registerLeadReturn`, in the same
+   * transaction as the answer).
    */
   returned?: boolean;
+  returnOutcome?: LeadReturnOutcome;
 }
 
 /**
@@ -618,8 +620,6 @@ export async function upsertLead(db: Database, given: IncomingLead): Promise<Ups
     await announceNewLead(db, result.lead);
   if (triaged) scheduleLeadTriage({ leadId: result.lead.id });
   if (result.created) await markSuspectsAround(db, result.lead.id);
-  // A lead that already existed and came back through the site form (`returned`, in the transaction).
-  if (result.returned) await announceLeadReturned(db, result.lead);
   return result;
 }
 
@@ -725,12 +725,15 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
         },
       });
       // The person of a lead that already exists filled the site form again: their seller gets a
-      // return task (`ensureReturnTask`, crm.ts) and, after the commit, the notice. Only this door,
-      // by Eric's decision of 21/10/2026, and not for the same form sent twice in a row.
+      // return task and the notice, at most one of each per lead a day (`registerLeadReturn`). Only
+      // this door, by Eric's decision of 21/10/2026, and not for the same form sent twice in a row.
+      // The answer is on the timeline above whatever the limit decides.
       const returned =
         incoming.source === 'site_form' &&
         Date.now() - lead.createdAt.getTime() >= SITE_FORM_RETURN_MIN_AGE_MS;
-      if (returned) await ensureReturnTask(tx, lead);
+      const returnOutcome = returned
+        ? await registerLeadReturn(tx, lead, { phone, email }, db)
+        : undefined;
       // RD's echo of a site form submission queues no research (`RD_ECHO_WINDOW_MS`): decided here,
       // on the lead this transaction found, never from a read before it.
       const echo = incoming.source === 'rd_station' && (await recentSiteFormArrival(tx, lead.id));
@@ -745,6 +748,7 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
         researchQueued: researched !== null,
         filled: Object.keys(patch),
         returned,
+        returnOutcome,
       };
     }
 
