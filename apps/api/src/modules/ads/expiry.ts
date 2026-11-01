@@ -33,10 +33,20 @@ export interface ExpiredChange {
   why: 'age' | 'month_turned';
 }
 
+export interface ExpiryResult {
+  expired: ExpiredChange[];
+  /**
+   * Requests that could not be expired. Each request is its own failure
+   * domain, as each account is in the ingestion cycle: one that cannot be
+   * released must not keep every other old request holding money.
+   */
+  failed: { changeRequestId: string; error: string }[];
+}
+
 export async function expireStaleChanges(
   db: Database,
   options: { now?: Date; maxAgeHours?: number } = {},
-): Promise<ExpiredChange[]> {
+): Promise<ExpiryResult> {
   const now = options.now ?? new Date();
   const maxAgeMs = (options.maxAgeHours ?? CHANGE_REQUEST_MAX_AGE_HOURS) * 3_600_000;
 
@@ -57,7 +67,7 @@ export async function expireStaleChanges(
     .innerJoin(adAccounts, eq(adAccounts.id, adChangeRequests.adAccountId))
     .where(inArray(adChangeRequests.status, ['pending_approval', 'approved']));
 
-  const expired: ExpiredChange[] = [];
+  const result: ExpiryResult = { expired: [], failed: [] };
   for (const change of open) {
     // An approval's clock starts at the decision: approving in the last hour
     // of a request's day must still leave a day to click Executar.
@@ -73,36 +83,52 @@ export async function expireStaleChanges(
 
     // Only from the status it was read in: a decision or a click that got
     // there first wins, and this request is simply left alone.
-    const moved = await db.transaction(async (tx) => {
-      const released = await releaseReservation(tx, change.id, 'expired', null, {
-        from: [change.status],
-        now,
+    const moved = await db
+      .transaction(async (tx) => {
+        const released = await releaseReservation(tx, change.id, 'expired', null, {
+          from: [change.status],
+          now,
+        });
+        if (!released) return false;
+        await tx
+          .update(adApprovalRequests)
+          .set({ status: 'expired', decidedAt: now })
+          .where(
+            and(
+              eq(adApprovalRequests.changeRequestId, change.id),
+              inArray(adApprovalRequests.status, ['pending', 'escalated']),
+            ),
+          );
+        await writeAudit(tx, {
+          action: 'ads.change_expired',
+          entity: 'ad_change_request',
+          entityId: change.id,
+          metadata: {
+            why,
+            previousStatus: change.status,
+            kind: change.kind,
+            exposureDeltaCents: change.exposureDeltaCents,
+            waitedHours: Math.floor((now.getTime() - since.getTime()) / 3_600_000),
+          },
+        });
+        return true;
+      })
+      .catch((error: unknown) => {
+        result.failed.push({
+          changeRequestId: change.id,
+          // drizzle wraps the database error with the whole query; the cause says why.
+          error:
+            error instanceof Error
+              ? error.cause instanceof Error
+                ? error.cause.message
+                : error.message
+              : String(error),
+        });
+        return false;
       });
-      if (!released) return false;
-      await tx
-        .update(adApprovalRequests)
-        .set({ status: 'expired', decidedAt: now })
-        .where(
-          and(
-            eq(adApprovalRequests.changeRequestId, change.id),
-            inArray(adApprovalRequests.status, ['pending', 'escalated']),
-          ),
-        );
-      await writeAudit(tx, {
-        action: 'ads.change_expired',
-        entity: 'ad_change_request',
-        entityId: change.id,
-        metadata: {
-          why,
-          previousStatus: change.status,
-          kind: change.kind,
-          exposureDeltaCents: change.exposureDeltaCents,
-          waitedHours: Math.floor((now.getTime() - since.getTime()) / 3_600_000),
-        },
-      });
-      return true;
-    });
-    if (moved) expired.push({ changeRequestId: change.id, adAccountId: change.adAccountId, why });
+    if (moved) {
+      result.expired.push({ changeRequestId: change.id, adAccountId: change.adAccountId, why });
+    }
   }
-  return expired;
+  return result;
 }

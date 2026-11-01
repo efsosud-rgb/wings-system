@@ -81,7 +81,10 @@ let current: { runId: string; accounts: IngestRunAccount[] } | null = null;
 
 /** Old requests expire at the end of every cycle; counts and ids only in the log. */
 async function reportExpired(db: Database, now: Date): Promise<void> {
-  const expired = await expireStaleChanges(db, { now });
+  const { expired, failed } = await expireStaleChanges(db, { now });
+  for (const entry of failed) {
+    console.error(`pedido ${entry.changeRequestId} NÃO expirou: ${entry.error}`);
+  }
   for (const entry of expired) {
     console.warn(
       `pedido ${entry.changeRequestId} expirou (${entry.why === 'age' ? `mais de ${CHANGE_REQUEST_MAX_AGE_HOURS} h` : 'mês virou'}); reserva devolvida`,
