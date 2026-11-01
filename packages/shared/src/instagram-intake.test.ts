@@ -16,7 +16,10 @@ const auto = { ...DEFAULT_PRIVATE_REPLY_SETTINGS, modo: 'automatico' as const };
 describe('the private reply (docs/prospeccao/instagram.md §5.2 to §5.4)', () => {
   it('is off by default, and a row saved before parte 1 reads the defaults', () => {
     expect(DEFAULT_INSTAGRAM_PROSPECTING_SETTINGS.privateReply.modo).toBe('desligado');
-    const { privateReply: _ignored, ...older } = DEFAULT_INSTAGRAM_PROSPECTING_SETTINGS;
+    const older: Partial<typeof DEFAULT_INSTAGRAM_PROSPECTING_SETTINGS> = {
+      ...DEFAULT_INSTAGRAM_PROSPECTING_SETTINGS,
+    };
+    delete older.privateReply;
     const parsed = instagramProspectingSettingsSchema.parse(older);
     expect(parsed.privateReply).toEqual(DEFAULT_PRIVATE_REPLY_SETTINGS);
   });
