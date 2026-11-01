@@ -318,11 +318,14 @@ export async function decideApproval(
   });
   if (!approval) return { ok: false, reason: 'not_found', message: 'Solicitação não encontrada.' };
 
-  if (approval.status === 'approved' || approval.status === 'rejected') {
+  if (approval.status !== 'pending' && approval.status !== 'escalated') {
     return {
       ok: false,
       reason: 'already_decided',
-      message: 'Esta solicitação já foi decidida.',
+      message:
+        approval.status === 'expired'
+          ? 'Esta solicitação expirou sem decisão. Faça um pedido novo.'
+          : 'Esta solicitação já foi decidida.',
     };
   }
 
@@ -355,24 +358,57 @@ export async function decideApproval(
     };
   }
 
-  await db
-    .update(adApprovalRequests)
-    .set({
-      status: input.decision,
-      decidedAt: now,
-      decidedBy: input.approverEmployeeId,
-      decisionReason: input.reason ?? null,
-    })
-    .where(eq(adApprovalRequests.id, approval.id));
-
-  if (input.decision === 'approved') {
-    await db
-      .update(adChangeRequests)
-      .set({ status: 'approved', decidedAt: now, decidedBy: input.approverEmployeeId })
-      .where(eq(adChangeRequests.id, change.id));
-  } else {
-    // Rejection frees the reserved exposure for other changes.
-    await releaseReservation(db, change.id, 'rejected', input.approverEmployeeId);
+  // One decision wins (T-4). Approve, reject and the expiry job each move the
+  // change only from `pending_approval`, under the period lock, so a second
+  // decision at the same instant finds it already moved and changes nothing.
+  const decided = await db.transaction(async (tx) => {
+    if (input.decision === 'approved') {
+      await tx.execute(
+        sql`select id from ad_budget_periods where id = ${change.budgetPeriodId} for update`,
+      );
+      const [moved] = await tx
+        .update(adChangeRequests)
+        .set({ status: 'approved', decidedAt: now, decidedBy: input.approverEmployeeId })
+        .where(
+          and(
+            eq(adChangeRequests.id, change.id),
+            eq(adChangeRequests.status, 'pending_approval'),
+            eq(adChangeRequests.reservationActive, true),
+          ),
+        )
+        .returning({ id: adChangeRequests.id });
+      if (!moved) return false;
+    } else {
+      // Rejection frees the reserved exposure for other changes.
+      const released = await releaseReservation(
+        tx,
+        change.id,
+        'rejected',
+        input.approverEmployeeId,
+        {
+          from: ['pending_approval'],
+          now,
+        },
+      );
+      if (!released) return false;
+    }
+    await tx
+      .update(adApprovalRequests)
+      .set({
+        status: input.decision,
+        decidedAt: now,
+        decidedBy: input.approverEmployeeId,
+        decisionReason: input.reason ?? null,
+      })
+      .where(eq(adApprovalRequests.id, approval.id));
+    return true;
+  });
+  if (!decided) {
+    return {
+      ok: false,
+      reason: 'already_decided',
+      message: 'Esta solicitação já foi decidida ou expirou.',
+    };
   }
 
   await writeAudit(db, {

@@ -15,6 +15,8 @@ staging está no fim.
 | Dead-man switch                   | ❌ **existia só em teste: nada o chamava**          | ✅ no executor e no fim de cada ciclo de ingestão |
 | Resultado desconhecido — resolver | ❌ **não havia caminho**; a conta ficaria congelada | ✅ `ops-cli resolve-unknown`, lendo a plataforma  |
 | Criar um pedido de alteração      | ❌ **não havia caminho** fora dos testes            | ✅ `ops-cli request`                              |
+| Executor confere o próprio delta  | ❌ só olhava `comprometido ≤ permitido` (T-1)       | ✅ desde 01/11/2026 (parte 1, abaixo)             |
+| Pedido velho expira               | ❌ `expired` existia, nada o gravava (T-8)          | ✅ desde 01/11/2026, no fim de cada ingestão      |
 
 As quatro linhas com ❌ são o achado principal: o motor estava certo e testado,
 mas as alavancas que uma pessoa puxa numa sessão real não existiam.
@@ -144,9 +146,9 @@ Disso saem dois efeitos, espelhados:
    `comprometido ≤ permitido`, não que o delta _desta_ alteração ainda esteja
    contado.
 
-Nada faz um pedido pendente expirar: o status `expired` existe, mas nenhum
-código de produção o aplica, e `escalateStaleApprovals` também não tem
-chamador. Pedidos esquecidos ficam pendentes para sempre.
+Nada fazia um pedido pendente expirar: o status `expired` existia, mas nenhum
+código de produção o aplicava. Desde 01/11/2026 a expiração existe (parte 1,
+abaixo). `escalateStaleApprovals` continua sem chamador.
 
 **O que segura hoje:** toda alteração exige aprovação humana
 (`mode: 'always'`); a reconciliação que roda _depois_ de um excesso o detecta
@@ -156,12 +158,106 @@ com uma pessoa aprovando uma alteração por vez; **não aceitável antes de
 qualquer automação** (agente pedindo alterações, aprovação automática abaixo de
 limiar, execução por worker).
 
-**Conserto provável:** a reconciliação passa a calcular
-`comprometido = exposição na plataforma + soma dos deltas positivos com reserva
-ativa`, reduções só contam quando executadas, e o executor revalida o delta da
-própria alteração contra o teto no instante da escrita. Mais um job que expira
-pedidos velhos. Fica para depois da primeira escrita: o teste é uma pausa
-única, supervisionada, e não passa por nenhum dos dois efeitos.
+**Conserto aprovado pelo Eric em 29/10/2026 ("aprovar o conserto inteiro"),
+em duas partes.** A regra acima (nada de automação sobre gasto) vale até as
+duas estarem prontas.
+
+- **Parte 1 (01/11/2026, esta seção):** o executor revalida o delta da própria
+  alteração contra o teto no instante da escrita, numa transação, e um job
+  expira pedidos velhos.
+- **Parte 2 (a fazer):** um cálculo único do comprometido —
+  `exposição na plataforma + soma dos deltas positivos com reserva ativa`,
+  reduções só contam quando executadas — usado pela reconciliação e pelo
+  pedido. É ela que fecha T-1 e T-3 na conta; a parte 1 impede que o número
+  errado vire dinheiro.
+
+### Parte 1: o que mudou (01/11/2026)
+
+**1. O executor julga o próprio delta na hora da escrita**
+(`claimWithinCeiling` em `budget-guard.ts`). Na mesma transação que marca a
+alteração como `executing`, com a linha do período travada (`FOR UPDATE`), o
+executor confere de novo:
+
+- que a alteração continua `approved` **e com a reserva ativa** — uma aprovada
+  sem reserva (o que a corrida de T-4 deixava) é recusada com
+  `reservation_missing`;
+- que a trava de emergência continua livre;
+- que o pedido é do mês que está correndo (o delta foi calculado com os dias
+  daquele mês);
+- e, se o delta é positivo, que **o que está rodando de verdade + o delta
+  desta alteração** cabe nos três tetos (parcela utilizável, limite da
+  plataforma, teto − gasto), pela mesma regra do pedido (`ceilingRefusal`).
+  "O que está rodando" é a exposição do espelho das campanhas
+  (`mirroredExposureCents`, a mesma conta que a reconciliação usa) mais o delta
+  positivo de qualquer outra alteração da conta em `executing` ou `unknown`. O
+  `committed_cents` gravado **não** entra: é justamente o número que a
+  reconciliação reescreve sem as reservas.
+
+Consequências: dois aumentos que cabem sozinhos mas não juntos não saem os
+dois, nem em sequência (o segundo vê o primeiro no espelho) nem ao mesmo tempo
+(o segundo espera a trava do período e vê o primeiro em `executing`). Uma
+**redução** (delta ≤ 0) nunca é barrada pelo teto. A recusa não muda nada: a
+alteração continua aprovada e pode sair quando houver espaço (ou expira).
+Mensagem na tela: "No instante da execução, o orçamento do mês não comporta
+esta alteração: …".
+
+Para quem opera:
+
+- **A conta é conservadora de propósito.** Entre o executor gravar o orçamento
+  novo no espelho e marcar a alteração como `executed`, ela conta duas vezes
+  (espelho + `executing`), e um `unknown` não resolvido também conta. Isso
+  pode recusar um aumento que caberia, nunca deixar passar um que não cabe.
+- **Uma pausa aprovada num mês não sai no mês seguinte.** A recusa de mês
+  (`period_not_current`) vale para qualquer alteração, inclusive uma redução,
+  porque o delta foi calculado com os dias do mês antigo; a expiração da virada
+  do mês fecha o pedido. Para pausar depois da virada, faça um pedido novo.
+  Pela regra do teto, pausas e reduções nunca são barradas.
+
+**2. Uma decisão só vale (T-4).** Aprovar, rejeitar e expirar movem o pedido
+**só a partir de `pending_approval`**, com a trava do período tomada primeiro.
+Duas decisões no mesmo instante: uma vale, a outra recebe `already_decided`
+(409). A ordem das travas é sempre período → pedido → aprovação, nas quatro
+transições (decisão, expiração, devolução, execução), então nenhuma trava a
+outra num impasse.
+
+**3. Devolver uma reserva não quebra mais no meio (T-5) nem devolve duas vezes
+(T-2).**
+
+- Uma reserva feita **antes** da última reconciliação já foi apagada por ela;
+  rejeitar ou expirar esse pedido só desliga a reserva, sem mexer no
+  comprometido. Antes, o delta era tirado de novo (aumento) ou somado de novo
+  (pausa).
+- Devolver uma redução cujo espaço já foi dado a outro pedido passaria do
+  teto: o comprometido é gravado no teto e a **trava é acionada** (como
+  `applyReportedSpend` faz com gasto que comeu a reserva), em vez de a rota
+  responder 500 e o pedido ficar preso.
+
+**4. Pedidos velhos expiram** (`expireStaleChanges` em `expiry.ts`, chamado
+por `reportExpiredChanges`, que nunca derruba o ciclo: se a leitura falha, o
+erro vai para o log e o próximo ciclo tenta de novo), no fim de cada ciclo de
+ingestão — o completo e o de 15 min (`--reconcile-only`), logo
+depois do dead-man switch:
+
+| Situação do pedido                   | Expira quando                       |
+| ------------------------------------ | ----------------------------------- |
+| `pending_approval` (ninguém decidiu) | 24 h depois do pedido               |
+| `approved` (ninguém executou)        | 24 h depois da **aprovação**        |
+| qualquer um dos dois                 | quando o mês do período dele acabou |
+
+Ao expirar: o pedido vira `expired`, a reserva é devolvida (regra do item 3), a
+aprovação pendente vira `expired` ("Expirada sem decisão"), e a auditoria grava
+`ads.change_expired` com o motivo (`age` ou `month_turned`). Nada é aprovado,
+executado ou enviado à plataforma. Um pedido que não consegue expirar é
+registrado no log da ingestão (`NÃO expirou`) e não impede os outros. Para
+fazer de novo, faz-se um pedido novo, com aprovação nova. O prazo de 24 h é a
+opção mais segura enquanto o Eric não define outro (`CHANGE_REQUEST_MAX_AGE_HOURS`).
+
+**O que a parte 1 não resolve:** o número `committed_cents` continua errado
+entre uma reconciliação e outra (T-1, T-3) — um pedido pode ser **aceito**
+contra um espaço que não existe. O que muda é que ele não pode mais ser
+**executado** contra esse espaço. A reconciliação continua sem trava (variante
+de T-1: reserva feita durante o reconcile se perde). As duas coisas são a
+parte 2.
 
 ## Evidência
 
@@ -172,6 +268,23 @@ Testes novos (todos contra banco descartável, cliente falso):
   parece reconciliada.
 - `executor.test.ts` — recusa sem reconciliação, recusa com reconciliação
   velha e **aceita depois de reconciliar**, recusa cliente de outra conta.
+- `write-time-guard.test.ts` (parte 1, 01/11/2026) — teto exato passa e um
+  centavo de exposição a mais é recusado sem nada enviado; aprovada sem reserva e pedido de outro
+  mês recusados; pausa num mês cheio sai; rejeitar ou expirar uma pausa cujo
+  espaço foi usado aciona a trava em vez de quebrar; devolução depois de um
+  reconcile não conta duas vezes; expiração por idade, pela aprovação e pela
+  virada do mês; um pedido que falha não impede os outros; a leitura da
+  expiração que falha não derruba o ciclo.
+- `write-time-guard-races.test.ts` (parte 1, revisão do PR #76) — os "dois
+  cliques ao mesmo tempo", cada um com os concorrentes parados numa linha
+  conhecida antes de soltar (com `Promise.all` puro e o cliente falso, uma
+  transação acabava antes da outra começar e o teste passava sem a trava):
+  duas execuções que só cabem sozinhas, com a **primeira escrita presa a
+  caminho da Meta** (só a soma das alterações em andamento segura o teto) e
+  com as duas **paradas logo depois da conferência** por uma trava consultiva
+  (só a trava do período põe uma depois da outra): uma sai; aprovar e
+  rejeitar, dois "aprovar" e aprovar e expirar, todos parados atrás da linha
+  do período: uma decisão vale, com uma entrada de auditoria.
 - `reconcile.test.ts` — arquivada fica de fora; nunca reconciliada é
   desconhecida.
 - `ops.test.ts` — o roteiro da primeira escrita ponta a ponta: pedido →

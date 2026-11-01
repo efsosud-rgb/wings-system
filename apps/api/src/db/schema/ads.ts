@@ -93,6 +93,8 @@ export const approvalStatusEnum = pgEnum('ad_approval_status', [
   'escalated',
   'approved',
   'rejected',
+  // Nobody decided in time, or the month turned: the change expired with it.
+  'expired',
 ]);
 
 /** Why the gate demanded a human decision. */

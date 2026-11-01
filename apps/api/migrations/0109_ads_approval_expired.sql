@@ -1,0 +1,1 @@
+ALTER TYPE "public"."ad_approval_status" ADD VALUE 'expired';

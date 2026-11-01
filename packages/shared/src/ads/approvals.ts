@@ -9,7 +9,13 @@ import type { AddAdsPayload, CampaignDraft, DraftDifference } from './campaign-b
  * risk, who asked and when.
  */
 
-export const APPROVAL_STATUSES = ['pending', 'escalated', 'approved', 'rejected'] as const;
+export const APPROVAL_STATUSES = [
+  'pending',
+  'escalated',
+  'approved',
+  'rejected',
+  'expired',
+] as const;
 export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
 
 export const APPROVAL_TRIGGERS = [
@@ -24,6 +30,7 @@ export const APPROVAL_STATUS_LABEL: Record<ApprovalStatus, string> = {
   escalated: 'Escalada para a Diretoria',
   approved: 'Aprovada',
   rejected: 'Recusada',
+  expired: 'Expirada sem decisão',
 };
 
 export const APPROVAL_TRIGGER_LABEL: Record<ApprovalTriggerKey, string> = {

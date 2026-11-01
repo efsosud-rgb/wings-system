@@ -39,6 +39,7 @@ import {
 } from './ad-tree.js';
 import {
   addAdsPayloadHash,
+  claimWithinCeiling,
   draftPayloadHash,
   engageKillSwitch,
   releaseReservation,
@@ -69,7 +70,9 @@ import type { ObjectStorage } from '../../lib/storage/index.js';
  *
  *   1. a person approved this exact change (payload hash matches);
  *   2. the kill switch is off;
- *   3. the budget period still has room for the reserved exposure;
+ *   3. the budget period still has room for this change's own delta, on top
+ *      of what is really running, judged under the period lock in the same
+ *      transaction that claims the change (`claimWithinCeiling`);
  *   4. the platform still looks the way the approval assumed — or, for a
  *      campaign being created, the stored draft is still the one approved and
  *      no campaign of that name has appeared in the meantime;
@@ -92,6 +95,7 @@ export type ExecutionRefusal =
   | 'cap_no_longer_allows'
   | 'platform_drift'
   | 'already_executed'
+  | 'reservation_missing'
   | 'writes_disabled'
   | 'wrong_account'
   | 'reconciliation_stale'
@@ -379,11 +383,11 @@ export async function executeApprovedChange(
     if (preflight.status === 'rejected') preflightRejection = preflight;
   }
 
-  // Claimed atomically: two clicks (or two people) on Executar at once must
-  // not both get past this line and send the same write twice.
-  if (!(await claimForExecution(db, change.id))) {
-    return refuse('already_executed', 'Esta alteração já está sendo executada.');
-  }
+  // Claimed atomically, with this change's delta judged against the ceilings
+  // at this instant: two clicks (or two people) on Executar at once must not
+  // both get past this line, and neither may two changes that only fit alone.
+  const claim = await claimForExecution(db, change.id, now);
+  if (claim) return refuse(claim.reason, claim.message);
 
   // Record the attempt before making it, so an interrupted process still
   // leaves evidence that something may have gone out.
@@ -925,9 +929,8 @@ async function executeAddAds(
   if (!media.ok) return refuse(media.reason, media.message);
 
   // Claimed atomically: a second click sends nothing.
-  if (!(await claimForExecution(db, change.id))) {
-    return refuse('already_executed', 'Esta alteração já está sendo executada.');
-  }
+  const claim = await claimForExecution(db, change.id, now);
+  if (claim) return refuse(claim.reason, claim.message);
 
   const [execution] = await db
     .insert(adExecutions)
@@ -1053,15 +1056,30 @@ async function executeAddAds(
 }
 
 /**
- * Moves an approved change to `executing` only if it is still `approved`, in
- * one statement. The one caller that gets the row back goes on; any other
- * (a double click, a second person) is told it is already running.
+ * Moves an approved change to `executing` only if it is still `approved`, and
+ * only if its delta still fits (`claimWithinCeiling`). The one caller that
+ * gets it goes on; any other (a double click, a second person, a second
+ * change the month no longer has room for) is told why not.
  */
-async function claimForExecution(db: Database, changeRequestId: string): Promise<boolean> {
-  const claimed = await db
-    .update(adChangeRequests)
-    .set({ status: 'executing' })
-    .where(and(eq(adChangeRequests.id, changeRequestId), eq(adChangeRequests.status, 'approved')))
-    .returning({ id: adChangeRequests.id });
-  return claimed.length === 1;
+async function claimForExecution(
+  db: Database,
+  changeRequestId: string,
+  now: Date,
+): Promise<{ reason: ExecutionRefusal; message: string } | null> {
+  const claim = await claimWithinCeiling(db, changeRequestId, now);
+  if (claim.ok) return null;
+  switch (claim.reason) {
+    case 'not_approved':
+      return { reason: 'already_executed', message: claim.message };
+    case 'reservation_missing':
+    case 'kill_switch_engaged':
+      return { reason: claim.reason, message: claim.message };
+    case 'period_not_current':
+      return { reason: 'cap_no_longer_allows', message: claim.message };
+    default:
+      return {
+        reason: 'cap_no_longer_allows',
+        message: `No instante da execução, o orçamento do mês não comporta esta alteração: ${claim.message}`,
+      };
+  }
 }
