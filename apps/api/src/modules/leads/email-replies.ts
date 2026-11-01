@@ -3,6 +3,7 @@ import {
   EMAIL_ATTACHMENTS_MAX_COUNT,
   emailAttachmentRefusal,
   GMAIL_READ_SCOPE,
+  isFreeMailDomain,
   leadHidesWings,
   normalizeEmail,
   type LeadEmailReceivedAttachment,
@@ -14,6 +15,7 @@ import {
   crmEmailInbound,
   crmEmailOutbox,
   crmNotifications,
+  employees,
   googleWorkspaceConnections,
   leadContacts,
   leadEvents,
@@ -45,13 +47,20 @@ import { storeLeadFile } from './files.js';
  * the last read stopped, per mailbox, with a ceiling of calls per pass. Only three kinds of message
  * come in: one in the thread of an e-mail the system sent (or of a reply already kept), one citing
  * our Message-ID in In-Reply-To/References, and one from an address of a deal of this seller
- * (found by Gmail's own search). Anything else is never fetched beyond its ids and those two
- * reference headers, and nothing of it is kept. Expansão with a brand reads nothing. Logs carry
- * counts and codes only.
+ * (found by Gmail's own search). Anything else is never fetched beyond its ids, those two
+ * reference headers and its arrival time, and nothing of it is kept. Expansão with a brand reads
+ * nothing. A message from the Wings' own addresses (a colleague's "reply all") stays in the
+ * conversation but is not the lead's reply: no history entry and no notice (Eric, 30/10). Logs
+ * carry counts and codes only.
  */
 
-/** About this many Gmail calls per mailbox per pass; a message under way is finished. */
+/** About this many Gmail calls per mailbox per pass, searches included; a message under way is finished. */
 export const MAX_CALLS_PER_MAILBOX = 60;
+/**
+ * A message that matched nothing but arrived this recently is looked at again in the next passes:
+ * Gmail's search may not have indexed it yet, and the search is what finds a contact's e-mail.
+ */
+export const SEARCH_SETTLE_MS = 30 * 60_000;
 /** Addresses per Gmail search (the query stays short). */
 const SEARCH_CHUNK = 20;
 
@@ -169,6 +178,30 @@ async function outboxCited(db: Database, ids: string[]) {
   return row ?? null;
 }
 
+/**
+ * The Wings' own address: an employee's (login or connected Google account), or one on a connected
+ * mailbox's Workspace domain. A webmail domain is never taken as the company's.
+ */
+async function isWingsAddress(db: Database, email: string): Promise<boolean> {
+  const domain = email.slice(email.indexOf('@') + 1);
+  const [employee] = await db
+    .select({ id: employees.id })
+    .from(employees)
+    .where(sql`lower(${employees.email}) = ${email}`)
+    .limit(1);
+  if (employee) return true;
+  const [mailbox] = await db
+    .select({ id: googleWorkspaceConnections.id })
+    .from(googleWorkspaceConnections)
+    .where(
+      isFreeMailDomain(domain)
+        ? sql`lower(${googleWorkspaceConnections.googleEmail}) = ${email}`
+        : sql`split_part(lower(${googleWorkspaceConnections.googleEmail}), '@', 2) = ${domain}`,
+    )
+    .limit(1);
+  return Boolean(mailbox);
+}
+
 /** The deal's files, written as the mailbox's owner, within the outgoing e-mail's limits. */
 async function keepAttachments(
   deps: RepliesDeps,
@@ -254,7 +287,7 @@ async function announce(
     .onConflictDoNothing();
 }
 
-/** One message that matched: read whole, kept in its deal with its files, and announced. */
+/** One message that matched: read whole, kept in its deal with its files, and announced if the lead's. */
 async function keepMessage(
   deps: RepliesDeps,
   input: { token: string; employeeId: string; mailbox: string; id: string; match: Match },
@@ -302,6 +335,8 @@ async function keepMessage(
     .returning({ id: crmEmailInbound.id, subject: crmEmailInbound.subject });
   // Already kept (a repeated pass, or the same reply in another seller's mailbox).
   if (!row) return false;
+  // A colleague in the conversation: kept in it, with its files, but it is not the lead's reply.
+  const colleague = await isWingsAddress(db, from.email);
   const attachments = await keepAttachments(
     deps,
     input.token,
@@ -312,6 +347,7 @@ async function keepMessage(
   );
   if (attachments.length > 0)
     await db.update(crmEmailInbound).set({ attachments }).where(eq(crmEmailInbound.id, row.id));
+  if (colleague) return true;
   await db.insert(leadEvents).values({
     leadId: lead.id,
     kind: 'lead.email_received',
@@ -328,7 +364,14 @@ async function keepMessage(
   return true;
 }
 
-/** One pass over one mailbox, from where the last one stopped. */
+type Outcome = 'kept' | 'settled' | 'pending';
+
+/**
+ * One pass over one mailbox, from where the last one stopped. The point (`gmail_history_id`) only
+ * moves past a history record once every message in it is settled, and the messages settled after
+ * the point are kept aside (`gmail_history_seen`): a pass that stops at the ceiling, even inside a
+ * record, or holds back a message the search may not have indexed yet, never jumps one.
+ */
 export async function readMailbox(
   deps: RepliesDeps,
   connection: Connection,
@@ -340,7 +383,7 @@ export async function readMailbox(
   const save = (values: Partial<Connection>) =>
     db
       .update(googleWorkspaceConnections)
-      .set({ ...values, gmailReadAt: google.now() })
+      .set(values)
       .where(eq(googleWorkspaceConnections.id, connection.id));
 
   let token: string;
@@ -354,26 +397,99 @@ export async function readMailbox(
     throw error;
   }
 
-  let cursor = connection.gmailHistoryId;
-  try {
-    if (!cursor) {
-      // The first pass only marks where the reading starts: older mail is not read.
+  const start = connection.gmailHistoryId;
+  if (!start) {
+    // The first pass only marks where the reading starts: older mail is not read.
+    try {
       spend();
       await save({
         gmailHistoryId: await gmailHistoryPoint(google.transport, token),
+        gmailHistorySeen: [],
+        gmailReadAt: google.now(),
         gmailReadError: null,
       });
-      return result;
+    } catch (error) {
+      if (!(error instanceof GmailReadError)) throw error;
+      await save({ gmailReadError: `gmail_${error.code}` });
+      return { ...result, error: error.code };
     }
-    let contactsCache: Map<string, string> | null = null;
-    const contacts = async () => (contactsCache ??= await contactsOf(db, employeeId));
-    // A margin over the last pass: the search only narrows, the history's ids decide.
-    const since = new Date((connection.gmailReadAt ?? google.now()).getTime() - 2 * 86_400_000);
-    let pageToken: string | null = null;
-    let searches = 0;
-    pages: do {
+    return result;
+  }
+
+  let cursor = start;
+  /** Settled messages after the cursor: by an earlier pass, or by this one. */
+  const seen = new Set(connection.gmailHistorySeen);
+  /** Messages of the records the cursor moved past in this pass: no longer needed in `seen`. */
+  const passed = new Set<string>();
+  let held = false;
+  let toTheEnd = false;
+  let looked = 0;
+  // The ceiling counts every call; one message is always looked at, so a pass never stalls.
+  const full = () => result.calls >= MAX_CALLS_PER_MAILBOX && looked > 0;
+
+  let contactsCache: Map<string, string> | null = null;
+  const contacts = async () => (contactsCache ??= await contactsOf(db, employeeId));
+  // The search looks back from the last pass that read the history to its end, with a margin.
+  const since = new Date((connection.gmailReadAt ?? google.now()).getTime() - 2 * 86_400_000);
+  let searched: Set<string> | null = null;
+  /** Messages from the deals' addresses: Gmail's search decides, only ids come back. Once a pass. */
+  const fromContacts = async () => {
+    if (searched) return searched;
+    searched = new Set<string>();
+    const addresses = [...(await contacts()).keys()];
+    for (let i = 0; i < addresses.length; i += SEARCH_CHUNK) {
       spend();
-      const page = await gmailInboxHistory(google.transport, token, cursor, pageToken);
+      const chunk = addresses.slice(i, i + SEARCH_CHUNK);
+      for (const id of await gmailSearchFrom(google.transport, token, chunk, since))
+        searched.add(id);
+    }
+    return searched;
+  };
+
+  const settle = async (
+    id: string,
+    thread: { leadId: string; outboxId: string | null } | undefined,
+  ): Promise<Outcome> => {
+    let match: Match | null = thread
+      ? { by: 'thread', ...thread }
+      : (await fromContacts()).has(id)
+        ? { by: 'contact' }
+        : null;
+    if (!match) {
+      spend();
+      const peek = await gmailReferences(google.transport, token, id);
+      const cited = await outboxCited(db, peek.ids);
+      if (cited) match = { by: 'in_reply_to', leadId: cited.leadId, outboxId: cited.id };
+      else if (
+        (await contacts()).size > 0 &&
+        google.now().getTime() - peek.at.getTime() < SEARCH_SETTLE_MS
+      )
+        return 'pending';
+      else return 'settled';
+    }
+    const kept = await keepMessage(
+      deps,
+      { token, employeeId, mailbox, id, match },
+      contacts,
+      spend,
+    );
+    return kept ? 'kept' : 'settled';
+  };
+
+  const finish = (values: Partial<Connection>) =>
+    save({
+      gmailHistoryId: cursor,
+      // Past the end of the history, nothing after the point has been seen yet.
+      gmailHistorySeen: held || !toTheEnd ? [...seen].filter((id) => !passed.has(id)) : [],
+      ...values,
+    });
+
+  try {
+    let pageToken: string | null = null;
+    pages: do {
+      if (full()) break;
+      spend();
+      const page = await gmailInboxHistory(google.transport, token, start, pageToken);
       const ids = [...new Set(page.records.flatMap((r) => r.messages.map((m) => m.id)))];
       const stored = ids.length
         ? await db
@@ -386,69 +502,55 @@ export async function readMailbox(
               ),
             )
         : [];
-      const done = new Set(stored.map((s) => s.id));
+      for (const { id } of stored) seen.add(id);
       const threads = await knownThreads(
         db,
         employeeId,
         mailbox,
         page.records.flatMap((r) => r.messages.map((m) => m.threadId)),
       );
-      // Messages from the deals' addresses: Gmail's search decides, only ids come back.
-      const fromContacts = new Set<string>();
-      const open = page.records.flatMap((r) =>
-        r.messages.filter((m) => !done.has(m.id) && !threads.has(m.threadId)),
-      );
-      if (open.length > 0) {
-        const addresses = [...(await contacts()).keys()];
-        for (let i = 0; i < addresses.length; i += SEARCH_CHUNK) {
-          spend();
-          searches += 1;
-          for (const id of await gmailSearchFrom(
-            google.transport,
-            token,
-            addresses.slice(i, i + SEARCH_CHUNK),
-            since,
-          ))
-            fromContacts.add(id);
-        }
-      }
       for (const record of page.records) {
-        // The searches do not count here: with many deals they alone must not stall the reading.
-        if (result.calls - searches >= MAX_CALLS_PER_MAILBOX) break pages;
+        let settled = true;
         for (const { id, threadId } of record.messages) {
-          if (done.has(id)) continue;
-          done.add(id);
-          const thread = threads.get(threadId);
-          let match: Match | null = thread
-            ? { by: 'thread', ...thread }
-            : fromContacts.has(id)
-              ? { by: 'contact' }
-              : null;
-          if (!match) {
-            spend();
-            const cited = await outboxCited(db, await gmailReferences(google.transport, token, id));
-            if (cited) match = { by: 'in_reply_to', leadId: cited.leadId, outboxId: cited.id };
+          if (seen.has(id)) continue;
+          if (full()) break pages;
+          looked += 1;
+          const outcome = await settle(id, threads.get(threadId));
+          if (outcome === 'pending') {
+            settled = false;
+            continue;
           }
-          if (
-            match &&
-            (await keepMessage(deps, { token, employeeId, mailbox, id, match }, contacts, spend))
-          )
-            result.kept += 1;
+          seen.add(id);
+          if (outcome === 'kept') result.kept += 1;
         }
-        cursor = record.id;
+        // A record with a message held back stops the point: the later ones wait in `seen`.
+        if (!settled) held = true;
+        if (!held) {
+          cursor = record.id;
+          for (const m of record.messages) passed.add(m.id);
+        }
       }
       pageToken = page.nextPageToken;
-      if (!pageToken) cursor = page.historyId;
+      if (!pageToken) {
+        toTheEnd = true;
+        if (!held) cursor = page.historyId;
+      }
     } while (pageToken);
-    await save({ gmailHistoryId: cursor, gmailReadError: null });
+    await finish({ gmailReadError: null, ...(toTheEnd ? { gmailReadAt: google.now() } : {}) });
   } catch (error) {
     if (!(error instanceof GmailReadError)) throw error;
     if (error.code === 'history_expired') {
       // Gmail forgot the point (about a week without a read): start again from now.
       const point = await gmailHistoryPoint(google.transport, token).catch(() => null);
-      await save({ gmailHistoryId: point, gmailReadError: 'history_expired' });
+      await save({
+        gmailHistoryId: point,
+        gmailHistorySeen: [],
+        gmailReadAt: google.now(),
+        gmailReadError: 'history_expired',
+      });
     } else {
-      await save({ gmailHistoryId: cursor, gmailReadError: `gmail_${error.code}` });
+      toTheEnd = false;
+      await finish({ gmailReadError: `gmail_${error.code}` });
     }
     return { ...result, error: error.code };
   }
@@ -479,21 +581,43 @@ export async function readAllMailboxes(deps: RepliesDeps) {
 
 const LOCK_KEY = 'crm:email-replies';
 
-/** Every `minutes`, one pass at a time in this process and across replicas (an advisory lock). */
+/**
+ * One pass over every mailbox, one at a time across replicas: a session advisory lock on a
+ * connection of its own, which holds no transaction while Gmail is called. Null when another pass
+ * holds the lock.
+ */
+export async function readAllMailboxesLocked(deps: RepliesDeps) {
+  const client = await deps.db.$client.connect();
+  let locked = false;
+  try {
+    const lock = await client.query<{ got: boolean }>(
+      'select pg_try_advisory_lock(hashtext($1)) as got',
+      [LOCK_KEY],
+    );
+    locked = lock.rows[0]?.got === true;
+    if (!locked) return null;
+    return await readAllMailboxes(deps);
+  } finally {
+    const unlocked =
+      !locked ||
+      (await client.query('select pg_advisory_unlock(hashtext($1))', [LOCK_KEY]).then(
+        () => true,
+        () => false,
+      ));
+    // A lock that could not be let go goes with its connection.
+    client.release(!unlocked);
+  }
+}
+
+/** Every `minutes`, one pass at a time in this process and across replicas. */
 export function startEmailRepliesScheduler(deps: RepliesDeps & { minutes: number }) {
   let busy = false;
   const tick = async () => {
     if (busy) return;
     busy = true;
     try {
-      await deps.db.transaction(async (tx) => {
-        const lock = await tx.execute<{ got: boolean }>(
-          sql`select pg_try_advisory_xact_lock(hashtext(${LOCK_KEY})) as got`,
-        );
-        if (!lock.rows[0]?.got) return;
-        const totals = await readAllMailboxes(deps);
-        if (totals.mailboxes > 0) deps.log({ job: 'crm-email-replies', ...totals });
-      });
+      const totals = await readAllMailboxesLocked(deps);
+      if (totals && totals.mailboxes > 0) deps.log({ job: 'crm-email-replies', ...totals });
     } catch (error) {
       deps.log({
         job: 'crm-email-replies',

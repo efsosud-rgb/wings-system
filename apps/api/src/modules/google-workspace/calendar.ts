@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { MeetingAttendee } from '@wings/shared';
+import { GOOGLE_TIMEOUT_MS } from './oauth.js';
 
 /**
  * Google Calendar v3, the four calls the CRM needs: list the person's calendars
@@ -156,6 +157,7 @@ export async function calendarRequest(
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS),
     });
   } catch {
     throw new GoogleCalendarError('unreachable');

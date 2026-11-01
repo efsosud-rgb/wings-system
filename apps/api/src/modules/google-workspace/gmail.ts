@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { contentDisposition } from '../../lib/storage/index.js';
+import { GOOGLE_FILE_TIMEOUT_MS, GOOGLE_TIMEOUT_MS } from './oauth.js';
 
 /**
  * Gmail API `users.messages.send`, with the person's own token: the message
@@ -158,6 +159,7 @@ export async function sendGmail(
             '',
           ].join('\r\n')
         : JSON.stringify({ raw, ...thread }),
+      signal: AbortSignal.timeout(upload ? GOOGLE_FILE_TIMEOUT_MS : GOOGLE_TIMEOUT_MS),
     });
   } catch {
     throw new GmailError('unreachable');

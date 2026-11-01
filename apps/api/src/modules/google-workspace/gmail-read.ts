@@ -2,10 +2,12 @@
  * Gmail API reads, with the person's own token (scope `gmail.readonly`), for the leads' replies
  * (t083, docs/crm/automacoes.md "E-mail recebido"). Plain `fetch`, no library. Only what the
  * reading needs: the mailbox's history point, the ids added since then, a search by sender, two
- * reference headers of one message, one whole message and one attachment. Every answer is cut to
+ * reference headers (and the arrival time) of one message, one whole message and one attachment. Every answer is cut to
  * the fields asked for (`fields`), so a message the reading does not keep never brings its sender,
  * subject or text along. Nothing here logs an address, a subject or a text.
  */
+
+import { GOOGLE_FILE_TIMEOUT_MS, GOOGLE_TIMEOUT_MS } from './oauth.js';
 
 const GMAIL_API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 
@@ -24,18 +26,25 @@ async function get<T>(
   token: string,
   path: string,
   query: [string, string][],
+  timeoutMs = GOOGLE_TIMEOUT_MS,
 ): Promise<T> {
   const url = `${GMAIL_API}${path}?${new URLSearchParams(query).toString()}`;
+  // The time limit covers the answer's body too: a stalled read must not hold the pass.
+  const signal = AbortSignal.timeout(timeoutMs);
   let response: Response;
   try {
-    response = await transport(url, { headers: { authorization: `Bearer ${token}` } });
+    response = await transport(url, { headers: { authorization: `Bearer ${token}` }, signal });
   } catch {
     throw new GmailReadError('unreachable');
   }
   if (response.status === 401) throw new GmailReadError('unauthorized', 401);
   if (response.status === 403) throw new GmailReadError('forbidden', 403);
   if (!response.ok) throw new GmailReadError('rejected', response.status);
-  return (await response.json()) as T;
+  try {
+    return (await response.json()) as T;
+  } catch {
+    throw new GmailReadError(signal.aborted ? 'unreachable' : 'rejected', response.status);
+  }
 }
 
 /** The mailbox's current history point: where the first reading starts. */
@@ -109,29 +118,33 @@ export async function gmailSearchFrom(
   return (body.messages ?? []).map((m) => m.id);
 }
 
-/** In-Reply-To and References of one message, and nothing else of it. */
+/**
+ * In-Reply-To and References of one message, and when it arrived (to tell whether Gmail's search may
+ * not have indexed it yet), and nothing else of it.
+ */
 export async function gmailReferences(
   transport: typeof fetch,
   token: string,
   id: string,
-): Promise<string[]> {
-  const body = await get<{ payload?: { headers?: { name: string; value: string }[] } }>(
-    transport,
-    token,
-    `/messages/${encodeURIComponent(id)}`,
-    [
-      ['format', 'metadata'],
-      ['metadataHeaders', 'In-Reply-To'],
-      ['metadataHeaders', 'References'],
-      ['fields', 'payload/headers'],
-    ],
-  );
-  return messageIdsIn(
-    (body.payload?.headers ?? [])
-      .filter((h) => /^(in-reply-to|references)$/i.test(h.name))
-      .map((h) => h.value)
-      .join(' '),
-  );
+): Promise<{ ids: string[]; at: Date }> {
+  const body = await get<{
+    internalDate?: string;
+    payload?: { headers?: { name: string; value: string }[] };
+  }>(transport, token, `/messages/${encodeURIComponent(id)}`, [
+    ['format', 'metadata'],
+    ['metadataHeaders', 'In-Reply-To'],
+    ['metadataHeaders', 'References'],
+    ['fields', 'internalDate,payload/headers'],
+  ]);
+  return {
+    ids: messageIdsIn(
+      (body.payload?.headers ?? [])
+        .filter((h) => /^(in-reply-to|references)$/i.test(h.name))
+        .map((h) => h.value)
+        .join(' '),
+    ),
+    at: new Date(Number(body.internalDate ?? Date.now())),
+  };
 }
 
 /** The `<…>` ids in a header value, as written. */
@@ -244,6 +257,7 @@ export async function gmailAttachment(
     token,
     `/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`,
     [['fields', 'data']],
+    GOOGLE_FILE_TIMEOUT_MS,
   );
   return Buffer.from(body.data ?? '', 'base64url');
 }
