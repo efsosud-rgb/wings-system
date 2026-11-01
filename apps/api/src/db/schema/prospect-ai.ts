@@ -166,6 +166,10 @@ export const prospectOpportunities = pgTable(
     decidedAt: timestamp('decided_at', { withTimezone: true }),
     decisionReason: text('decision_reason'),
     pasteBatchId: uuid('paste_batch_id').references(() => igPasteBatches.id),
+    /** Parte 1: the person of the webhook (by IGSID). */
+    igPersonId: uuid('ig_person_id').references((): AnyPgColumn => igPeople.id, {
+      onDelete: 'set null',
+    }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -180,6 +184,7 @@ export const prospectOpportunities = pgTable(
     index('prospect_opportunities_source_idx').on(table.tenantId, table.source, table.createdAt),
     index('prospect_opportunities_lead_idx').on(table.leadId),
     index('prospect_opportunities_batch_idx').on(table.pasteBatchId),
+    index('prospect_opportunities_person_idx').on(table.igPersonId),
     check(
       'prospect_opportunities_source_check',
       sql`${table.source} in ('instagram_comment', 'instagram_dm', 'instagram_ad_comment', 'instagram_ad_referral', 'instagram_mention', 'competitor_radar', 'instagram_colagem')`,
@@ -321,5 +326,115 @@ export const prospectClassifierRuns = pgTable(
       'prospect_classifier_runs_outcome_check',
       sql`${table.outcome} in ('pending', 'ok', 'invalid', 'failed', 'timeout')`,
     ),
+  ],
+);
+
+// --- parte 1: the Meta webhook (spec PA, annex 1 §2.9; docs/prospeccao/instagram.md §5) --------
+
+/**
+ * Every event the webhook stored, answered at once and worked by the 60-second loop. The payload
+ * is the event's own piece (it holds the comment's text): emptied after 30 days, and never
+ * granted to `wings_ro`. A repeat of Meta's is dropped by the unique key.
+ */
+export const igWebhookEvents = pgTable(
+  'ig_webhook_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: tenantId(),
+    eventKey: text('event_key').notNull(),
+    kind: text('kind').notNull(),
+    igAccountId: text('ig_account_id').notNull(),
+    occurredAt: timestamp('occurred_at', { withTimezone: true }),
+    payload: jsonb('payload'),
+    receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+    status: text('status').notNull().default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }).notNull().defaultNow(),
+    lastError: text('last_error'),
+    processedAt: timestamp('processed_at', { withTimezone: true }),
+    opportunityId: uuid('opportunity_id').references(() => prospectOpportunities.id, {
+      onDelete: 'set null',
+    }),
+  },
+  (table) => [
+    uniqueIndex('ig_webhook_events_key_uq').on(table.tenantId, table.eventKey),
+    index('ig_webhook_events_due_idx').on(table.status, table.nextAttemptAt),
+    index('ig_webhook_events_received_idx').on(table.receivedAt),
+    check(
+      'ig_webhook_events_kind_check',
+      sql`${table.kind} in ('comment', 'mention', 'message', 'echo', 'referral', 'other')`,
+    ),
+    check(
+      'ig_webhook_events_status_check',
+      sql`${table.status} in ('pending', 'done', 'ignored', 'failed')`,
+    ),
+  ],
+);
+
+/**
+ * The person of Instagram, minimal (spec PA §2.10): the IGSID, the latest @ (a label), when seen,
+ * the Direct window and the last private reply. No photo, bio, followers or Direct history.
+ */
+export const igPeople = pgTable(
+  'ig_people',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: tenantId(),
+    igsid: text('igsid').notNull(),
+    username: text('username'),
+    firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).notNull(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull(),
+    /** Her last message in the Direct: opens Meta's 24-hour window. */
+    lastInboundAt: timestamp('last_inbound_at', { withTimezone: true }),
+    lastAutoReplyAt: timestamp('last_auto_reply_at', { withTimezone: true }),
+    leadId: uuid('lead_id').references(() => leads.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('ig_people_igsid_uq').on(table.tenantId, table.igsid),
+    index('ig_people_username_idx').on(table.tenantId, table.username),
+    index('ig_people_lead_idx').on(table.leadId),
+    index('ig_people_seen_idx').on(table.lastSeenAt),
+  ],
+);
+
+/**
+ * One private reply per comment, ever: the unique key is taken before Meta is called, so a second
+ * click or a second loop never sends again. A refusal (off, 7 days, "não contatar", limits) writes
+ * no row and leaves the comment free. The text is not kept, only its hash.
+ */
+export const igPrivateReplies = pgTable(
+  'ig_private_replies',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: tenantId(),
+    commentId: text('comment_id').notNull(),
+    opportunityId: uuid('opportunity_id').references(() => prospectOpportunities.id, {
+      onDelete: 'set null',
+    }),
+    igPersonId: uuid('ig_person_id').references(() => igPeople.id, { onDelete: 'set null' }),
+    /** `clique` (who clicked is `requested_by`) or `automatico`. */
+    trigger: text('trigger').notNull(),
+    requestedBy: uuid('requested_by').references(() => employees.id),
+    messageSha256: text('message_sha256'),
+    status: text('status').notNull(),
+    attempts: smallint('attempts').notNull().default(0),
+    nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }),
+    graphMessageId: text('graph_message_id'),
+    lastError: text('last_error'),
+    commentCreatedAt: timestamp('comment_created_at', { withTimezone: true }).notNull(),
+    sentAt: timestamp('sent_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('ig_private_replies_comment_uq').on(table.tenantId, table.commentId),
+    index('ig_private_replies_sent_idx').on(table.tenantId, table.sentAt),
+    index('ig_private_replies_due_idx').on(table.status, table.nextAttemptAt),
+    check(
+      'ig_private_replies_status_check',
+      sql`${table.status} in ('sending', 'sent', 'failed', 'rate_limited', 'unknown')`,
+    ),
+    check('ig_private_replies_trigger_check', sql`${table.trigger} in ('clique', 'automatico')`),
   ],
 );

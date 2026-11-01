@@ -33,6 +33,8 @@ export const LEAD_SOURCES = [
   'whatsapp',
   'google_places',
   'instagram_colagem',
+  'instagram_comment',
+  'instagram_ad',
 ] as const;
 export type LeadSource = (typeof LEAD_SOURCES)[number];
 
@@ -49,6 +51,8 @@ export const LEAD_SOURCE_LABELS: Record<LeadSource, string> = {
   whatsapp: 'WhatsApp (Sofia)',
   google_places: 'Prospecção Google Maps',
   instagram_colagem: 'Instagram (comentário em concorrente)',
+  instagram_comment: 'Instagram (comentário num post da Wings)',
+  instagram_ad: 'Instagram (comentário num anúncio da Wings)',
 };
 
 /**

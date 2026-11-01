@@ -1,5 +1,8 @@
 import {
   firstDirectMessage,
+  grantedScope,
+  IG_PRIVATE_REPLY_BLOCK_LABELS,
+  privateReplyChangeDenial,
   instagramAttachSchema,
   instagramDiscardSchema,
   instagramDoNotContactSchema,
@@ -32,16 +35,21 @@ import {
   type InstagramFound,
   listPasteBatches,
   markApproached,
+  markWhatsAppAsked,
   promote,
   transfer,
 } from './prospects.js';
 import { loadInstagramSettings, saveInstagramSettings } from './settings.js';
+import { instagramMessagingOf } from '../instagram/graph.js';
+import { requestPrivateReply } from '../instagram/private-reply.js';
 
 /**
- * Prospecção Instagram, parte 2 (docs/prospeccao/instagram.md §1.2, §9). Every route needs
- * `prospecting.instagram_paste`; pasting and working a prospect also need `leads.write`, so
- * Diretoria reads and changes nothing. Off (PROSPECT_AI_INSTAGRAM_PASTE_ENABLED), every route but
- * the status answers 503. Nothing here reaches Instagram or sends a message.
+ * Prospecção Instagram, parte 2 (docs/prospeccao/instagram.md §1.2, §9) and the queue of parte 1
+ * (§1.4, "Comentários da Wings"). Every route needs `prospecting.instagram_paste`; pasting and
+ * working a prospect also need `leads.write`, so Diretoria reads and changes nothing. With the
+ * paste off (PROSPECT_AI_INSTAGRAM_PASTE_ENABLED) its routes answer 503; parte 1 has its own
+ * switches (INSTAGRAM_WEBHOOK_ENABLED, INSTAGRAM_AUTO_REPLY_ENABLED). The only thing that reaches
+ * Instagram from here is the click "Enviar resposta privada", through the gates of §5.3.
  */
 
 const idParams = z.object({ id: z.uuid() });
@@ -89,6 +97,8 @@ export const instagramProspectingRoutes: FastifyPluginAsync = async (app) => {
   app.get('/prospect-ai/instagram/status', read, async (request) => {
     const status: InstagramStatus = {
       enabled: env.PROSPECT_AI_INSTAGRAM_PASTE_ENABLED,
+      webhookEnabled: env.INSTAGRAM_WEBHOOK_ENABLED === 'true',
+      replyEnabled: instagramMessagingOf(env) !== null,
       aiEnabled,
       settings: await loadInstagramSettings(db),
       pastesToday: await pastesToday(db, request.session.actor.employeeId, now()),
@@ -138,9 +148,10 @@ export const instagramProspectingRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.get('/prospect-ai/instagram/prospects', read, async (request, reply) => {
-    if (!env.PROSPECT_AI_INSTAGRAM_PASTE_ENABLED) return off(reply);
     const query = instagramProspectListQuery.safeParse(request.query);
     if (!query.success) return invalid(reply, query.error);
+    // Parte 1 (the webhook's comments) does not wait for the paste's switch.
+    if (query.data.parte !== '1' && !env.PROSPECT_AI_INSTAGRAM_PASTE_ENABLED) return off(reply);
     return { prospects: await listInstagramProspects(db, request.session.actor, query.data) };
   });
 
@@ -182,13 +193,14 @@ export const instagramProspectingRoutes: FastifyPluginAsync = async (app) => {
     run: (found: InstagramFound, body: unknown, actor: Actor) => Promise<{ ok: true } | Refusal>,
   ) =>
     app.post(`/prospect-ai/instagram/prospects/:id/${path}`, write, async (request, reply) => {
-      if (!env.PROSPECT_AI_INSTAGRAM_PASTE_ENABLED) return off(reply);
       const params = idParams.safeParse(request.params);
       if (!params.success) return notFound(reply);
       const body = schema ? schema.safeParse(request.body ?? {}) : null;
       if (body && !body.success) return invalid(reply, body.error);
       const found = await instagramProspectInReach(db, request.session.actor, params.data.id);
       if (!found) return notFound(reply);
+      if (found.row.source === 'instagram_colagem' && !env.PROSPECT_AI_INSTAGRAM_PASTE_ENABLED)
+        return off(reply);
       const result = await run(found, body?.data, request.session.actor);
       if (!result.ok) return refused(reply, result);
       return result;
@@ -224,10 +236,60 @@ export const instagramProspectingRoutes: FastifyPluginAsync = async (app) => {
     ),
   );
 
+  action('whatsapp-asked', null, (found, _body, actor) =>
+    markWhatsAppAsked(db, actor, found, now()),
+  );
+
+  /**
+   * "Enviar resposta privada" (§5.2): the opportunity's owner or a manager, on a comment of
+   * parte 1 still in "Quer comprar". The gates and the one call are `requestPrivateReply`'s.
+   */
+  action('private-reply', null, async (found, _body, actor) => {
+    if (found.row.source === 'instagram_colagem')
+      return {
+        ok: false,
+        status: 409,
+        error: 'fora_da_fila',
+        message: 'A resposta privada é só para comentários nos posts e anúncios da Wings.',
+      };
+    const result = await requestPrivateReply(
+      {
+        db,
+        fetch: app.wings.instagramFetch ?? fetch,
+        config: instagramMessagingOf(env),
+        settings: await loadInstagramSettings(db),
+        now: now(),
+      },
+      found.row.id,
+      'clique',
+      actor.employeeId,
+    );
+    if (result.ok) return { ok: true, status: result.status };
+    const message =
+      result.block === 'ja_tratado'
+        ? 'Este comentário já teve a sua resposta privada.'
+        : result.block === 'fora_da_fila'
+          ? 'Só um prospect em "Quer comprar" recebe a resposta privada.'
+          : IG_PRIVATE_REPLY_BLOCK_LABELS[result.block];
+    return {
+      ok: false,
+      status: result.block === 'limite_hora' ? 429 : 409,
+      error: result.block,
+      message,
+    };
+  });
+
   app.put('/prospect-ai/instagram/settings', configure, async (request, reply) => {
     const body = instagramProspectingSettingsSchema.safeParse(request.body);
     if (!body.success) return invalid(reply, body.error);
     const before = await loadInstagramSettings(db);
+    const denied = privateReplyChangeDenial(
+      before.privateReply,
+      body.data.privateReply,
+      grantedScope(request.session.actor, 'prospect_ai.instagram_auto_reply') !== null,
+      before.messages.linkPolitica !== body.data.messages.linkPolitica,
+    );
+    if (denied) return reply.status(403).send({ error: 'forbidden', message: denied });
     await saveInstagramSettings(db, body.data, request.session.actor.employeeId, now());
     await writeAudit(db, {
       actorEmployeeId: request.session.actor.employeeId,

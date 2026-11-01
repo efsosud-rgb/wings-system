@@ -4,6 +4,11 @@ import {
   type PasteDiscardKind,
   type PasteIgnoredKind,
 } from './instagram-paste.js';
+import {
+  DEFAULT_PRIVATE_REPLY_SETTINGS,
+  privateReplySettingsSchema,
+  type IgPrivateReplyStatus,
+} from './instagram-intake.js';
 import { LEAD_PIPELINES, type LeadPipeline } from './leads.js';
 
 /**
@@ -181,6 +186,8 @@ export const instagramProspectingSettingsSchema = z.object({
       recentPosts: z.number().int().min(3).max(25),
     })
     .default({ cacheDias: 7, porDia: 500, recentPosts: 12 }),
+  /** The private reply of parte 1 (§5.2 to §5.4); came later, so an older row reads the defaults. */
+  privateReply: privateReplySettingsSchema.default(DEFAULT_PRIVATE_REPLY_SETTINGS),
   messages: z.object({
     primeiraAbordagemDirect: z
       .string()
@@ -202,6 +209,7 @@ export const DEFAULT_INSTAGRAM_PROSPECTING_SETTINGS: InstagramProspectingSetting
   thresholds: { listar: 70, revisar: 40 },
   retention: { instagramSemLeadDias: 30 },
   discovery: { cacheDias: 7, porDia: 500, recentPosts: 12 },
+  privateReply: DEFAULT_PRIVATE_REPLY_SETTINGS,
   messages: { primeiraAbordagemDirect: DEFAULT_FIRST_DIRECT_MESSAGE, linkPolitica: null },
 };
 
@@ -317,6 +325,13 @@ export interface InstagramProspect {
   /** When it is deleted if it does not become a lead (§8.4). */
   purgeAt: string | null;
   createdAt: string;
+  /** 2: pasted by a seller; 1: a comment on Wings' post or ad (the webhook). */
+  part: 1 | 2;
+  /** Parte 1: 7 days from the comment, or 24 h from her last Direct message (§5.5). */
+  respondBy: string | null;
+  onAd: boolean;
+  /** Parte 1: the one private reply, if it was tried. */
+  privateReply: { status: IgPrivateReplyStatus; sentAt: string | null; alone: boolean } | null;
 }
 
 export interface InstagramPasteBatch {
@@ -335,6 +350,8 @@ export interface InstagramPasteBatch {
 }
 
 export const instagramProspectListQuery = z.object({
+  /** "1": comments on Wings' posts and ads; otherwise the pasted ones (parte 2). */
+  parte: z.enum(['1', '2']).optional(),
   batch: z.uuid().optional(),
   state: z.enum(PROSPECT_OPPORTUNITY_STATES).optional(),
   owner: z.uuid().optional(),
@@ -377,6 +394,9 @@ export type InstagramLeadInput = z.infer<typeof instagramLeadSchema>;
 export interface InstagramStatus {
   /** PROSPECT_AI_INSTAGRAM_PASTE_ENABLED: off, every route but this one answers 503. */
   enabled: boolean;
+  /** Parte 1: INSTAGRAM_WEBHOOK_ENABLED (comments arrive) and the reply's switch, token and account. */
+  webhookEnabled: boolean;
+  replyEnabled: boolean;
   aiEnabled: boolean;
   settings: InstagramProspectingSettings;
   /** Pastes the actor made today (São Paulo) and the day's limit. */

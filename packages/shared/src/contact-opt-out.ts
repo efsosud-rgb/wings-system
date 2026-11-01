@@ -23,6 +23,8 @@ export const CONTACT_KEY_KINDS = [
   'phone',
   'email',
   'instagram_user',
+  /** The Instagram-scoped id (IGSID) from the webhook: the @ may change hands, this does not. */
+  'instagram_igsid',
   'place_id',
   'cnpj',
 ] as const;

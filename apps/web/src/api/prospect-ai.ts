@@ -13,7 +13,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client.js';
 
 /**
- * Prospecção → Instagram, parte 2 (docs/prospeccao/instagram.md §1.2). The pasted text goes to
+ * Prospecção → Instagram, parte 2 (docs/prospeccao/instagram.md §1.2) and the queue of parte 1
+ * (§1.4). The pasted text goes to
  * the API in the request and nowhere else: it is not cached, and the preview lives in React
  * state only.
  */
@@ -80,7 +81,23 @@ export const useAttachComment = () =>
     api.post<{ ok: true }>(`${base}/pastes/attach`, input),
   );
 
-export type InstagramAction = 'approached' | 'promote' | 'discard' | 'do-not-contact' | 'transfer';
+export type InstagramAction =
+  'approached' | 'promote' | 'discard' | 'do-not-contact' | 'transfer' | 'whatsapp-asked';
+
+/** Parte 1: the comments on Wings' posts and ads (the webhook), own or every one. */
+export function useWingsComments(enabled: boolean) {
+  return useQuery({
+    queryKey: [...key, 'prospects', 'parte-1'],
+    queryFn: () => api.get<{ prospects: InstagramProspect[] }>(`${base}/prospects?parte=1`),
+    enabled,
+  });
+}
+
+/** "Enviar resposta privada": the API runs the gates of §5.3 and calls Meta once. */
+export const usePrivateReply = () =>
+  useInvalidating((id: string) =>
+    api.post<{ ok: true; status: string }>(`${base}/prospects/${id}/private-reply`, {}),
+  );
 
 export const useProspectAction = () =>
   useInvalidating(({ id, action, body }: { id: string; action: InstagramAction; body?: unknown }) =>

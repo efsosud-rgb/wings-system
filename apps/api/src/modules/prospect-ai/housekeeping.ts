@@ -1,12 +1,14 @@
-import { and, eq, isNull, lt, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { WINGS_TENANT_ID } from '../../db/schema/ads.js';
 import {
+  igPeople,
   prospectClassifierCache,
   prospectEvidence,
   prospectOpportunities,
 } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
+import { purgeInstagramPayloads } from '../instagram/intake.js';
 import { purgeInstagramSnapshots } from '../prospecting/instagram-discovery.js';
 import { loadInstagramSettings } from './settings.js';
 
@@ -16,8 +18,11 @@ import { loadInstagramSettings } from './settings.js';
  * last change (creation, "Abordei", transfer) is deleted with every comment of it (the @, the
  * excerpt, the link) and its classifications; only the count stays, in the audit log. The
  * classifier's cache (a hash and the justifying phrase) goes after 30 days, and so does a Business
- * Discovery reading of a company (parte 3), counted from its `fetched_at`. "Não contatar" is in
- * `contact_opt_outs` and is never purged. One run at a time across replicas.
+ * Discovery reading of a company (parte 3), counted from its `fetched_at`. Parte 1 the same: its
+ * opportunities, the person of Instagram not seen for as long and not a lead, and the webhook's raw
+ * events (emptied); an opportunity whose 7 days (or 24 h of the Direct) passed with no answer
+ * becomes `prazo_vencido`. "Não contatar" is in `contact_opt_outs` and is never purged. One run at
+ * a time across replicas.
  */
 
 const LOCK_KEY = 'prospect-ai:housekeeping';
@@ -25,7 +30,18 @@ export const HOUSEKEEPING_TICK_MS = 60 * 60_000;
 const CACHE_DAYS = 30;
 
 export type HousekeepingResult =
-  { ran: false } | { ran: true; purged: number; cache: number; snapshots: number };
+  | { ran: false }
+  | {
+      ran: true;
+      purged: number;
+      cache: number;
+      snapshots: number;
+      people: number;
+      payloads: number;
+      expired: number;
+    };
+
+const INSTAGRAM_SOURCES = ['instagram_colagem', 'instagram_comment', 'instagram_ad_comment'];
 
 export async function runInstagramHousekeeping(
   db: Database,
@@ -43,7 +59,7 @@ export async function runInstagramHousekeeping(
       .where(
         and(
           eq(prospectOpportunities.tenantId, WINGS_TENANT_ID),
-          eq(prospectOpportunities.source, 'instagram_colagem'),
+          inArray(prospectOpportunities.source, INSTAGRAM_SOURCES),
           isNull(prospectOpportunities.leadId),
           sql`(select max(${prospectEvidence.retentionUntil}) from ${prospectEvidence} where ${prospectEvidence.opportunityId} = ${prospectOpportunities.id}) < ${now.toISOString()}::timestamptz`,
         ),
@@ -56,13 +72,43 @@ export async function runInstagramHousekeeping(
       )
       .returning({ key: prospectClassifierCache.keyHash });
     const snapshots = await purgeInstagramSnapshots(tx, now);
-    if (purged.length)
+    const people = await tx
+      .delete(igPeople)
+      .where(
+        and(
+          isNull(igPeople.leadId),
+          lt(igPeople.lastSeenAt, new Date(now.getTime() - days * 86_400_000)),
+        ),
+      )
+      .returning({ id: igPeople.id });
+    const payloads = await purgeInstagramPayloads(tx, now);
+    const expired = await tx
+      .update(prospectOpportunities)
+      .set({ state: 'prazo_vencido', updatedAt: now })
+      .where(
+        and(
+          inArray(prospectOpportunities.source, ['instagram_comment', 'instagram_ad_comment']),
+          inArray(prospectOpportunities.state, ['nova', 'em_revisao']),
+          isNull(prospectOpportunities.respondedAt),
+          lt(prospectOpportunities.respondBy, now),
+        ),
+      )
+      .returning({ id: prospectOpportunities.id });
+    if (purged.length || people.length)
       await writeAudit(tx, {
         action: 'prospect_ai.instagram_purged',
         entity: 'prospect_ai_settings',
-        metadata: { count: purged.length, days },
+        metadata: { count: purged.length, people: people.length, days },
       });
-    return { ran: true, purged: purged.length, cache: cache.length, snapshots };
+    return {
+      ran: true,
+      purged: purged.length,
+      cache: cache.length,
+      snapshots,
+      people: people.length,
+      payloads,
+      expired: expired.length,
+    };
   });
 }
 
@@ -77,7 +123,15 @@ export function startInstagramHousekeeping(deps: {
     busy = true;
     try {
       const result = await runInstagramHousekeeping(deps.db);
-      if (result.ran && (result.purged || result.cache || result.snapshots))
+      if (
+        result.ran &&
+        (result.purged ||
+          result.cache ||
+          result.snapshots ||
+          result.people ||
+          result.payloads ||
+          result.expired)
+      )
         deps.log({ job: 'prospect-ai-housekeeping', ...result });
     } catch (error) {
       deps.log({

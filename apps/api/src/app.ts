@@ -82,6 +82,7 @@ import { siteRoutes } from './modules/site/routes.js';
 import { youtubeRoutes } from './modules/youtube/routes.js';
 import { studioRoutes } from './modules/studio/routes.js';
 import { employeeRoutes } from './modules/employees/routes.js';
+import { instagramWebhookRoutes } from './modules/instagram/webhook-routes.js';
 import { authPlugin } from './plugins/auth.js';
 
 declare module 'fastify' {
@@ -121,6 +122,10 @@ declare module 'fastify' {
       placesFetch?: typeof fetch;
       /** Set only by tests, so no test ever reaches Instagram's Business Discovery (Prospecção). */
       instagramDiscoveryFetch?: typeof fetch;
+      /** Set only by tests, so no test ever reaches the Instagram private reply (Prospecção, parte 1). */
+      instagramFetch?: typeof fetch;
+      /** Set by the server once the Instagram queue runs: the webhook pokes it after storing events. */
+      instagramKick?: () => void;
       /** Set only by tests, so no test ever reads a company's site (Prospecção). */
       siteTransport?: PageTransport;
       storage?: ObjectStorage;
@@ -168,6 +173,8 @@ export async function buildApp(deps: {
   placesFetch?: typeof fetch;
   /** Overridable so tests play Instagram's Business Discovery themselves. */
   instagramDiscoveryFetch?: typeof fetch;
+  /** Overridable so tests play the Instagram private reply themselves. */
+  instagramFetch?: typeof fetch;
   /** Overridable so tests serve the companies' sites themselves. */
   siteTransport?: PageTransport;
   storage?: ObjectStorage;
@@ -273,6 +280,7 @@ export async function buildApp(deps: {
     youtubeFetch: deps.youtubeFetch,
     placesFetch: deps.placesFetch,
     instagramDiscoveryFetch: deps.instagramDiscoveryFetch,
+    instagramFetch: deps.instagramFetch,
     siteTransport: deps.siteTransport,
     storage: deps.storage,
     now: deps.now,
@@ -365,6 +373,7 @@ export async function buildApp(deps: {
   await app.register(rdUserRoutes);
   await app.register(landingPageRoutes);
   await app.register(leadWebhookRoutes);
+  await app.register(instagramWebhookRoutes);
   await app.register(whatsappWebhookRoutes);
   await app.register(whatsappRoutes);
   await app.register(whatsappCallRoutes);

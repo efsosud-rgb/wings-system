@@ -778,7 +778,8 @@ export function whatsappOptInMissing(lead: {
 }): boolean {
   return (
     (lead.source === 'google_places' ||
-      lead.source === 'instagram_colagem' ||
+      // Every Instagram origin: writing in the Direct is not asking for WhatsApp (§5.5).
+      lead.source.startsWith('instagram_') ||
       lead.consentSource === 'prospeccao') &&
     lead.legalBasis !== 'consent'
   );

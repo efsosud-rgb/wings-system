@@ -643,6 +643,36 @@ const schema = z.object({
     (value) => value === undefined || value === 'true' || value === 'false',
     'must be "true" or "false"',
   ),
+  /**
+   * Prospecção Instagram, parte 1 (docs/prospeccao/instagram.md §5): the Meta webhook of comments
+   * on Wings' posts and ads and of the Direct. Off unless "true" AND the app secret and the verify
+   * token are set: off, the webhook answers 503 and stores nothing.
+   */
+  INSTAGRAM_WEBHOOK_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
+  /** The private reply (one message, within 7 days). Off unless "true": every reply is blocked. */
+  INSTAGRAM_AUTO_REPLY_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
+  /** Signs the Instagram webhook: the secret of the app Eric picks (secret). */
+  INSTAGRAM_APP_SECRET: optionalString,
+  INSTAGRAM_WEBHOOK_VERIFY_TOKEN: optionalString.refine(
+    (value) => value === undefined || value.length >= 16,
+    'must be at least 16 characters',
+  ),
+  /**
+   * An Instagram-only token (instagram_manage_comments, instagram_manage_messages; no ad
+   * permission): it never falls back to another token (secret).
+   */
+  INSTAGRAM_MESSAGING_TOKEN: optionalString,
+  /** Wings' Instagram account id on the Graph, the one that sends the reply. Not a secret. */
+  INSTAGRAM_ACCOUNT_ID: optionalString.refine(
+    (value) => value === undefined || /^\d{5,30}$/.test(value),
+    'must be the numeric Instagram account id',
+  ),
   /** Arrival checks that leave the server (site, Instagram, CNPJ); on unless "false". */
   LEAD_CHECKS_ENABLED: optionalString.refine(
     (value) => value === undefined || value === 'true' || value === 'false',

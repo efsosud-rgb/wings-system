@@ -33,6 +33,7 @@ export * from './lead-fields.js';
 export * from './instagram.js';
 export * from './instagram-paste.js';
 export * from './instagram-discovery.js';
+export * from './instagram-intake.js';
 export * from './prospect-ai.js';
 export * from './sales-panel.js';
 export * from './crm-automations.js';

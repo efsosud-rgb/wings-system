@@ -18,6 +18,7 @@ import {
 } from '../../api/prospect-ai.js';
 import { LoadFailure } from '../../components/LoadFailure.js';
 import { actionFailure, InstagramLists, InstagramSettings } from './InstagramProspectList.js';
+import { WingsComments } from './InstagramWingsComments.js';
 
 /**
  * Prospecção → Instagram, parte 2 (docs/prospeccao/instagram.md §1.2): the seller pastes the
@@ -40,7 +41,7 @@ const TAG_TEXT = (tag: PasteCommentTag): string => {
   }
 };
 
-type View = 'paste' | 'lists' | 'settings';
+type View = 'paste' | 'lists' | 'wings' | 'settings';
 
 export function InstagramTab({
   canPaste,
@@ -52,7 +53,7 @@ export function InstagramTab({
   canConfigure: boolean;
 }) {
   const status = useInstagramStatus();
-  const [view, setView] = useState<View>(canPaste ? 'paste' : 'lists');
+  const [chosen, setView] = useState<View | null>(null);
   const [batch, setBatch] = useState<string | null>(null);
 
   if (status.isError)
@@ -64,29 +65,28 @@ export function InstagramTab({
       />
     );
   if (!status.data) return <p className="muted">Carregando…</p>;
-  if (!status.data.enabled)
-    return (
-      <div className="crm-stack">
+  const pasteOn = status.data.enabled;
+  // Comentários da Wings (parte 1) has its own switches: it shows even with the paste off.
+  const views: [View, string][] = [
+    ...(pasteOn && canPaste ? [['paste', 'Colar comentários'] as [View, string]] : []),
+    ...(pasteOn ? [['lists', canManage ? 'Listas' : 'Minhas listas'] as [View, string]] : []),
+    ['wings', 'Comentários da Wings'],
+    ...(canConfigure ? [['settings', 'Ajustes'] as [View, string]] : []),
+  ];
+  const view = chosen && views.some(([key]) => key === chosen) ? chosen : views[0]![0];
+  return (
+    <div className="crm-stack">
+      {!pasteOn && (
         <p className="load-failure" role="status">
           <span className="load-failure-dash" aria-hidden="true">
             —
           </span>
           <span>
-            Prospecção Instagram desligada: espera o OK do Jurídico (abordar pessoas reais) e a
+            Colar comentários desligado: espera o OK do Jurídico (abordar pessoas reais) e a
             política de privacidade publicada. Quem liga é o Eric.
           </span>
         </p>
-        {canConfigure && <InstagramSettings settings={status.data.settings} />}
-      </div>
-    );
-
-  const views: [View, string][] = [
-    ...(canPaste ? [['paste', 'Colar comentários'] as [View, string]] : []),
-    ['lists', canManage ? 'Listas' : 'Minhas listas'],
-    ...(canConfigure ? [['settings', 'Ajustes'] as [View, string]] : []),
-  ];
-  return (
-    <div className="crm-stack">
+      )}
       <div className="crm-quick-row" role="group" aria-label="Instagram">
         {views.map(([key, label]) => (
           <button
@@ -119,6 +119,14 @@ export function InstagramTab({
           canWrite={canPaste}
           batch={batch}
           setBatch={setBatch}
+        />
+      )}
+      {view === 'wings' && (
+        <WingsComments
+          canManage={canManage}
+          canWrite={canPaste}
+          webhookEnabled={status.data.webhookEnabled}
+          replyEnabled={status.data.replyEnabled}
         />
       )}
       {view === 'settings' && <InstagramSettings settings={status.data.settings} />}
