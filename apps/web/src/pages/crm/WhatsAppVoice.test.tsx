@@ -287,6 +287,8 @@ describe('the composer under "não me contate" (Eric, 30/10)', () => {
     expect(screen.getByText(/Nada sai por esta conversa, nem dentro das 24 h/)).toBeTruthy();
     const send = screen.getByRole('button', { name: 'Enviar' });
     expect((send as HTMLButtonElement).disabled).toBe(true);
+    // Text typed before the lock came in with the refresh stays where it is.
+    fireEvent.change(field, { target: { value: 'Segue a proposta' } });
     fireEvent.keyDown(field, { key: 'Enter' });
     fireEvent.click(send);
     await act(async () => {});
