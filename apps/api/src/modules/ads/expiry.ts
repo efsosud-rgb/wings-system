@@ -132,3 +132,28 @@ export async function expireStaleChanges(
   }
   return result;
 }
+
+/**
+ * The ingestion cycle's call: expires, and writes counts and ids only to the
+ * log. It never throws, so a failed read here cannot stop the rest of the
+ * cycle (the Leads das Campanhas come after it); the next cycle tries again.
+ */
+export async function reportExpiredChanges(db: Database, now: Date): Promise<void> {
+  let result: ExpiryResult;
+  try {
+    result = await expireStaleChanges(db, { now });
+  } catch (error) {
+    console.error(
+      `expiração de pedidos falhou neste ciclo: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return;
+  }
+  for (const entry of result.failed) {
+    console.error(`pedido ${entry.changeRequestId} NÃO expirou: ${entry.error}`);
+  }
+  for (const entry of result.expired) {
+    console.warn(
+      `pedido ${entry.changeRequestId} expirou (${entry.why === 'age' ? `mais de ${CHANGE_REQUEST_MAX_AGE_HOURS} h` : 'mês virou'}); reserva devolvida`,
+    );
+  }
+}
