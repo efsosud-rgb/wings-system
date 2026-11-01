@@ -154,33 +154,69 @@ configurado); desligado, nada é lido e a tela não pede reconexão.
    Um endereço em duas negociações abertas dele vai para a atualizada por último (`DUVIDAS` da t083).
 
 Uma mensagem nova que não está numa conversa conhecida nem veio de um contato tem lidos **só** os
-cabeçalhos `In-Reply-To` e `References` (`format=metadata` com `fields=payload/headers`: nem remetente,
-nem assunto, nem trecho), comparados em memória e descartados. **Expansão com marca**: nada é lido
+cabeçalhos `In-Reply-To` e `References` e a hora de chegada (`format=metadata` com
+`fields=internalDate,payload/headers`: nem remetente, nem assunto, nem trecho), comparados em memória e
+descartados. **Expansão com marca**: nada é lido
 (os endereços ficam fora da busca e uma conversa antiga dela é ignorada). **Não me contate** não impede
 a leitura: o aviso ao dono mostra a trava, e "Responder" fica desligado como todo envio.
 
-**Como chega:** leitura periódica e incremental, a cada 5 minutos, no processo da API (trava de banco
-para mais de uma réplica): `history.list` da caixa de entrada a partir do último ponto lido
-(`google_workspace_connections.gmail_history_id`, por vendedor). A primeira passada só marca o ponto
-(e-mail anterior à reconexão não é lido). Cerca de 60 chamadas ao Gmail por caixa e passada
-(`MAX_CALLS_PER_MAILBOX`; o que passa fica para a próxima, sem perder o ponto). O Gmail guarda o histórico
-por cerca de uma semana: um ponto velho demais (404) recomeça de agora e fica `gmail_read_error =
-history_expired`. Sem duplicar: índice único (caixa, id da mensagem no Gmail) e (negociação, Message-ID),
-para a mesma resposta copiada a dois vendedores.
+**Como chega:** leitura periódica e incremental, a cada 5 minutos, no processo da API: `history.list` da
+caixa de entrada a partir do último ponto lido (`google_workspace_connections.gmail_history_id`, por
+vendedor). A primeira passada só marca o ponto (e-mail anterior à reconexão não é lido). O Gmail guarda o
+histórico por cerca de uma semana: um ponto velho demais (404) recomeça de agora e fica
+`gmail_read_error = history_expired`. Sem duplicar: índice único (caixa, id da mensagem no Gmail) e
+(negociação, Message-ID), para a mesma resposta copiada a dois vendedores (testado com as duas caixas).
+
+Robustez da passada (aj02, revisões do PR #68):
+
+- **Uma passada por vez, sem transação aberta:** trava consultiva **de sessão** (`pg_try_advisory_lock`,
+  solta com `pg_advisory_unlock` num `finally`) numa conexão só dela, que não abre transação; as gravações
+  usam as outras conexões do pool (`readAllMailboxesLocked`). Se a trava não sai, a conexão é descartada e
+  a trava vai com ela.
+- **Tempo limite em toda chamada ao Google** (`AbortSignal.timeout`): 30 s (`GOOGLE_TIMEOUT_MS`, em
+  `google-workspace/oauth.ts`), 120 s para o envio e a leitura de um anexo (até 20 MB). Uma chamada
+  travada termina como `unreachable`, a caixa guarda `gmail_read_error = gmail_unreachable` e o ponto onde
+  estava, e a passada segue para a próxima caixa. O Google simulado dos testes recusa chamada sem tempo
+  limite.
+- **Teto:** cerca de 60 chamadas por caixa e passada (`MAX_CALLS_PER_MAILBOX`), **contando tudo**: as
+  páginas do histórico, a busca, os cabeçalhos, as mensagens e os anexos. O teto é conferido antes de cada
+  mensagem, também dentro de um registro do histórico com muitas mensagens; uma mensagem começada vai até o
+  fim, e toda passada olha pelo menos uma mensagem (nunca fica parada).
+- **O ponto nunca pula mensagem:** ele só passa de um registro do histórico quando todas as mensagens dele
+  estão resolvidas. As mensagens resolvidas depois do ponto (guardadas, ou que não são das negociações)
+  ficam em `gmail_history_seen` (migração `0108_gmail_history_seen`), e a passada seguinte não paga por
+  elas de novo; a lista esvazia quando o ponto passa por elas.
+- **Busca por remetente uma vez por passada** (não a cada página do histórico), em blocos de 20
+  endereços, desde a última passada que leu o histórico até o fim, menos 2 dias.
+- **Atraso do índice da busca:** uma mensagem que não casou com nada e chegou há menos de 30 minutos
+  (`SEARCH_SETTLE_MS`) não é dada como resolvida: o ponto espera por ela e ela é olhada de novo nas
+  passadas seguintes, para o caso de ser de um contato que a busca do Gmail ainda não indexou. Depois de
+  30 minutos, fica resolvida como "não é das negociações" e nada dela é guardado.
 
 _Por que leitura periódica e não o aviso do Google (watch + Pub/Sub):_ o aviso exige um tópico do Cloud
 Pub/Sub (serviço novo no projeto, com cobrança acima da cota gratuita), dar permissão de publicação ao
 `gmail-api-push@system.gserviceaccount.com`, um endereço público para receber e renovar o `watch` a cada
 7 dias por pessoa; e ainda assim é preciso o `history.list` para saber o que mudou. A leitura de 5 em 5
-minutos não precisa de nada disso, gasta pouco da cota (6.000 unidades por minuto por pessoa;
-`history.list` 2, busca 5, cabeçalhos 20, mensagem inteira 60, anexo 20) e o atraso de até 5 minutos
-serve para e-mail.
+minutos não precisa de nada disso, gasta pouco da cota e o atraso de até 5 minutos serve para e-mail.
+
+_Cota do Gmail_ (página oficial "Usage limits",
+<https://developers.google.com/workspace/gmail/api/reference/quota>, "Last updated 2026-10-16", lida em
+01/11/2026): **6.000 unidades por minuto por usuário** ("Per minute per user per project") e 1.200.000 por
+minuto por projeto. Custo por chamada: `getProfile` 1, `history.list` 2, `messages.list` (a busca) 5,
+`messages.get` 20 (os cabeçalhos, `format=metadata`) e 60 com `format=full` (a mensagem inteira),
+`messages.attachments.get` 20, `messages.send` 100. A página avisa que esses limites valem desde
+**1º/05/2026** para projetos novos; um projeto do Cloud que usou a API entre novembro de 2025 e abril de
+2026 continua com as cotas de antes (não verificado em qual caso está o projeto da Wings). No pior caso
+de uma passada (60 chamadas, todas mensagens inteiras), são cerca de 3.600 unidades por caixa em 5
+minutos, abaixo das 6.000 por minuto.
 
 **No card:** a aba E-mail mostra as mensagens **por conversa** (uma conversa do Gmail; a resposta por
 In-Reply-To vai para a conversa do e-mail que ela cita), a mais recente em cima: remetente, data,
 assunto, o texto sem as citações antigas (`email-text.ts`: "Em …, … escreveu:", "On … wrote:", o bloco
-"De:/Enviado:" do Outlook, "Mensagem original", linhas com `>`; sem nada disso, o texto inteiro) e nome e
-tamanho dos anexos. "Responder" abre a escrita com "Re: …", para quem escreveu (quando é um endereço da
+"De:/Enviado:" do Outlook e a linha de sublinhados que o Outlook e o Hotmail põem antes dele, "Mensagem
+original", linhas com `>`; sem nada disso, o texto inteiro) e nome e tamanho dos anexos. O marcador de
+imagem colada do Outlook/Hotmail (`[cid:…]`) sai do texto (a imagem continua sem virar anexo, decisão da
+t083); uma resposta que era só uma imagem colada fica sem texto, e não com a mensagem citada. "Responder" abre a escrita com "Re: …", para quem escreveu (quando é um endereço da
 negociação), e o envio vai **na mesma conversa** do Gmail (`threadId` e `In-Reply-To`), também com anexos
 (o envio por upload agora é `uploadType=multipart`, com o `threadId`). O Histórico ganha "E-mail recebido
 do lead" com remetente, assunto, texto e anexos (`lead.email_received`; o evento guarda o assunto, o
@@ -190,6 +226,12 @@ remetente e os anexos, e o texto é lido de `crm_email_inbound` ao abrir a ficha
 arquivos) e a mesma recusa de programas e scripts (`emailAttachmentRefusal`). O recusado não é baixado:
 fica o nome e o tamanho com o motivo ("não guardado"). Imagem embutida no texto (logo de assinatura,
 `Content-Disposition: inline`) não vira arquivo.
+
+**Só o lead gera aviso** (decisão do Eric de 30/10/2026, aj02): numa conversa conhecida, uma mensagem de
+um endereço da própria Wings (o de um funcionário cadastrado, de login ou da conta Google conectada, ou um
+endereço do domínio de uma caixa conectada do Google Workspace; um domínio de webmail nunca conta como o da
+empresa) fica na conversa da aba E-mail, com os anexos, mas **não** é "resposta do lead": não entra no
+Histórico (`lead.email_received`), nem no sininho, nem no pop-up. Exemplo: o colega que "responde a todos".
 
 **Aviso ao dono:** o mesmo pop-up do lead novo ("Respondeu por e-mail", com "Abrir ficha" e "Depois",
 som) e o contador do sininho (`crm_notifications`, `kind = lead_email`, um por resposta e pessoa); sem
