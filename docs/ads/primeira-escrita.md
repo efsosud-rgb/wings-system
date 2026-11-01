@@ -118,6 +118,11 @@ não espelhou a campanha. `kill_switch_engaged` → volte ao passo 1.
 
 ### 4. Aprovar
 
+> Desde 01/11/2026 um pedido **expira** se ninguém decidir em 24 h, e uma
+> aprovação expira se ninguém clicar Executar em 24 h (e os dois expiram na
+> virada do mês). Faça os passos 3 a 7 no mesmo dia. Expirou: pedido novo.
+> Detalhes em [travas.md](travas.md), "Parte 1".
+
 Abra o caminho impresso. Confira na tela: **a campanha é a certa**, o tipo é
 pausa (antes "Ativa", depois "Pausada"). Escreva o motivo e clique **Aprovar**.
 
@@ -164,6 +169,8 @@ Com o gestor olhando o Gerenciador: clique **Executar no Meta**, **uma vez**.
 | ------------------------------------------------------------------ | ------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | "Alteração aplicada na plataforma." · situação **executada**       | A Meta aceitou e a releitura confirmou                  | Passo 8                                                                                 |
 | "Trava de emergência acionada."                                    | Trava ligou entre o passo 1 e agora                     | `status`, leia o motivo; pare                                                           |
+| "No instante da execução, o orçamento do mês não comporta…"        | O que está rodando + esta alteração passaria de um teto | Nada saiu. A alteração segue aprovada; para uma pausa isto não acontece                 |
+| "…não tem mais orçamento reservado" / "…pedida em outro mês…"      | Pedido sem reserva, ou de um mês que já acabou          | Faça um pedido novo                                                                     |
 | "A última reconciliação tem N min…" / "ainda não foi reconciliada" | Dead-man switch: gasto real desconhecido                | Passo 6, depois clique de novo                                                          |
 | "O cliente da plataforma não pertence à conta…"                    | Defeito de configuração                                 | Pare; desligue a flag                                                                   |
 | "A execução em contas reais está desligada…"                       | O redeploy não pegou a flag                             | Confira a variável e o deploy                                                           |
