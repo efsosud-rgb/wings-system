@@ -201,6 +201,18 @@ alteração continua aprovada e pode sair quando houver espaço (ou expira).
 Mensagem na tela: "No instante da execução, o orçamento do mês não comporta
 esta alteração: …".
 
+Para quem opera:
+
+- **A conta é conservadora de propósito.** Entre o executor gravar o orçamento
+  novo no espelho e marcar a alteração como `executed`, ela conta duas vezes
+  (espelho + `executing`), e um `unknown` não resolvido também conta. Isso
+  pode recusar um aumento que caberia, nunca deixar passar um que não cabe.
+- **Uma pausa aprovada num mês não sai no mês seguinte.** A recusa de mês
+  (`period_not_current`) vale para qualquer alteração, inclusive uma redução,
+  porque o delta foi calculado com os dias do mês antigo; a expiração da virada
+  do mês fecha o pedido. Para pausar depois da virada, faça um pedido novo.
+  Pela regra do teto, pausas e reduções nunca são barradas.
+
 **2. Uma decisão só vale (T-4).** Aprovar, rejeitar e expirar movem o pedido
 **só a partir de `pending_approval`**, com a trava do período tomada primeiro.
 Duas decisões no mesmo instante: uma vale, a outra recebe `already_decided`
@@ -220,8 +232,10 @@ outra num impasse.
   `applyReportedSpend` faz com gasto que comeu a reserva), em vez de a rota
   responder 500 e o pedido ficar preso.
 
-**4. Pedidos velhos expiram** (`expireStaleChanges` em `expiry.ts`), no fim de
-cada ciclo de ingestão — o completo e o de 15 min (`--reconcile-only`), logo
+**4. Pedidos velhos expiram** (`expireStaleChanges` em `expiry.ts`, chamado
+por `reportExpiredChanges`, que nunca derruba o ciclo: se a leitura falha, o
+erro vai para o log e o próximo ciclo tenta de novo), no fim de cada ciclo de
+ingestão — o completo e o de 15 min (`--reconcile-only`), logo
 depois do dead-man switch:
 
 | Situação do pedido                   | Expira quando                       |
@@ -255,13 +269,22 @@ Testes novos (todos contra banco descartável, cliente falso):
 - `executor.test.ts` — recusa sem reconciliação, recusa com reconciliação
   velha e **aceita depois de reconciliar**, recusa cliente de outra conta.
 - `write-time-guard.test.ts` (parte 1, 01/11/2026) — teto exato passa e um
-  centavo de exposição a mais é recusado sem nada enviado; duas execuções
-  simultâneas que só cabem sozinhas: uma sai; aprovar e rejeitar (e aprovar e
-  expirar) ao mesmo tempo: uma vale; aprovada sem reserva e pedido de outro
+  centavo de exposição a mais é recusado sem nada enviado; aprovada sem reserva e pedido de outro
   mês recusados; pausa num mês cheio sai; rejeitar ou expirar uma pausa cujo
   espaço foi usado aciona a trava em vez de quebrar; devolução depois de um
   reconcile não conta duas vezes; expiração por idade, pela aprovação e pela
-  virada do mês; um pedido que falha não impede os outros.
+  virada do mês; um pedido que falha não impede os outros; a leitura da
+  expiração que falha não derruba o ciclo.
+- `write-time-guard-races.test.ts` (parte 1, revisão do PR #76) — os "dois
+  cliques ao mesmo tempo", cada um com os concorrentes parados numa linha
+  conhecida antes de soltar (com `Promise.all` puro e o cliente falso, uma
+  transação acabava antes da outra começar e o teste passava sem a trava):
+  duas execuções que só cabem sozinhas, com a **primeira escrita presa a
+  caminho da Meta** (só a soma das alterações em andamento segura o teto) e
+  com as duas **paradas logo depois da conferência** por uma trava consultiva
+  (só a trava do período põe uma depois da outra): uma sai; aprovar e
+  rejeitar, dois "aprovar" e aprovar e expirar, todos parados atrás da linha
+  do período: uma decisão vale, com uma entrada de auditoria.
 - `reconcile.test.ts` — arquivada fica de fora; nunca reconciliada é
   desconhecida.
 - `ops.test.ts` — o roteiro da primeira escrita ponta a ponta: pedido →
