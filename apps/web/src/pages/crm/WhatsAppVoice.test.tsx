@@ -257,7 +257,61 @@ describe('recording a voice note', () => {
       }),
     );
     fireEvent.click(mic());
-    expect(screen.getByText(/Áudio gravado não vai: Pediu para não ser contatado/)).toBeTruthy();
+    expect(screen.getByText('Este contato pediu para não ser contatado.')).toBeTruthy();
     expect(getUserMedia).not.toHaveBeenCalled();
+  });
+});
+
+describe('the composer under "não me contate" (Eric, 30/10)', () => {
+  const blocked = (origin: 'crm' | 'whatsapp_palavra') =>
+    thread({
+      contactBlock: {
+        blocked: true,
+        reason: 'Pediu para não ser contatado (WhatsApp; registrado no CRM).',
+        origin,
+      },
+    });
+
+  it('turns off the field, the 📎 and the 🎤 inside the window, with why; nothing is sent', async () => {
+    show(blocked('whatsapp_palavra'));
+    const field = screen.getByRole('textbox', { name: 'Mensagem' });
+    expect((field as HTMLTextAreaElement).disabled).toBe(true);
+    for (const tool of [screen.getByRole('button', { name: 'Anexar arquivo' }), mic()]) {
+      expect(tool.getAttribute('aria-disabled')).toBe('true');
+      expect(tool.getAttribute('title')).toBe('Este contato pediu para não ser contatado.');
+      fireEvent.click(tool);
+    }
+    expect(screen.getByRole('status').textContent).toBe(
+      'Este contato pediu para não ser contatado.',
+    );
+    expect(screen.getByText(/Nada sai por esta conversa, nem dentro das 24 h/)).toBeTruthy();
+    const send = screen.getByRole('button', { name: 'Enviar' });
+    expect((send as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.keyDown(field, { key: 'Enter' });
+    fireEvent.click(send);
+    await act(async () => {});
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('the template picker says the same, with no way around to free text', () => {
+    show(blocked('crm'));
+    fireEvent.click(screen.getByRole('button', { name: 'Usar modelo' }));
+    expect(
+      screen.getByText('Modelos pausados. Este contato pediu para não ser contatado.'),
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Escrever livre' })).toBeNull();
+  });
+
+  it('without it, the same composer writes, attaches and records', () => {
+    show();
+    expect(
+      (screen.getByRole('textbox', { name: 'Mensagem' }) as HTMLTextAreaElement).disabled,
+    ).toBe(false);
+    expect(
+      screen.getByRole('button', { name: 'Anexar arquivo' }).getAttribute('aria-disabled'),
+    ).toBe('false');
+    expect(mic().getAttribute('aria-disabled')).toBe('false');
+    expect(screen.queryByRole('status')).toBeNull();
   });
 });
