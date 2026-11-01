@@ -1234,6 +1234,11 @@ a {
   background: var(--danger-soft);
 }
 
+.approval-expired {
+  color: var(--text-2);
+  background: var(--surface-2);
+}
+
 .audit-trail {
   list-style: none;
   display: flex;
