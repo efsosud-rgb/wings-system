@@ -28,6 +28,7 @@ import { WINGS_TENANT_ID } from '../../db/schema/ads.js';
 import {
   employees,
   igPasteBatches,
+  igPeople,
   igPrivateReplies,
   leadEvents,
   prospectEvidence,
@@ -553,6 +554,12 @@ export async function createLead(
       .update(prospectOpportunities)
       .set({ state: 'aprovada', leadId, needsReviewReason: null, updatedAt: now })
       .where(eq(prospectOpportunities.id, row.id));
+    // Parte 1: the person (IGSID) is now this lead's, so her next comment goes on its timeline.
+    if (row.igPersonId)
+      await db
+        .update(igPeople)
+        .set({ leadId, updatedAt: now })
+        .where(eq(igPeople.id, row.igPersonId));
     // A lead follows the lead's own retention: the evidence is no longer purged at 30 days.
     await db
       .update(prospectEvidence)
