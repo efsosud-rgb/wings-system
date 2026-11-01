@@ -817,14 +817,17 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
   const callLimitReply = (reply: FastifyReply, why: string) =>
     reply.status(429).send({ error: 'call_request_limit', message: why });
 
-  /** Where a refused send is told on the timeline (`lead.contact_blocked`). */
+  /**
+   * Where a refused send is told on the timeline (`lead.contact_blocked`). Every kind of send has
+   * one: a new kind does not compile until it says where its refusal goes.
+   */
   const BLOCKED_PATHS = {
     text: 'texto',
     media: 'arquivo',
     voice: 'audio_gravado',
     call_permission: 'pedido_ligacao',
     template: 'modelo',
-  } as const;
+  } as const satisfies Record<Outgoing['kind'], string>;
 
   /**
    * "Não me contate" or SAIR, by every key of the person and the deal: nothing goes to them by any
