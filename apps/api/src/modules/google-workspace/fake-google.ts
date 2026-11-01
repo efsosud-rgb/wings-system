@@ -5,6 +5,8 @@
  * the lead and the owner, the Meet came back, the reschedule reached Google first.
  * Its Gmail also has an inbox (`deliver`) read through the history, the search, a message
  * and its attachments, as the reading of the leads' replies does (t083).
+ * Every call must carry a time limit (`signal`), or it is refused: a call without one could hold a
+ * pass or a click for minutes (aj02).
  */
 
 export interface FakeGoogleOptions {
@@ -54,6 +56,8 @@ export interface FakeMail {
   html?: string;
   attachments?: { filename: string; mimeType: string; data: Buffer; inline?: boolean }[];
   at?: Date;
+  /** Not in Gmail's search yet (its index lags behind the inbox) until `index(id)`. */
+  unindexed?: boolean;
 }
 
 export interface FakeEvent {
@@ -76,12 +80,12 @@ export function fakeGoogle(options: FakeGoogleOptions = {}) {
   const events = new Map<string, FakeEvent>();
   let tokenCounter = 0;
   let sentMail: Array<{ raw: string; threadId: string | null }> = [];
-  const inbox: Array<FakeMail & { id: string; threadId: string; labelIds: string[]; at: Date }> =
-    [];
+  type StoredMail = FakeMail & { id: string; threadId: string; labelIds: string[]; at: Date };
+  const inbox: StoredMail[] = [];
   let historyPoint = 1000;
   /** History records before this point are gone, as Gmail forgets them after about a week. */
   let historyFloor = 0;
-  const history: Array<{ id: number; message: { id: string; threadId: string } }> = [];
+  const history: Array<{ id: number; messages: { id: string; threadId: string }[] }> = [];
 
   const refusal = (code: number) => ({
     error: {
@@ -194,6 +198,8 @@ export function fakeGoogle(options: FakeGoogleOptions = {}) {
           ? Object.fromEntries(new URLSearchParams(rawBody))
           : null;
     calls.push({ method, url, body });
+    if (!(init?.signal instanceof AbortSignal))
+      throw new Error('fake google: a call without a time limit (AbortSignal.timeout)');
     const u = new URL(url);
 
     if (u.href.startsWith('https://oauth2.googleapis.com/token')) {
@@ -291,7 +297,7 @@ export function fakeGoogle(options: FakeGoogleOptions = {}) {
             ? {
                 history: page.map((h) => ({
                   id: String(h.id),
-                  messagesAdded: [{ message: h.message }],
+                  messagesAdded: h.messages.map((message) => ({ message })),
                 })),
               }
             : {}),
@@ -312,7 +318,10 @@ export function fakeGoogle(options: FakeGoogleOptions = {}) {
             ''
           ).toLowerCase();
           return (
-            m.labelIds.includes('INBOX') && from.includes(address) && m.at.getTime() / 1000 > after
+            !m.unindexed &&
+            m.labelIds.includes('INBOX') &&
+            from.includes(address) &&
+            m.at.getTime() / 1000 > after
           );
         });
         return json(200, found.length ? { messages: found.map((m) => ({ id: m.id })) } : {});
@@ -334,8 +343,9 @@ export function fakeGoogle(options: FakeGoogleOptions = {}) {
         const headers = Object.entries(mail.headers).map(([name, value]) => ({ name, value }));
         if (u.searchParams.get('format') === 'metadata') {
           const wanted = u.searchParams.getAll('metadataHeaders').map((h) => h.toLowerCase());
-          // `fields=payload/headers`: only the headers asked for, nothing else of the message.
+          // `fields=internalDate,payload/headers`: the headers asked for and when it arrived.
           return json(200, {
+            internalDate: String(mail.at.getTime()),
             payload: { headers: headers.filter((h) => wanted.includes(h.name.toLowerCase())) },
           });
         }
@@ -400,21 +410,29 @@ export function fakeGoogle(options: FakeGoogleOptions = {}) {
     events.set(id, { id, calendarId, body, meetReadsLeft: 0, deleted: false });
   };
 
-  /** A message arrives in the inbox: a new history record, as Gmail writes one. */
-  const deliver = (mail: FakeMail) => {
+  let mailCounter = 0;
+  /** Messages arrive in the inbox together: one history record with all of them (an import, a filter). */
+  const deliverTogether = (mails: FakeMail[]) => {
     historyPoint += 1;
-    const id = `in${historyPoint}`;
-    const stored = {
-      ...mail,
-      id,
-      threadId: mail.threadId ?? `tin${historyPoint}`,
-      labelIds: mail.labelIds ?? ['INBOX', 'UNREAD'],
-      at: mail.at ?? new Date(),
-    };
-    inbox.push(stored);
-    history.push({ id: historyPoint, message: { id, threadId: stored.threadId } });
+    const stored = mails.map((mail): StoredMail => {
+      mailCounter += 1;
+      return {
+        ...mail,
+        id: `in${historyPoint}-${mailCounter}`,
+        threadId: mail.threadId ?? `tin${historyPoint}-${mailCounter}`,
+        labelIds: mail.labelIds ?? ['INBOX', 'UNREAD'],
+        at: mail.at ?? new Date(),
+      };
+    });
+    inbox.push(...stored);
+    history.push({
+      id: historyPoint,
+      messages: stored.map((m) => ({ id: m.id, threadId: m.threadId })),
+    });
     return stored;
   };
+  /** A message arrives in the inbox: a new history record, as Gmail writes one. */
+  const deliver = (mail: FakeMail) => deliverTogether([mail])[0]!;
 
   return {
     transport,
@@ -422,6 +440,12 @@ export function fakeGoogle(options: FakeGoogleOptions = {}) {
     events,
     seed,
     deliver,
+    deliverTogether,
+    /** Gmail's search catches up with a message delivered `unindexed`. */
+    index(id: string) {
+      const mail = inbox.find((m) => m.id === id);
+      if (mail) mail.unindexed = false;
+    },
     /** Gmail forgets the history up to now (a point older than this answers 404). */
     expireHistory() {
       historyPoint += 1;

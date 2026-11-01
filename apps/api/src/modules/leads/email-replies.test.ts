@@ -12,12 +12,13 @@ import {
 } from '@wings/shared';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
 import {
   contactOptOuts,
   crmEmailInbound,
+  employees,
   crmEmailOutbox,
   crmNotifications,
   googleWorkspaceConnections,
@@ -33,7 +34,9 @@ import { googleWorkspaceDepsOf } from '../google-workspace/service.js';
 import {
   MAX_CALLS_PER_MAILBOX,
   mailboxesToRead,
+  readAllMailboxesLocked,
   readMailbox,
+  SEARCH_SETTLE_MS,
   type RepliesDeps,
 } from './email-replies.js';
 import { listLeadFiles } from './files.js';
@@ -45,7 +48,8 @@ let dir: string;
 let app: FastifyInstance;
 let deps: RepliesDeps;
 const SELLER = 'daniele@wingscompany.com.br';
-const google = fakeGoogle({
+// Read on each call, so a test can change the history's page size.
+const googleOptions: Parameters<typeof fakeGoogle>[0] = {
   email: SELLER,
   grantedScopes: [
     'openid',
@@ -54,7 +58,8 @@ const google = fakeGoogle({
     'https://www.googleapis.com/auth/gmail.send',
     GMAIL_READ_SCOPE,
   ],
-});
+};
+const google = fakeGoogle(googleOptions);
 
 /**
  * The leads' replies read from the seller's Gmail (t083), against a simulated Google: what comes in
@@ -101,6 +106,10 @@ afterAll(async () => {
 });
 
 beforeEach(() => google.reset());
+afterEach(() => {
+  googleOptions.historyPageSize = undefined;
+  vi.restoreAllMocks();
+});
 
 type Session = { id: string; cookies: Record<string, string> };
 
@@ -124,13 +133,17 @@ async function connectedSeller(): Promise<Session> {
   return session;
 }
 
+const connectionOf = async (seller: { id: string }) =>
+  (
+    await db
+      .select()
+      .from(googleWorkspaceConnections)
+      .where(eq(googleWorkspaceConnections.employeeId, seller.id))
+  )[0]!;
+
 /** One pass over this seller's mailbox (every seller here shares the simulated one). */
-async function readFor(seller: { id: string }) {
-  const [connection] = await db
-    .select()
-    .from(googleWorkspaceConnections)
-    .where(eq(googleWorkspaceConnections.employeeId, seller.id));
-  return readMailbox(deps, connection!);
+async function readFor(seller: { id: string }, with_: Partial<RepliesDeps['google']> = {}) {
+  return readMailbox({ ...deps, google: { ...deps.google, ...with_ } }, await connectionOf(seller));
 }
 
 let seq = 0;
@@ -301,7 +314,7 @@ describe('reading the leads’ replies', () => {
     const params = new URL(peek.url).searchParams;
     expect(params.get('format')).toBe('metadata');
     expect(params.getAll('metadataHeaders')).toEqual(['In-Reply-To', 'References']);
-    expect(params.get('fields')).toBe('payload/headers');
+    expect(params.get('fields')).toBe('internalDate,payload/headers');
   });
 
   it('keeps a message read twice only once', async () => {
@@ -463,5 +476,264 @@ describe('reading the leads’ replies', () => {
     expect(row).toMatchObject({ gmailReadError: 'history_expired' });
     expect(row!.gmailHistoryId).not.toBeNull();
     expect((await readFor(seller)).error).toBeUndefined();
+  });
+});
+
+/** Advisory locks held in this test's own database (other test files share the server). */
+const ADVISORY_LOCKS = `select count(*)::int as n from pg_locks where locktype = 'advisory' and granted
+  and database = (select oid from pg_database where datname = current_database())`;
+const gmailCalls = () => google.calls.filter((c) => c.url.includes('/gmail/v1/'));
+const searchCalls = () =>
+  google.calls.filter((c) => c.url.includes('/gmail/v1/users/me/messages?'));
+
+/** The review of PR #68 and the second opinion (aj02): what a pass must stand up to. */
+describe('a pass that never stalls, never jumps a message and never pays twice', () => {
+  it('gives up on a stalled Gmail call, and the point stays where it was', async () => {
+    const seller = await connectedSeller();
+    const before = await connectionOf(seller);
+    const timeout = AbortSignal.timeout.bind(AbortSignal);
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation(() => timeout(50));
+    // Gmail's history never answers: only the time limit ends the call.
+    const stalled: typeof fetch = (input, init) =>
+      String(input).includes('/gmail/v1/users/me/history')
+        ? new Promise((_, reject) =>
+            init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason)),
+          )
+        : google.transport(input, init);
+    const started = Date.now();
+    expect(await readFor(seller, { transport: stalled })).toMatchObject({ error: 'unreachable' });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(await connectionOf(seller)).toMatchObject({
+      gmailHistoryId: before.gmailHistoryId,
+      gmailReadError: 'gmail_unreachable',
+    });
+  });
+
+  it('holds no transaction open while Gmail is called, keeps others out, and lets the lock go', async () => {
+    await connectedSeller();
+    const seen: { idle: number; locks: number; other: unknown }[] = [];
+    let once = false;
+    const watched: typeof fetch = async (input, init) => {
+      if (!once && String(input).includes('/gmail/v1/users/me/history')) {
+        once = true;
+        const idle = await db.$client.query<{ n: number }>(
+          `select count(*)::int as n from pg_stat_activity
+           where datname = current_database() and state like 'idle in transaction%'`,
+        );
+        const locks = await db.$client.query<{ n: number }>(ADVISORY_LOCKS);
+        seen.push({
+          idle: idle.rows[0]!.n,
+          locks: locks.rows[0]!.n,
+          other: await readAllMailboxesLocked(deps),
+        });
+      }
+      return google.transport(input, init);
+    };
+    const totals = await readAllMailboxesLocked({
+      ...deps,
+      google: { ...deps.google, transport: watched },
+    });
+    expect(totals?.mailboxes).toBeGreaterThan(0);
+    expect(seen).toEqual([{ idle: 0, locks: 1, other: null }]);
+    const after = await db.$client.query<{ n: number }>(ADVISORY_LOCKS);
+    expect(after.rows[0]!.n).toBe(0);
+  });
+
+  it('stops inside a record with more messages than the ceiling, and the next passes finish it without jumping or repeating one', async () => {
+    const seller = await connectedSeller();
+    const lead = await arrive(seller.id);
+    const old = new Date(Date.now() - 2 * SEARCH_SETTLE_MS);
+    const mails = google.deliverTogether([
+      ...Array.from({ length: 70 }, (_, n) => ({
+        headers: { From: lead.email!, Subject: `E-mail ${n}` },
+        text: 'Oi',
+      })),
+      ...Array.from({ length: 10 }, (_, n) => ({
+        headers: { From: `loja${n}@ofertas.com.br`, Subject: 'Promoção' },
+        text: 'Compre já.',
+        at: old,
+      })),
+    ]);
+    const start = (await connectionOf(seller)).gmailHistoryId;
+
+    const first = await readFor(seller);
+    expect(first.calls).toBeLessThanOrEqual(MAX_CALLS_PER_MAILBOX + 1);
+    expect(first.kept).toBeLessThan(70);
+    // The record is not done: the point stays before it, its settled messages are kept aside.
+    const midway = await connectionOf(seller);
+    expect(midway.gmailHistoryId).toBe(start);
+    expect(midway.gmailHistorySeen.length).toBeGreaterThan(0);
+
+    let kept = first.kept;
+    for (let pass = 0; pass < 5 && (await connectionOf(seller)).gmailHistoryId === start; pass++) {
+      const next = await readFor(seller);
+      expect(next.calls).toBeLessThanOrEqual(MAX_CALLS_PER_MAILBOX + 1);
+      kept += next.kept;
+    }
+    expect(kept).toBe(70);
+    expect(await keptFor(lead.id)).toHaveLength(70);
+    // Every message was looked at exactly once in all the passes.
+    for (const mail of mails)
+      expect(
+        google.calls.filter((c) => c.url.includes(`/messages/${mail.id}?`)),
+        mail.id,
+      ).toHaveLength(1);
+    const done = await connectionOf(seller);
+    expect(done.gmailHistoryId).not.toBe(start);
+    expect(done.gmailHistorySeen).toEqual([]);
+  });
+
+  it('searches by sender once a pass, however many history pages, and counts it in the ceiling', async () => {
+    const seller = await connectedSeller();
+    const deals = [];
+    for (let n = 0; n < 25; n++) deals.push(await arrive(seller.id));
+    googleOptions.historyPageSize = 2;
+    for (const lead of deals.slice(0, 6))
+      google.deliver({ headers: { From: lead.email!, Subject: 'Oi' }, text: 'Oi' });
+    google.calls.length = 0;
+    const pass = await readFor(seller);
+    expect(pass.kept).toBe(6);
+    // 25 addresses are two searches of 20, made once although the history came in 3 pages.
+    expect(searchCalls()).toHaveLength(2);
+    expect(pass.calls).toBe(gmailCalls().length);
+  });
+
+  it('looks again at a contact’s e-mail that Gmail’s search had not indexed yet', async () => {
+    const seller = await connectedSeller();
+    const lead = await arrive(seller.id);
+    const late = google.deliver({
+      headers: { From: lead.email!, Subject: 'Ainda fora da busca' },
+      text: 'Oi',
+      unindexed: true,
+    });
+    const stranger = google.deliver({
+      headers: { From: 'ofertas@loja.com.br', Subject: 'Promoção' },
+      text: 'Compre já.',
+    });
+    const start = (await connectionOf(seller)).gmailHistoryId;
+    expect(await readFor(seller)).toMatchObject({ kept: 0 });
+    // Neither is settled yet: the point waits for them.
+    expect((await connectionOf(seller)).gmailHistoryId).toBe(start);
+
+    google.index(late.id);
+    expect(await readFor(seller)).toMatchObject({ kept: 1 });
+    expect(await keptFor(lead.id)).toEqual([expect.objectContaining({ gmailMessageId: late.id })]);
+    // Past the contact's record now, and still before the stranger's, which waits.
+    expect(Number((await connectionOf(seller)).gmailHistoryId)).toBe(Number(start) + 1);
+
+    // Past the search's delay, the stranger's e-mail is settled as not the deals', and never kept.
+    const later = new Date(Date.now() + SEARCH_SETTLE_MS + 60_000);
+    expect(await readFor(seller, { now: () => later })).toMatchObject({ kept: 0 });
+    const done = await connectionOf(seller);
+    expect(done.gmailHistoryId).not.toBe(start);
+    expect(done.gmailHistorySeen).toEqual([]);
+    expect(
+      await db
+        .select()
+        .from(crmEmailInbound)
+        .where(eq(crmEmailInbound.gmailMessageId, stranger.id)),
+    ).toHaveLength(0);
+  });
+
+  it('keeps the same reply read in two sellers’ mailboxes only once, and both readings go on', async () => {
+    const first = await connectedSeller();
+    const second = await connectedSeller();
+    const lead = await arrive(first.id);
+    const outbox = await sendTo(first, lead);
+    google.deliver({
+      threadId: outbox.gmailThreadId!,
+      headers: { From: lead.email!, Subject: 'Re: Proposta', 'Message-ID': '<duas-caixas@ex.com>' },
+      text: 'Respondi.',
+    });
+    expect(await readFor(first)).toMatchObject({ kept: 1 });
+    const start = (await connectionOf(second)).gmailHistoryId;
+    // The other mailbox finds it too (the same thread), and the second copy stops at the index.
+    const other = await readFor(second);
+    expect(other).toMatchObject({ kept: 0 });
+    expect(other.error).toBeUndefined();
+    expect(await keptFor(lead.id)).toHaveLength(1);
+    expect((await connectionOf(second)).gmailHistoryId).not.toBe(start);
+  });
+
+  it('refuses to answer, with nothing sent, a reply that belongs to another deal', async () => {
+    const seller = await connectedSeller();
+    const mine = await arrive(seller.id);
+    const other = await arrive(seller.id);
+    google.deliver({ headers: { From: other.email!, Subject: 'Oi' }, text: 'Oi' });
+    await readFor(seller);
+    const [foreign] = await keptFor(other.id);
+    const sentBefore = google.sentMail.length;
+    const answer = await app.inject({
+      method: 'POST',
+      url: `/leads/${mine.id}/emails`,
+      cookies: seller.cookies,
+      payload: { to: mine.email, subject: 'Re: Oi', text: 'Olá', replyToId: foreign!.id },
+    });
+    expect(answer.statusCode).toBe(404);
+    expect(answer.json()).toMatchObject({ error: 'reply_not_found' });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(google.sentMail).toHaveLength(sentBefore);
+    expect(
+      await db.select().from(crmEmailOutbox).where(eq(crmEmailOutbox.leadId, mine.id)),
+    ).toEqual([]);
+  });
+
+  it('keeps a colleague’s “reply all” in the conversation, but it is not the lead’s reply: no history, no notice', async () => {
+    const seller = await connectedSeller();
+    const lead = await arrive(seller.id);
+    const outbox = await sendTo(seller, lead);
+    // A registered colleague (with a login on another domain), and an address on the Workspace's.
+    const colleague = await createEmployee(db, {
+      role: 'vendedor_formatacao',
+      sector: 'comercial',
+    });
+    await db
+      .update(employees)
+      .set({ email: 'colega@outro-dominio.com.br' })
+      .where(eq(employees.id, colleague.id));
+    for (const from of ['Colega <colega@outro-dominio.com.br>', 'gerencia@wingscompany.com.br'])
+      google.deliver({
+        threadId: outbox.gmailThreadId!,
+        headers: { From: from, Subject: 'Re: Proposta', Cc: lead.email! },
+        text: 'Pessoal, segue o complemento.',
+      });
+    await readFor(seller);
+    const emails = await emailsOf(seller, lead.id);
+    expect(emails.received.map((r) => r.fromEmail).sort()).toEqual([
+      'colega@outro-dominio.com.br',
+      'gerencia@wingscompany.com.br',
+    ]);
+    expect(
+      await db
+        .select()
+        .from(leadEvents)
+        .where(and(eq(leadEvents.leadId, lead.id), eq(leadEvents.kind, 'lead.email_received'))),
+    ).toEqual([]);
+    expect(
+      await db
+        .select()
+        .from(crmNotifications)
+        .where(and(eq(crmNotifications.leadId, lead.id), eq(crmNotifications.kind, 'lead_email'))),
+    ).toEqual([]);
+    const popups = await app.inject({
+      method: 'GET',
+      url: '/crm/notifications/new-leads',
+      cookies: seller.cookies,
+    });
+    expect(popups.json<NewLeadPopups>().emailReplies).toEqual([]);
+
+    // The lead's own answer in the same conversation still is.
+    google.deliver({
+      threadId: outbox.gmailThreadId!,
+      headers: { From: lead.email!, Subject: 'Re: Proposta' },
+      text: 'Obrigada!',
+    });
+    await readFor(seller);
+    expect(
+      await db
+        .select()
+        .from(crmNotifications)
+        .where(and(eq(crmNotifications.leadId, lead.id), eq(crmNotifications.kind, 'lead_email'))),
+    ).toHaveLength(1);
   });
 });
