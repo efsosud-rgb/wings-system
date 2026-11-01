@@ -435,9 +435,6 @@ export const igPrivateReplies = pgTable(
       'ig_private_replies_status_check',
       sql`${table.status} in ('sending', 'sent', 'failed', 'rate_limited', 'unknown')`,
     ),
-    check(
-      'ig_private_replies_trigger_check',
-      sql`${table.trigger} in ('clique', 'automatico')`,
-    ),
+    check('ig_private_replies_trigger_check', sql`${table.trigger} in ('clique', 'automatico')`),
   ],
 );
