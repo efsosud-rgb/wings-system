@@ -115,6 +115,18 @@ describe('the webhook (§5.1)', () => {
     await runIntake(h);
   });
 
+  it('checks the signature over the exact bytes whatever the content type says', async () => {
+    const raw = JSON.stringify(commentBody({ text: 'quanto custa?' }, h.clock.now));
+    const response = await h.app.inject({
+      method: 'POST',
+      url: '/integrations/instagram/webhook',
+      headers: { 'content-type': 'text/plain; charset=utf-8', 'x-hub-signature-256': sign(raw) },
+      payload: raw,
+    });
+    expect(response.json()).toEqual({ received: 1, queued: 1 });
+    await runIntake(h);
+  });
+
   it('off, or without the secret, answers 503 and stores nothing; a body that is not JSON 400', async () => {
     const response = await deliver(off, commentBody({ text: 'x' }, off.clock.now));
     expect(response.statusCode).toBe(503);

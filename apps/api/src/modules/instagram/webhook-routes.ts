@@ -27,11 +27,12 @@ export const instagramWebhookRoutes: FastifyPluginAsync = async (app) => {
   const on = env.INSTAGRAM_WEBHOOK_ENABLED === 'true';
 
   // Raw bodies, scoped to this plugin: Meta's signature is over the exact bytes.
-  app.addContentTypeParser(
-    ['application/json', '*'],
-    { parseAs: 'buffer', bodyLimit: 1024 * 1024 },
-    (_request, body, done) => done(null, body),
-  );
+  for (const type of [['application/json', 'text/plain', 'application/x-www-form-urlencoded'], '*'])
+    app.addContentTypeParser(
+      type,
+      { parseAs: 'buffer', bodyLimit: 1024 * 1024 },
+      (_request, body, done) => done(null, body),
+    );
 
   const off = (reply: FastifyReply) =>
     reply.status(503).send({
