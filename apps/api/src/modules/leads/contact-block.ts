@@ -31,6 +31,8 @@ export interface ContactKeys {
   phone?: string | null;
   email?: string | null;
   instagramUser?: string | null;
+  /** The Instagram-scoped id of the webhook (parte 1): the @ may change hands, this does not. */
+  instagramIgsid?: string | null;
   placeId?: string | null;
   cnpj?: string | null;
 }
@@ -76,6 +78,7 @@ function normalisedKeys(keys: ContactKeys, lead: LeadKeys | null) {
     phone: of('phone', keys.phone, lead?.phone),
     email: of('email', keys.email, lead?.email),
     instagram_user: of('instagram_user', keys.instagramUser, lead?.instagram),
+    instagram_igsid: of('instagram_igsid', keys.instagramIgsid),
     place_id: of('place_id', keys.placeId, lead?.googlePlaceId),
     cnpj: of('cnpj', keys.cnpj, lead?.companyCnpj),
   } satisfies Record<ContactKeyKind, string[]>;
@@ -324,6 +327,7 @@ export async function optOutsAmong(
     instagram_user: (given.instagramUsers ?? [])
       .map((u) => normalizeContactKey('instagram_user', u))
       .filter((u) => u !== null),
+    instagram_igsid: [],
     place_id: given.placeIds,
     cnpj: [],
   };

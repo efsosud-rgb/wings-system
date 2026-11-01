@@ -271,7 +271,7 @@ export const contactOptOuts = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     /** A ContactChannel: all | whatsapp | phone | email | instagram. */
     channel: text('channel').notNull(),
-    /** A ContactKeyKind: lead | phone | email | instagram_user | place_id | cnpj. */
+    /** A ContactKeyKind: lead | phone | email | instagram_user | instagram_igsid | place_id | cnpj. */
     keyKind: text('key_kind').notNull(),
     keyValue: text('key_value').notNull(),
     reason: text('reason'),
@@ -294,7 +294,7 @@ export const contactOptOuts = pgTable(
     ),
     check(
       'contact_opt_outs_key_kind_check',
-      sql`${table.keyKind} in ('lead', 'phone', 'email', 'instagram_user', 'place_id', 'cnpj')`,
+      sql`${table.keyKind} in ('lead', 'phone', 'email', 'instagram_user', 'instagram_igsid', 'place_id', 'cnpj')`,
     ),
     check(
       'contact_opt_outs_origin_check',

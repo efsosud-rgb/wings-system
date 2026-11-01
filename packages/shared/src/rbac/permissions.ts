@@ -36,6 +36,8 @@ export const PERMISSIONS = {
     'Prospecção Instagram: colar comentários de posts de concorrentes, ver e trabalhar as listas (a abordagem é à mão, pelo Direct)',
   'prospect_ai.configure':
     'Editar os limites, limiares, prazos e textos da Prospecção Instagram (registrado em auditoria)',
+  'prospect_ai.instagram_auto_reply':
+    'Ligar a resposta privada sozinha do Instagram e trocar o texto dela (registrado em auditoria)',
   'prospecting.export':
     'Exportar em planilha os prospects (só os dados da Wings, nunca os do Google; registrado em auditoria)',
   'sofia.manage': 'Ligar e desligar a Sofia e editar as perguntas e mensagens dela',
@@ -184,6 +186,8 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'prospecting.quota': 'all',
     'prospecting.export': 'all',
     'prospect_ai.configure': 'all',
+    // The private reply going alone, and its text, are Eric's (docs/prospeccao/instagram.md §9).
+    'prospect_ai.instagram_auto_reply': 'all',
     'meetings.approve_send': 'all',
     ...CRM_FULL_SCREENS,
     ...DRIVE_ALL,

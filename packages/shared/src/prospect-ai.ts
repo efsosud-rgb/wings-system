@@ -4,6 +4,12 @@ import {
   type PasteDiscardKind,
   type PasteIgnoredKind,
 } from './instagram-paste.js';
+import {
+  DEFAULT_PRIVATE_REPLY_SETTINGS,
+  privateReplySettingsSchema,
+  type IgPrivateReplyBlock,
+  type IgPrivateReplyStatus,
+} from './instagram-intake.js';
 import { LEAD_PIPELINES, type LeadPipeline } from './leads.js';
 
 /**
@@ -181,6 +187,8 @@ export const instagramProspectingSettingsSchema = z.object({
       recentPosts: z.number().int().min(3).max(25),
     })
     .default({ cacheDias: 7, porDia: 500, recentPosts: 12 }),
+  /** The private reply of parte 1 (§5.2 to §5.4); came later, so an older row reads the defaults. */
+  privateReply: privateReplySettingsSchema.default(DEFAULT_PRIVATE_REPLY_SETTINGS),
   messages: z.object({
     primeiraAbordagemDirect: z
       .string()
@@ -202,6 +210,7 @@ export const DEFAULT_INSTAGRAM_PROSPECTING_SETTINGS: InstagramProspectingSetting
   thresholds: { listar: 70, revisar: 40 },
   retention: { instagramSemLeadDias: 30 },
   discovery: { cacheDias: 7, porDia: 500, recentPosts: 12 },
+  privateReply: DEFAULT_PRIVATE_REPLY_SETTINGS,
   messages: { primeiraAbordagemDirect: DEFAULT_FIRST_DIRECT_MESSAGE, linkPolitica: null },
 };
 
