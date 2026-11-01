@@ -15,6 +15,8 @@ import { createCrmMailTransport } from './modules/leads/crm-mail.js';
 import { sendPendingNoticeMails } from './modules/leads/crm-notice-mail.js';
 import { startMetaLeadgenIntake } from './modules/leads/meta-intake.js';
 import { startInstagramHousekeeping } from './modules/prospect-ai/housekeeping.js';
+import { startInstagramIntake } from './modules/instagram/intake.js';
+import { instagramMessagingOf } from './modules/instagram/graph.js';
 import { startProspectingRetentionScheduler } from './modules/prospecting/retention.js';
 import { startSofia } from './modules/sofia/engine.js';
 import { whatsappConfigOf } from './modules/whatsapp/graph.js';
@@ -237,6 +239,24 @@ async function main() {
   {
     const stop = startInstagramHousekeeping({ db, log: (facts) => app.log.info(facts) });
     app.addHook('onClose', async () => stop());
+  }
+
+  // Prospecção Instagram, parte 1 (docs/prospeccao/instagram.md §5): the webhook's events become
+  // opportunities every minute; the private reply leaves only by the rules there. Off with the webhook.
+  if (env.INSTAGRAM_WEBHOOK_ENABLED === 'true' && env.INSTAGRAM_APP_SECRET) {
+    const intake = startInstagramIntake({
+      db,
+      fetch,
+      accountId: env.INSTAGRAM_ACCOUNT_ID ?? null,
+      messagingToken: env.INSTAGRAM_MESSAGING_TOKEN ?? null,
+      replyConfig: instagramMessagingOf(env),
+      llm: env.OPENROUTER_API_KEY ? createOpenRouterLlm({ apiKey: env.OPENROUTER_API_KEY }) : null,
+      aiEnabled: env.PROSPECT_AI_CLASSIFIER_ENABLED && Boolean(env.OPENROUTER_API_KEY),
+      dailyUsd: env.PROSPECT_AI_DAILY_USD,
+      log: (facts) => app.log.info(facts),
+    });
+    app.wings.instagramKick = intake.kick;
+    app.addHook('onClose', async () => intake.stop());
   }
 
   // YouTube channel (public data, docs/integracoes/youtube-data-api.md): one

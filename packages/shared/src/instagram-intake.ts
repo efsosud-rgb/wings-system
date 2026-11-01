@@ -6,7 +6,14 @@ import { z } from 'zod';
  * webhook is the API's (`modules/instagram/payload.ts`).
  */
 
-export const IG_WEBHOOK_KINDS = ['comment', 'mention', 'message', 'echo', 'referral', 'other'] as const;
+export const IG_WEBHOOK_KINDS = [
+  'comment',
+  'mention',
+  'message',
+  'echo',
+  'referral',
+  'other',
+] as const;
 export type IgWebhookKind = (typeof IG_WEBHOOK_KINDS)[number];
 export const IG_WEBHOOK_STATUSES = ['pending', 'done', 'ignored', 'failed'] as const;
 

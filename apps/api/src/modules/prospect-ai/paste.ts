@@ -68,7 +68,7 @@ const DAY_MS = 86_400_000;
 const BUYING_OR_DOUBT: BuySignal[] = ['quer_comprar', 'pediu_preco', 'duvida'];
 
 /** The @ a stored Instagram field holds (`@x`, `x` or the profile link), in SQL. */
-const igKey = (column: SQL | AnyPgColumn) =>
+export const igKey = (column: SQL | AnyPgColumn) =>
   sql<string>`lower(split_part(split_part(regexp_replace(regexp_replace(trim(coalesce(${column}, '')), '^(https?://)?(www\\.)?instagr(am\\.com|\\.am)/', '', 'i'), '^@+', ''), '/', 1), '?', 1))`;
 
 interface Read {

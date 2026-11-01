@@ -17,6 +17,7 @@ import {
   type InstagramPasteBatch,
   type InstagramProspect,
   type InstagramProspectingSettings,
+  type IgPrivateReplyStatus,
   type ProspectOpportunityState,
   type ProspectReviewReason,
 } from '@wings/shared';
@@ -27,6 +28,7 @@ import { WINGS_TENANT_ID } from '../../db/schema/ads.js';
 import {
   employees,
   igPasteBatches,
+  igPrivateReplies,
   leadEvents,
   prospectEvidence,
   prospectOpportunities,
@@ -69,13 +71,26 @@ const prospectQuery = (db: Database) =>
       evidence: opening,
       postOwner: igPasteBatches.postOwnerUsername,
       ownerName: owner.fullName,
+      reply: {
+        status: igPrivateReplies.status,
+        sentAt: igPrivateReplies.sentAt,
+        trigger: igPrivateReplies.trigger,
+      },
       comments: sql<number>`(select count(*)::int from ${prospectEvidence} where ${prospectEvidence.opportunityId} = ${prospectOpportunities.id})`,
       purgeAt: sql<Date | null>`(select max(${prospectEvidence.retentionUntil}) from ${prospectEvidence} where ${prospectEvidence.opportunityId} = ${prospectOpportunities.id})`,
     })
     .from(prospectOpportunities)
     .innerJoin(opening, eq(opening.id, prospectOpportunities.evidenceId))
     .leftJoin(igPasteBatches, eq(igPasteBatches.id, prospectOpportunities.pasteBatchId))
-    .leftJoin(owner, eq(owner.id, prospectOpportunities.ownerEmployeeId));
+    .leftJoin(owner, eq(owner.id, prospectOpportunities.ownerEmployeeId))
+    // Parte 1: the one private reply of the opening comment (unique by comment).
+    .leftJoin(
+      igPrivateReplies,
+      and(
+        eq(igPrivateReplies.opportunityId, prospectOpportunities.id),
+        eq(igPrivateReplies.commentId, opening.externalId),
+      ),
+    );
 
 type Found = Awaited<ReturnType<ReturnType<typeof prospectQuery>['where']>>[number];
 
@@ -107,20 +122,37 @@ function toView(found: Found, actor: Actor): InstagramProspect {
     moreComments: Math.max(0, Number(found.comments) - 1),
     purgeAt: row.leadId || !found.purgeAt ? null : new Date(found.purgeAt).toISOString(),
     createdAt: row.createdAt.toISOString(),
+    part: row.source === 'instagram_colagem' ? 2 : 1,
+    respondBy: row.respondBy?.toISOString() ?? null,
+    onAd: evidence.adId !== null,
+    privateReply: found.reply?.status
+      ? {
+          status: found.reply.status as IgPrivateReplyStatus,
+          sentAt: found.reply.sentAt?.toISOString() ?? null,
+          alone: found.reply.trigger === 'automatico',
+        }
+      : null,
   };
 }
 
+/** Parte 2 (pasted) and parte 1 (comments on Wings' posts and ads): the same actions. */
+const INSTAGRAM_SOURCES = ['instagram_colagem', 'instagram_comment', 'instagram_ad_comment'];
 const ofTenant = and(
   eq(prospectOpportunities.tenantId, WINGS_TENANT_ID),
-  eq(prospectOpportunities.source, 'instagram_colagem'),
+  inArray(prospectOpportunities.source, INSTAGRAM_SOURCES),
 )!;
 
 export async function listInstagramProspects(
   db: Database,
   actor: Actor,
-  filter: { batch?: string; state?: ProspectOpportunityState; owner?: string },
+  filter: { batch?: string; state?: ProspectOpportunityState; owner?: string; parte?: '1' | '2' },
 ): Promise<InstagramProspect[]> {
-  const conditions: SQL[] = [ofTenant];
+  const conditions: SQL[] = [
+    ofTenant,
+    filter.parte === '1'
+      ? inArray(prospectOpportunities.source, ['instagram_comment', 'instagram_ad_comment'])
+      : eq(prospectOpportunities.source, 'instagram_colagem'),
+  ];
   const ownerId = isInstagramManager(actor) ? filter.owner : actor.employeeId;
   if (ownerId) conditions.push(eq(prospectOpportunities.ownerEmployeeId, ownerId));
   if (filter.batch) conditions.push(eq(prospectOpportunities.pasteBatchId, filter.batch));
@@ -223,6 +255,7 @@ export async function instagramOptOut(
   const username = found.evidence.authorUsername;
   const block = await contactBlock(db, 'instagram', {
     instagramUser: username,
+    instagramIgsid: found.evidence.authorIgsid,
     leadId: found.row.leadId,
   });
   if (!block.blocked) return null;
@@ -371,6 +404,7 @@ export async function doNotContact(
   if (!username) return CHANGED;
   await recordContactOptOut(db, {
     instagramUser: username,
+    instagramIgsid: found.evidence.authorIgsid,
     channels: ['instagram'],
     origin: 'prospeccao',
     reason: reason || 'Pediu para não ser contatado (Prospecção Instagram).',
@@ -451,6 +485,7 @@ export async function createLead(
   if (!pipeline) return refusal(400, 'invalid', 'Escolha o funil do lead.');
   const block = await contactBlock(db, ['instagram', 'phone', 'email', 'whatsapp'], {
     instagramUser: evidence.authorUsername,
+    instagramIgsid: evidence.authorIgsid,
     phone: input.phone || null,
     email: input.email || null,
   });
@@ -471,16 +506,24 @@ export async function createLead(
   if (!claimed) return CHANGED;
   const ownerId = row.ownerEmployeeId ?? actor.employeeId;
   const optIn = input.whatsappOptIn;
+  // Parte 1: a comment on Wings' post or ad (§5.6: an ad's lead is born `instagram_ad`).
+  const partOne = row.source !== 'instagram_colagem';
   const consent: ProspectConsent = {
     legalBasis: optIn ? 'consent' : 'legitimate_interest',
     consentedAt: optIn ? now : null,
     consentSource: 'prospeccao',
-    consentText: `${optIn ? 'Pediu' : 'Não pediu'} contato por WhatsApp na conversa pelo Direct (${dayOf(now)}). Comentário público em post do Instagram${found.postOwner ? ` de @${found.postOwner}` : ''}, colado em ${dayOf(row.createdAt)}.`,
+    consentText: `${optIn ? 'Pediu' : 'Não pediu'} contato por WhatsApp na conversa pelo Direct (${dayOf(now)}). ${
+      partOne
+        ? `Comentário num ${evidence.adId ? 'anúncio' : 'post'} da Wings no Instagram, recebido em ${dayOf(row.createdAt)}.`
+        : `Comentário público em post do Instagram${found.postOwner ? ` de @${found.postOwner}` : ''}, colado em ${dayOf(row.createdAt)}.`
+    }`,
   };
   try {
     const result = await upsertLead(db, {
-      source: 'instagram_colagem',
-      externalId: row.id,
+      source: !partOne ? 'instagram_colagem' : evidence.adId ? 'instagram_ad' : 'instagram_comment',
+      externalId: partOne ? evidence.externalId : row.id,
+      attribution:
+        partOne && evidence.adId ? { adPlatform: 'meta', adExternalId: evidence.adId } : null,
       channel: 'instagram',
       name: input.contactName,
       phone: input.phone || null,
@@ -567,6 +610,43 @@ export async function attachToLead(
     action: 'prospect_ai.instagram_comment_attached',
     entity: 'lead',
     entityId: lead.id,
+  });
+  return { ok: true };
+}
+
+/**
+ * "A pessoa pediu contato por WhatsApp" on the lead a comment of parte 1 became from the Direct
+ * (§5.5): the machine never infers consent; only who read the conversation marks it. The WhatsApp
+ * send still asks the one "não me contate" register first.
+ */
+export async function markWhatsAppAsked(
+  db: Database,
+  actor: Actor,
+  found: InstagramFound,
+  now: Date,
+): Promise<{ ok: true } | Refusal> {
+  if (found.row.source === 'instagram_colagem' || !found.row.leadId)
+    return refusal(409, 'sem_lead', 'Este prospect ainda não virou lead.');
+  const lead = await leadInScope(db, actor, found.row.leadId, 'leads.write');
+  if (!lead) return refusal(404, 'not_found', 'Lead não encontrado.');
+  await mergeProspectConsent(
+    db,
+    actor,
+    lead,
+    {
+      legalBasis: 'consent',
+      consentedAt: now,
+      consentSource: 'prospeccao',
+      consentText: `Pediu contato por WhatsApp na conversa pelo Direct do Instagram (${dayOf(now)}), marcado por quem leu a conversa.`,
+    },
+    true,
+  );
+  await writeAudit(db, {
+    actorEmployeeId: actor.employeeId,
+    action: 'prospect_ai.instagram_whatsapp_asked',
+    entity: 'prospect_opportunity',
+    entityId: found.row.id,
+    metadata: { leadId: lead.id },
   });
   return { ok: true };
 }
