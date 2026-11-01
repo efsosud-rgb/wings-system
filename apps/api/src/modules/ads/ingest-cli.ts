@@ -1,4 +1,4 @@
-import { createDb } from '../../db/client.js';
+import { createDb, type Database } from '../../db/client.js';
 import { loadDotEnv } from '../../db/load-env.js';
 import { loadEnv } from '../../env.js';
 import { getPeriodState } from './budget-guard.js';
@@ -7,6 +7,7 @@ import { createAlertNotifier } from './notifiers/factory.js';
 import { activeAdAccounts, archiveAdAccount } from './metrics.js';
 import { formatBrl } from './platform/money.js';
 import { createPlatformClient } from './platform/factory.js';
+import { CHANGE_REQUEST_MAX_AGE_HOURS, expireStaleChanges } from './expiry.js';
 import { enforceReconciliationFreshness, periodMonthOf } from './reconcile.js';
 import { seedAdAccount } from './seed-account.js';
 import { WordPressClient } from '../../lib/wordpress.js';
@@ -58,7 +59,8 @@ import {
  * stays a step of the full cycle only, non-fatal there. Both cycles end with
  * the dead-man check (`enforceReconciliationFreshness`): the fast cycle keeps
  * accounts fresh on its own now, but the full cycle still checks too, in case
- * the fast task itself is what stopped running.
+ * the fast task itself is what stopped running. Then old change requests
+ * expire (`expireStaleChanges`), their reservations given back.
  */
 
 /**
@@ -76,6 +78,16 @@ const LOCK_KEYS: Record<Exclude<IngestKind, 'youtube'>, number> = {
  * the deadline can close its row as failed instead of leaving it "running".
  */
 let current: { runId: string; accounts: IngestRunAccount[] } | null = null;
+
+/** Old requests expire at the end of every cycle; counts and ids only in the log. */
+async function reportExpired(db: Database, now: Date): Promise<void> {
+  const expired = await expireStaleChanges(db, { now });
+  for (const entry of expired) {
+    console.warn(
+      `pedido ${entry.changeRequestId} expirou (${entry.why === 'age' ? `mais de ${CHANGE_REQUEST_MAX_AGE_HOURS} h` : 'mês virou'}); reserva devolvida`,
+    );
+  }
+}
 
 function arg(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
@@ -238,6 +250,7 @@ async function main() {
             `— gasto real desconhecido. Libere com ops-cli release-kill-switch depois de verificar.`,
         );
       }
+      await reportExpired(db, now);
 
       // Leads das Campanhas, after the statuses are fresh: counts only in the log. Without the RD
       // token only the Wings leads are read (RD is left alone).
@@ -468,6 +481,7 @@ async function main() {
           `— gasto real desconhecido. Libere com ops-cli release-kill-switch depois de verificar.`,
       );
     }
+    await reportExpired(db, new Date());
 
     if (failures > 0) {
       // Every account had its turn; now fail visibly so the scheduler shows it.

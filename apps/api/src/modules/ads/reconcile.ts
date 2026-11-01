@@ -1,4 +1,3 @@
-import { periodOverdeliveryFactor } from '@wings/shared';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
@@ -12,9 +11,8 @@ import {
 import {
   applyPlatformLimit,
   applyReportedSpend,
-  campaignExposure,
   engageKillSwitch,
-  remainingDays,
+  mirroredExposureCents,
 } from './budget-guard.js';
 import {
   effectiveHeadroomCents,
@@ -427,33 +425,9 @@ export async function reconcileAccount(
 
   // Re-derive commitment from what is really running on the platform. If
   // someone changed budgets directly in Ads Manager, this is where we find out.
-  const daysLeft = remainingDays(now, account.timezone);
-  const allAdSets = await db.query.adSets.findMany();
-  const adSetsByCampaignId = new Map<string, typeof allAdSets>();
-  for (const adSet of allAdSets) {
-    const list = adSetsByCampaignId.get(adSet.campaignId) ?? [];
-    list.push(adSet);
-    adSetsByCampaignId.set(adSet.campaignId, list);
-  }
-
   // Exposure follows the budget, whether it sits on the campaign (CBO) or on
   // its ad sets (ABO).
-  const desiredCommitted = campaigns.reduce(
-    (total, campaign) =>
-      total +
-      campaignExposure(
-        {
-          campaignStatus: campaign.status,
-          campaignDailyBudgetCents: campaign.dailyBudgetCents,
-          adSets: adSetsByCampaignId.get(campaign.id) ?? [],
-        },
-        daysLeft,
-        // The period factor: on Google the rest of the month costs the budget
-        // itself (1.0x); its 2.0x is a promise about a single day.
-        periodOverdeliveryFactor(account.platform),
-      ),
-    0,
-  );
+  const desiredCommitted = await mirroredExposureCents(db, account, now);
 
   const internalAllowed = Math.min(period.usableCents, Math.max(0, period.capCents - spentCents));
   // Three ceilings, smallest wins: usable slice, hard cap, and what the
