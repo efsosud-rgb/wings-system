@@ -6,25 +6,26 @@ Construída em 01/11/2026 (tarefa ig04) a partir da [especificação](instagram.
 
 1. **Webhook** (`POST /integrations/instagram/webhook`): a Meta avisa cada comentário num post ou anúncio da Wings e cada mensagem do Direct. A API confere a assinatura (`X-Hub-Signature-256`, HMAC do corpo bruto com a chave do app), grava o evento em `ig_webhook_events` e responde na hora. Nada é lido da Meta nem vai à IA dentro da requisição.
 2. **Laço de 60 s** (`modules/instagram/intake.ts`), para cada comentário:
+   - de outra conta que não a da Wings (`entry.id` diferente de `INSTAGRAM_ACCOUNT_ID`; sem essa variável, nenhum evento é lido): ignorado, corpo esvaziado;
    - da própria Wings: ignorado;
-   - de quem está em "não contatar" (pelo @ ou pelo IGSID) ou é cliente: nada é guardado;
-   - de quem já é lead (pelo IGSID ligado ao lead): o comentário mascarado entra na linha do tempo do lead e o dono recebe o aviso;
+   - de quem está em "não contatar" (pelo @ ou pelo IGSID) ou é cliente: nada é guardado (nem o corpo bruto do evento, esvaziado na hora);
+   - de quem já é lead (pelo IGSID ligado ao lead, pelo Direct ou pelo clique "Criar lead"): o comentário mascarado entra na linha do tempo do lead e o dono recebe o aviso;
    - de quem já tem oportunidade aberta: o comentário entra nela;
-   - senão, regras fixas e IA (a mesma da Fase A, um comentário por chamada, método `ia`): "quer comprar" ou "pediu preço" com confiança ≥ 70 → oportunidade **Nova**; 40 a 69, "dúvida" ou sem classificação → **Revisar**; elogio, reclamação, spam ou menos de 40 → **nada é criado**. Prazo: 7 dias do comentário.
+   - senão, regras fixas e IA (a mesma da Fase A, um comentário por chamada, método `ia`): "quer comprar" ou "pediu preço" com confiança ≥ 70 → oportunidade **Nova**; 40 a 69, "dúvida" ou sem classificação → **Revisar**; elogio, reclamação, spam ou menos de 40 → **nada é criado** (o corpo bruto é esvaziado na hora). Prazo: 7 dias do comentário.
 3. **Resposta privada** (`modules/instagram/private-reply.ts`), conforme `privateReply.modo` em Ajustes:
    - `desligado` (padrão): só a oportunidade, nenhuma resposta;
    - `clique`: a dona da oportunidade ou a gerência clica **"Enviar resposta privada"** (com confirmação) num prospect em "Nova";
    - `automatico`: sai sozinha quando "quer comprar" ou "pediu preço" com confiança ≥ `confiancaAutomatica` (85); abaixo disso continua no clique.
    - Portões, nesta ordem, e o primeiro que falha encerra sem gravar nada e sem chamar a Meta: chave `INSTAGRAM_AUTO_REPLY_ENABLED` com token e conta, modo diferente de `desligado`, link da política em Ajustes, menos de 7 dias do comentário (com 1 hora de margem), "não me contate" (IGSID, @ e lead), uma resposta por pessoa a cada 7 dias, 600 por hora. Os dois limites são contados e a linha gravada sob a mesma trava; a linha é única por comentário, então o segundo clique não chama a Meta.
-   - Uma chamada `POST /<IG_ID>/messages` com `recipient.comment_id`. Tempo esgotado, 5xx ou resposta sem `message_id` = `unknown`, **nunca reenviado** ("Envio não confirmado; confira no Instagram"). Só o erro certo de limite da Meta (a mensagem não foi) volta a tentar, dentro dos 7 dias.
+   - Uma chamada `POST /<IG_ID>/messages` com `recipient.comment_id`. Tempo esgotado, 5xx ou resposta sem `message_id` = `unknown`, **nunca reenviado** ("Envio não confirmado; confira no Instagram"). Só o erro certo de limite da Meta (a mensagem não foi) volta a tentar, dentro dos 7 dias, e cada nova tentativa repassa os portões (chave, modo, link, prazo, "não me contate") e a conta das 600 por hora sob a mesma trava.
    - O texto é o fixo de Ajustes (§5.4, com `{link_politica}` trocado; "no nosso anúncio" num anúncio), nunca escrito pela IA. Guarda-se só o hash do texto enviado.
 4. **A pessoa respondeu no Direct** (webhook `messages`):
    - o prazo da oportunidade vira `min(prazo, última mensagem + 24 h)`; vencida, volta a "Revisar" com o prazo novo;
    - "PARAR" (e sair, pare, stop, cancelar, descadastrar) grava o "não me contate" (canal Instagram, pelo IGSID e pelo @) e fecha as oportunidades dela;
    - telefone ou e-mail que **ela escreveu** criam o lead (`instagram_comment`, ou `instagram_ad` com o id do anúncio e, se o anúncio já foi lido, campanha e conjunto), base `pre_contract`, origem `instagram`, funil da categoria, dono da oportunidade ou o rodízio. **Sem consentimento de WhatsApp**: a trava `whatsappOptInMissing` vale para toda origem do Instagram, até a vendedora clicar "A pessoa pediu contato por WhatsApp" depois de ler a conversa;
-   - o eco (a Wings respondeu pelo app) marca a primeira resposta humana.
+   - o eco (a Wings respondeu pelo app) marca a primeira resposta humana; o eco da própria resposta privada (mesmo id da Meta, ou o mesmo texto para a mesma pessoa) não conta.
    - O sistema não manda mais nada: a conversa continua no Instagram, dentro de 24 h da última mensagem dela.
-5. **Expurgo** (a cada hora, junto com o das Fases A e B): oportunidade sem lead apagada 30 dias depois do comentário, com as evidências; `ig_people` sem lead não vista há 30 dias; o corpo bruto do webhook esvaziado em 30 dias (a chave fica, para a Meta não duplicar). Oportunidade sem resposta depois do prazo vira `prazo_vencido`.
+5. **Expurgo** (a cada hora, junto com o das Fases A e B): oportunidade sem lead apagada 30 dias depois do comentário, com as evidências; `ig_people` sem lead não vista há 30 dias (com a contagem na auditoria, mesmo sem oportunidade apagada); o corpo bruto do webhook esvaziado em 30 dias (a chave fica, para a Meta não duplicar). Oportunidade sem resposta depois do prazo vira `prazo_vencido`.
 
 ## Onde está
 
@@ -50,7 +51,7 @@ Construída em 01/11/2026 (tarefa ig04) a partir da [especificação](instagram.
 | `INSTAGRAM_MESSAGING_TOKEN`, `INSTAGRAM_ACCOUNT_ID`      | token só de Instagram (sem permissão de anúncio; nunca cai para outro token) e o id da conta da Wings              |
 | Ajustes → Instagram → Resposta privada                   | `desligado` (padrão), `clique`, `automatico`; confiança para sair sozinha (85); o texto                            |
 
-`automatico`, baixar a confiança no automático e trocar o texto: só `prospect_ai.instagram_auto_reply` (Admin Master). Desligar ou voltar ao clique: quem tem `prospect_ai.configure`.
+`automatico`, baixar a confiança no automático, trocar o texto e, com o automático ligado, trocar o link da política (que entra no texto): só `prospect_ai.instagram_auto_reply` (Admin Master). Desligar ou voltar ao clique: quem tem `prospect_ai.configure`.
 
 ## Rotas
 
