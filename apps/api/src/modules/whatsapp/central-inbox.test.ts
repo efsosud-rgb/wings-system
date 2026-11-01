@@ -146,7 +146,7 @@ describe('sending through a work number', () => {
       .where(eq(waContacts.id, chat!.contactId));
     const optedOut = await send('retomar_conversa_numero');
     expect(optedOut.statusCode).toBe(409);
-    expect(optedOut.json()).toMatchObject({ error: 'opted_out' });
+    expect(optedOut.json()).toMatchObject({ error: 'contact_blocked' });
     await db.update(waContacts).set({ optOutAt: null }).where(eq(waContacts.id, chat!.contactId));
     const official = await send('so_do_oficial');
     expect(official.statusCode).toBe(422);

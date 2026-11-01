@@ -106,3 +106,6 @@ export const contactOptOutRevokeSchema = z.object({
 export type ContactOptOutRevokeInput = z.infer<typeof contactOptOutRevokeSchema>;
 
 export const CONTACT_BLOCKED_ERROR = 'contact_blocked';
+
+/** What the conversation says when nothing may go to the person (text, file, audio, template). */
+export const CONTACT_BLOCKED_TEXT = 'Este contato pediu para não ser contatado.';

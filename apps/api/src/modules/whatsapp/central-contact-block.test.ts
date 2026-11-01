@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -17,6 +18,7 @@ import {
   db,
   deal,
   fixtures,
+  mediaUploads,
   NUMBER_TOKEN,
   numberId,
   owner,
@@ -27,14 +29,21 @@ import {
   stopCentral,
   WORK_ID,
 } from './central-fixtures.js';
+import { fakeRecording } from './voice-fixtures.js';
 
 /**
  * The one "não me contate" register (docs/crm/nao-me-contate.md, #56) on the Central's own ways
- * out: a work number's template, a template to a conversation no deal took yet, and the reply a
- * person types inside the window, which stays as it was. Setup in `central-fixtures.ts`.
+ * out: a work number's template, text, file and voice, inside its window too (Eric, 30/10), a SAIR
+ * said to the official number included, and a template to a conversation no deal took yet. Setup
+ * in `central-fixtures.ts`.
  */
 
-beforeAll(startCentral, 60_000);
+let recording: Buffer;
+
+beforeAll(async () => {
+  await startCentral();
+  recording = await fakeRecording(2);
+}, 60_000);
 afterAll(stopCentral);
 beforeEach(async () => {
   await resetCentral();
@@ -49,8 +58,49 @@ const template = (conversationId: string, cookies: Record<string, string>, name:
     payload: { name, language: 'pt_BR', params: [], companyArticle: 'a' },
   });
 
+const say = (conversationId: string) =>
+  app.inject({
+    method: 'POST',
+    url: `/whatsapp/conversations/${conversationId}/text`,
+    cookies: owner.cookies,
+    payload: { text: 'Certo, anotado.' },
+  });
+
+/** Text, file and voice on the work number's chat: 409, on the timeline, nothing to Meta. */
+async function expectRefused(chatId: string, leadId: string, origin: string) {
+  const refusals = [
+    await say(chatId),
+    await app.inject({
+      method: 'POST',
+      url: `/whatsapp/conversations/${chatId}/media`,
+      cookies: owner.cookies,
+      payload: { fileId: randomUUID(), caption: 'Proposta' },
+    }),
+    await app.inject({
+      method: 'POST',
+      url: `/whatsapp/conversations/${chatId}/voice`,
+      cookies: owner.cookies,
+      headers: { 'content-type': 'audio/webm;codecs=opus', 'idempotency-key': randomUUID() },
+      payload: recording,
+    }),
+  ];
+  expect(refusals.map((r) => [r.statusCode, r.json().error])).toEqual(
+    refusals.map(() => [409, 'contact_blocked']),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  expect(sends).toHaveLength(0);
+  expect(mediaUploads).toHaveLength(0);
+  const events = await db
+    .select()
+    .from(leadEvents)
+    .where(and(eq(leadEvents.leadId, leadId), eq(leadEvents.kind, 'lead.contact_blocked')));
+  expect(events.map((e) => e.detail).slice(-3)).toEqual(
+    ['texto', 'arquivo', 'audio_gravado'].map((path) => ({ channel: 'whatsapp', path, origin })),
+  );
+}
+
 describe('"não me contate" on what the Central starts', () => {
-  it('a work number sends no template to a deal with the register, writes why, and a typed reply still goes', async () => {
+  it('a work number sends nothing to a deal with the register: template, text, file or voice', async () => {
     await apply(fixtures.message('wamid.CB1', ago(5)));
     const chat = (await chatOfPerson())!;
     const leadId = await deal(PERSON, owner.id);
@@ -86,13 +136,33 @@ describe('"não me contate" on what the Central starts', () => {
       { channel: 'whatsapp', path: 'modelo', origin: 'crm' },
     ]);
 
-    // The person wrote first: a person answers inside the window, by the number's own token.
-    const reply = await app.inject({
-      method: 'POST',
-      url: `/whatsapp/conversations/${chat.id}/text`,
-      cookies: owner.cookies,
-      payload: { text: 'Certo, anotado.' },
+    // The person wrote first, to this number: inside its window, nothing goes either (Eric, 30/10).
+    await expectRefused(chat.id, leadId, 'crm');
+  });
+
+  it("a SAIR to the official number stops the work number's text, file and voice", async () => {
+    await apply(fixtures.message('wamid.CB2', ago(5)));
+    const chat = (await chatOfPerson())!;
+    const leadId = await deal(PERSON, owner.id);
+    await db.update(waConversations).set({ leadId }).where(eq(waConversations.id, chat.id));
+    // What intake.ts writes on a SAIR: the official number's contact and the register, by phone.
+    await db
+      .update(waContacts)
+      .set({ optOutAt: ago(2) })
+      .where(eq(waContacts.phone, PERSON));
+    await recordContactOptOut(db, {
+      phone: PERSON,
+      channels: ['whatsapp'],
+      origin: 'whatsapp_palavra',
+      reason: null,
+      createdBy: null,
     });
+    await expectRefused(chat.id, leadId, 'whatsapp_palavra');
+
+    // Without the lock, the same typed reply goes, by the number's own token.
+    await db.update(waContacts).set({ optOutAt: null }).where(eq(waContacts.phone, PERSON));
+    await db.update(contactOptOuts).set({ revokedAt: ago(1) });
+    const reply = await say(chat.id);
     expect(reply.statusCode).toBe(201);
     expect(sends).toHaveLength(1);
     expect(sends[0]).toMatchObject({
