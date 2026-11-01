@@ -1,10 +1,12 @@
 import {
+  CONTACT_BLOCKED_TEXT,
   mentionsWings,
   WA_CAPTION_MAX,
   WA_KIND_LABELS,
   WA_STATUS_LABELS,
   waTemplateFamily,
   WA_MESSAGES_PAGE,
+  WHATSAPP_OPT_IN_MISSING_TEXT,
   type BrandArticle,
   type DealWhatsApp,
   type WaMessage,
@@ -142,8 +144,7 @@ export function WhatsAppChat({
           <TemplateCompose
             key={composerKey}
             thread={thread}
-            optedOut={data.optedOut}
-            blocked={data.contactBlock.blocked ? data.contactBlock.reason : null}
+            blocked={blockedWhy(data)}
             windowOpen={data.window.open}
             numberId={data.number?.id ?? null}
             onText={() => setUseTemplate(false)}
@@ -153,7 +154,7 @@ export function WhatsAppChat({
             key={composerKey}
             thread={thread}
             leadId={data.leadId}
-            blocked={data.contactBlock.blocked ? data.contactBlock.reason : null}
+            blocked={blockedWhy(data)}
             onTemplate={() => setUseTemplate(true)}
             onTyping={onTyping}
           />
@@ -175,12 +176,25 @@ export function WhatsAppChat({
   );
 }
 
+/**
+ * Why nothing goes to the person in this conversation, or null: "não me contate" or SAIR stops the
+ * text, the file, the audio and the template, inside the 24 hours too (Eric, 30/10; the API agrees).
+ */
+function blockedWhy(data: DealWhatsApp): string | null {
+  const { blocked, reason } = data.contactBlock;
+  if (!blocked) return null;
+  // A prospect without opt-in did not ask anything: the rule says why on its own. Where the
+  // "não me contate" came from is on the deal's strip.
+  return reason === WHATSAPP_OPT_IN_MISSING_TEXT ? reason : CONTACT_BLOCKED_TEXT;
+}
+
 function WindowNotice({ data }: { data: DealWhatsApp }) {
   if (!data.configured) return null;
-  if (data.optedOut)
+  if (data.contactBlock.blocked)
     return (
       <p className="crm-wa-window is-closed">
-        A pessoa pediu para não receber mensagens. Só dá para responder quando ela escrever.
+        Nada sai por esta conversa, nem dentro das 24 h: só a gerência tira o bloqueio, na
+        negociação.
       </p>
     );
   return data.window.open && data.window.expiresAt ? (
@@ -518,7 +532,7 @@ function TextCompose({
 }: {
   thread: WhatsAppThread;
   leadId: string | null;
-  /** "Não me contate": a typed reply still goes, a recorded voice note does not (the API agrees). */
+  /** "Não me contate" or SAIR: the field, the 📎 and the 🎤 are off, with why (the API agrees). */
   blocked: string | null;
   /** Switches to the template picker (a work number's chat uses its own WABA's templates). */
   onTemplate?: () => void;
@@ -527,16 +541,16 @@ function TextCompose({
   const send = useSendWhatsAppText(thread);
   const sendFile = useSendWhatsAppFile(thread, leadId);
   const session = useSession();
-  const attachOff = attachOffOf(leadId, hasPermission(session.data, 'leads.write'));
+  const attachOff = blocked ?? attachOffOf(leadId, hasPermission(session.data, 'leads.write'));
   const voice = useVoiceRecorder();
   const sendVoice = useSendWhatsAppVoice(thread, leadId);
-  const voiceOff = !leadId
-    ? 'O áudio fica nos arquivos da negociação: esta conversa ainda não tem negociação.'
-    : attachOff
-      ? 'Para gravar áudio, é preciso poder editar a negociação: o áudio fica nos arquivos dela.'
-      : blocked
-        ? `Áudio gravado não vai: ${blocked}`
-        : null;
+  const voiceOff =
+    blocked ??
+    (!leadId
+      ? 'O áudio fica nos arquivos da negociação: esta conversa ainda não tem negociação.'
+      : attachOff
+        ? 'Para gravar áudio, é preciso poder editar a negociação: o áudio fica nos arquivos dela.'
+        : null);
   const field = useRef<HTMLTextAreaElement>(null);
   const chooser = useRef<HTMLInputElement>(null);
   const [text, setText] = useState('');
@@ -612,6 +626,7 @@ function TextCompose({
   };
 
   const submit = () => {
+    if (blocked) return;
     // A name the deal already has waits for the choice in the tray.
     if (picked) return picked.renameWhy ? undefined : sendPicked({ uploaded: picked.uploaded });
     const body = text.trim();
@@ -755,7 +770,7 @@ function TextCompose({
             }
             rows={2}
             maxLength={picked ? WA_CAPTION_MAX : 4096}
-            disabled={captionless}
+            disabled={captionless || blocked !== null}
             // What goes is what was there on the click: no edit while it goes, none lost after.
             readOnly={busy}
             value={text}
@@ -774,7 +789,11 @@ function TextCompose({
             <button
               type="submit"
               className="crm-btn is-primary"
-              disabled={busy || (picked ? picked.renameWhy !== null : text.trim().length === 0)}
+              disabled={
+                busy ||
+                blocked !== null ||
+                (picked ? picked.renameWhy !== null : text.trim().length === 0)
+              }
             >
               {picked ? 'Enviar arquivo' : 'Enviar'}
             </button>
@@ -791,7 +810,13 @@ function TextCompose({
           {voice.error}
         </p>
       )}
-      {note && <p className="crm-wa-note">{note}</p>}
+      {blocked ? (
+        <p className="crm-wa-note" role="status">
+          {blocked}
+        </p>
+      ) : (
+        note && <p className="crm-wa-note">{note}</p>
+      )}
       {failure && <p className="crm-error">{failure}</p>}
     </form>
   );
@@ -829,15 +854,13 @@ export function sendModeText(preview: WaTemplatePreview): string {
 
 function TemplateCompose({
   thread,
-  optedOut,
   blocked,
   windowOpen,
   numberId,
   onText,
 }: {
   thread: WhatsAppThread;
-  optedOut: boolean;
-  /** Why a "não me contate" stops templates here, or null. */
+  /** Why "não me contate" or SAIR stops everything here, templates included, or null. */
   blocked: string | null;
   windowOpen: boolean;
   /** A work number's chat: that number's own templates (its WABA), never the official ones. */
@@ -899,21 +922,10 @@ function TemplateCompose({
     preview.fields.every((field, i) => (field.locked ? true : (values[i] ?? '').trim() !== ''));
   const syncError = refresh.data?.syncError ?? templates.data?.syncError;
 
-  if (optedOut || blocked)
+  if (blocked)
     return (
       <div className="crm-wa-compose is-template">
-        <p className="crm-wa-off">
-          Modelos pausados:{' '}
-          {optedOut ? 'a pessoa pediu para não receber mensagens.' : `não me contate. ${blocked}`}{' '}
-          {windowOpen ? 'Responda escrevendo livre.' : 'Só dá para responder quando ela escrever.'}
-        </p>
-        {windowOpen && (
-          <div className="crm-wa-compose-actions">
-            <button type="button" className="crm-btn is-quiet is-small" onClick={onText}>
-              Escrever livre
-            </button>
-          </div>
-        )}
+        <p className="crm-wa-off">Modelos pausados. {blocked}</p>
       </div>
     );
   return (

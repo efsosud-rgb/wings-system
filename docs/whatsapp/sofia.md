@@ -53,12 +53,17 @@ Estados (`wa_conversations.attendance`): `sofia` Sofia atendendo · `waiting_sel
   palavra dela. Quem tem "não me contate" ativo e escreve de novo, **inclusive outro SAIR**, não recebe nada da
   Sofia (nem a confirmação de novo, nem texto livre): a conversa cai em "Aguardando atendente" (`nao_me_contate`)
   e o dono (ou, sem dono, gerência e diretoria) recebe aviso. Uma pessoa decide. A confirmação vai marcada
-  (`content.optOut`), e um SAIR anterior da pessoa também conta: assim ela sabe que já confirmou. Figurinha ou
-  arquivo depois do SAIR: a conversa segue encerrada, sem resposta.
-- **A equipe também não escreve primeiro:** no número oficial, enquanto a última palavra da pessoa é o SAIR
-  (`wa_contacts.opt_out_at` preenchido), texto e arquivo da tela são recusados (409 `opted_out`), mesmo dentro das
-  24 h que o próprio SAIR abriu. Quando a pessoa escreve de novo, quem atende pode responder dentro da janela;
-  modelo e pedido de ligação continuam barrados pelo "não me contate" (`docs/crm/nao-me-contate.md`).
+  (`content.optOut`), e um SAIR anterior da pessoa também conta, por qualquer chave: o telefone com ou sem o 9º
+  dígito, o telefone da negociação e as outras conversas da negociação. Da checagem do "não me contate" só sai o
+  registro que o próprio SAIR do turno gravou (pela data do registro): um pedido mais antigo, mesmo um "não quero
+  mais" de antes da marca, segue bloqueando, e a confirmação não vai de novo. Figurinha ou arquivo depois do SAIR:
+  a conversa segue encerrada, sem resposta. Um "não me contate" gravado enquanto a IA lê a mensagem para o que
+  ela ia dizer (conferido de novo antes de cada envio).
+- **A equipe também não escreve** (Eric, 30/10 e 31/10): com "não me contate" ou SAIR, nada sai para a pessoa,
+  por nenhum número (oficial ou de coexistência): texto, arquivo, áudio, modelo e pedido de ligação são recusados
+  (409 `contact_blocked`), mesmo dentro das 24 h. Quem escreve de novo depois do SAIR cai em "Aguardando
+  atendente", mas o bloqueio continua até a gerência ou a diretoria revogá-lo na negociação, com motivo
+  (`docs/crm/nao-me-contate.md`).
 - **Limites:** não informa valores, não promete nada, mensagens curtas. Fora do horário (seg–sex 9h–18h, São
   Paulo) a transferência leva o texto de fora do horário.
 

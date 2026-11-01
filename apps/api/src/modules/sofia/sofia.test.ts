@@ -629,7 +629,156 @@ describe('who answers', () => {
     expect(sends.length).toBe(before);
   });
 
-  it('after a SAIR the team cannot write either, until the person writes again (WA-12)', async () => {
+  it('who asked in words before her confirmations were marked, and sends SAIR now, hears nothing more', async () => {
+    await createEmployee(db, { role: 'gerente_comercial', sector: 'comercial' });
+    const phone = newPhone();
+    llmAnswers = [said({ intent: 'nao_contatar' })];
+    await write(phone, text('não quero mais receber mensagens de vocês'));
+    await sofiaAnswers();
+    expect(bodyOf(lastSent())).toBe(SOFIA_DEFAULT_SETTINGS.texts.optOut);
+    // As it was before PR #69: the confirmation without its mark, the register row days old.
+    await db
+      .update(waMessages)
+      .set({ content: {} })
+      .where(
+        and(
+          eq(waMessages.author, 'sofia'),
+          eq(waMessages.text, SOFIA_DEFAULT_SETTINGS.texts.optOut),
+        ),
+      );
+    await db
+      .update(contactOptOuts)
+      .set({ createdAt: new Date(Date.now() - 3 * 86_400_000) })
+      .where(eq(contactOptOuts.keyValue, phone));
+    const before = sends.length;
+    clock += 60_000;
+    await write(phone, text('SAIR'));
+    await sofiaAnswers();
+    expect(sends.length).toBe(before);
+    expect(await conversationOf(phone)).toMatchObject({
+      attendance: 'waiting_human',
+      reason: 'nao_me_contate',
+    });
+  });
+
+  it('a SAIR said before from the same phone without its 9th digit, or from another phone of the deal, counts', async () => {
+    await createEmployee(db, { role: 'gerente_comercial', sector: 'comercial' });
+    // An older contact row kept the number as Meta gave it, without the 9th digit.
+    const phone = newPhone();
+    const [old] = await db
+      .insert(waContacts)
+      .values({ phone: phone.slice(0, 4) + phone.slice(5) })
+      .returning();
+    const [oldChat] = await db
+      .insert(waConversations)
+      .values({ contactId: old!.id, attendance: 'closed', reason: 'nao_contatar' })
+      .returning();
+    await db.insert(waMessages).values({
+      conversationId: oldChat!.id,
+      contactId: old!.id,
+      direction: 'in',
+      author: 'contact',
+      kind: 'text',
+      text: 'SAIR',
+    });
+
+    // The deal's main phone said SAIR (and heard the confirmation) before the deal was made.
+    const main = newPhone();
+    await write(main, text('SAIR'));
+    await sofiaAnswers();
+    expect(bodyOf(lastSent())).toBe(SOFIA_DEFAULT_SETTINGS.texts.optOut);
+    const [lead] = await db
+      .insert(leads)
+      .values({
+        source: 'manual',
+        name: 'Negociação fictícia',
+        phone: main,
+        pipeline: 'formatacao',
+      })
+      .returning({ id: leads.id });
+    const other = newPhone();
+    const [contact] = await db
+      .insert(crmContacts)
+      .values({ name: 'Sócio fictício', phone: other })
+      .returning();
+    await db.insert(leadContacts).values({ leadId: lead!.id, contactId: contact!.id });
+
+    const before = sends.length;
+    for (const from of [phone, other]) {
+      clock += 60_000;
+      await write(from, text('SAIR'));
+      expect((await conversationOf(from)).leadId).toBe(from === other ? lead!.id : null);
+      await sofiaAnswers();
+      expect(await conversationOf(from), from).toMatchObject({
+        attendance: 'waiting_human',
+        reason: 'nao_me_contate',
+      });
+    }
+    expect(sends.length).toBe(before);
+
+    // A third phone: one partner of a deal said SAIR in the deal's chat, another says it now.
+    const [shared] = await db
+      .insert(leads)
+      .values({
+        source: 'manual',
+        name: 'Outra negociação',
+        phone: newPhone(),
+        pipeline: 'formatacao',
+      })
+      .returning({ id: leads.id });
+    const partners = [newPhone(), newPhone()];
+    for (const [i, partner] of partners.entries()) {
+      const [row] = await db
+        .insert(crmContacts)
+        .values({ name: `Sócio ${i + 1}`, phone: partner })
+        .returning();
+      await db.insert(leadContacts).values({ leadId: shared!.id, contactId: row!.id });
+    }
+    const [first] = await db.insert(waContacts).values({ phone: partners[0]! }).returning();
+    const [firstChat] = await db
+      .insert(waConversations)
+      .values({ contactId: first!.id, leadId: shared!.id, attendance: 'waiting_human' })
+      .returning();
+    await db.insert(waMessages).values({
+      conversationId: firstChat!.id,
+      contactId: first!.id,
+      leadId: shared!.id,
+      direction: 'in',
+      author: 'contact',
+      kind: 'text',
+      text: 'parar',
+    });
+    clock += 60_000;
+    await write(partners[1]!, text('SAIR'));
+    expect((await conversationOf(partners[1]!)).leadId).toBe(shared!.id);
+    await sofiaAnswers();
+    expect(await conversationOf(partners[1]!)).toMatchObject({
+      attendance: 'waiting_human',
+      reason: 'nao_me_contate',
+    });
+    expect(sends.length).toBe(before);
+  });
+
+  it('a "não me contate" recorded while the model reads stops what she was about to say', async () => {
+    const phone = newPhone();
+    llmAnswers = [said({ intent: 'indefinido' })];
+    duringAi = async () => {
+      await db.insert(contactOptOuts).values({
+        channel: 'whatsapp',
+        keyKind: 'phone',
+        keyValue: phone,
+        origin: 'crm',
+        reason: 'Pediu por telefone',
+      });
+    };
+    const before = sends.length;
+    await write(phone, text('oi'));
+    await sofiaAnswers();
+    expect(llmCalls).toHaveLength(1);
+    expect(sends.length).toBe(before);
+  });
+
+  it('after a SAIR the team cannot write either, even after the person writes again, until a manager revokes', async () => {
     const admin = await sessionFor('admin_master');
     const phone = newPhone();
     await write(phone, text('SAIR'));
@@ -645,7 +794,7 @@ describe('who answers', () => {
       });
     const refused = await writeToo();
     expect(refused.statusCode).toBe(409);
-    expect(refused.json()).toMatchObject({ error: 'opted_out' });
+    expect(refused.json()).toMatchObject({ error: 'contact_blocked' });
     // A sticker is not writing again.
     await write(phone, { type: 'sticker', sticker: { id: 'st2', mime_type: 'image/webp' } });
     expect((await writeToo()).statusCode).toBe(409);
@@ -656,7 +805,13 @@ describe('who answers', () => {
     await sofiaAnswers();
     expect(sends.length).toBe(before);
     expect(await conversationOf(phone)).toMatchObject({ attendance: 'waiting_human' });
-    // A person decides: inside the window, the reply goes.
+    // Inside the window, still nothing goes (Eric, 31/10): the block is lifted in the CRM only.
+    expect((await writeToo()).statusCode).toBe(409);
+    expect(sends.length).toBe(before);
+    await db
+      .update(contactOptOuts)
+      .set({ revokedAt: new Date(clock), revokedBy: admin.id, revokedReason: 'Voltou a pedir' })
+      .where(eq(contactOptOuts.keyValue, phone));
     expect((await writeToo()).statusCode).toBe(201);
     expect(sends.length).toBe(before + 1);
   });

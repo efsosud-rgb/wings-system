@@ -119,7 +119,8 @@ export const contactOptOutRoutes: FastifyPluginAsync = async (app) => {
         entity: 'lead',
         entityId: lead.id,
         ip: request.ip,
-        metadata: { channel: body.data.channel, rows: revoked },
+        // Who and when are the entry's own; why is the manager's reason (Eric, 31/10).
+        metadata: { channel: body.data.channel, rows: revoked, reason: body.data.reason },
       });
       return reply.send(await leadContactOptOuts(db, lead.id));
     },

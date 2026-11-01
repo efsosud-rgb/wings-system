@@ -641,7 +641,7 @@ describe('sending', () => {
     });
   });
 
-  it('blocks templates to a person who asked to stop, until they write again', async () => {
+  it('blocks templates to a person who asked to stop, also after they write again', async () => {
     const owner = await sessionFor('vendedor_formatacao');
     const leadId = await deal('5521912120000', owner.id);
     await deliver(inbound('5521912120000', 'SAIR').body);
@@ -653,7 +653,7 @@ describe('sending', () => {
       payload: { name: 'retomar_conversa', language: 'pt_BR', params: ['a', 'b'] },
     });
     expect(blocked.statusCode).toBe(409);
-    expect(blocked.json().error).toBe('opted_out');
+    expect(blocked.json().error).toBe('contact_blocked');
     // The word also goes to the one register, by phone, even with Sofia off.
     const [registered] = await db
       .select()
@@ -668,9 +668,18 @@ describe('sending', () => {
       cookies: owner.cookies,
     });
     expect(thread.json<DealWhatsApp>().optedOut).toBe(false);
+    // Writing again lifts the SAIR of the contact, not the register: still nothing goes (Eric, 31/10).
+    expect(thread.json<DealWhatsApp>().contactBlock.blocked).toBe(true);
+    const again = await app.inject({
+      method: 'POST',
+      url: `/leads/${leadId}/whatsapp/template`,
+      cookies: owner.cookies,
+      payload: { name: 'retomar_conversa', language: 'pt_BR', params: ['a', 'b'] },
+    });
+    expect([again.statusCode, again.json().error]).toEqual([409, 'contact_blocked']);
   });
 
-  it('a "não me contate" stops the template and the call request; a typed reply still goes', async () => {
+  it('a "não me contate" stops the template, the call request and a typed reply inside the window', async () => {
     const owner = await sessionFor('vendedor_formatacao');
     const leadId = await deal('5521912130000', owner.id);
     await deliver(inbound('5521912130000', 'Oi').body);
@@ -690,6 +699,8 @@ describe('sending', () => {
         { name: 'retomar_conversa', language: 'pt_BR', params: ['a', 'b'] },
       ],
       [`/leads/${leadId}/whatsapp/call-permission`, {}],
+      // The person wrote first: a reply inside the window does not go either (Eric, 30/10).
+      [`/leads/${leadId}/whatsapp/text`, { text: 'Certo, anotado.' }],
     ] as const) {
       const blocked = await app.inject({ method: 'POST', url, cookies: owner.cookies, payload });
       expect(blocked.statusCode, url).toBe(409);
@@ -706,16 +717,8 @@ describe('sending', () => {
     expect(events.map((e) => (e.detail as { path: string }).path).sort()).toEqual([
       'modelo',
       'pedido_ligacao',
+      'texto',
     ]);
-    // The person wrote: a person may answer inside the window, as before.
-    nextSend = () => accepted('wamid.REPLY1');
-    const reply = await app.inject({
-      method: 'POST',
-      url: `/leads/${leadId}/whatsapp/text`,
-      cookies: owner.cookies,
-      payload: { text: 'Certo, anotado.' },
-    });
-    expect(reply.statusCode).toBe(201);
   });
 
   it('only a manager or the board revokes a "não me contate", with a note on the timeline', async () => {
