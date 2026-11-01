@@ -6,7 +6,7 @@ Ampliado em 26/10 na branch `feat/maps-prospecting` (PR empilhado sobre o desta 
 
 Tela: `/crm-vendas/prospeccao` (menu CRM Vendas → Prospecção). Código: `apps/api/src/modules/prospecting/`, contrato em `packages/shared/src/prospecting.ts`, tela em `apps/web/src/pages/crm/ProspectingPage.tsx`, painel do lead em `apps/web/src/pages/crm/GooglePlacePanel.tsx`.
 
-**Prospecção Instagram**: [`docs/prospeccao/instagram.md`](../prospeccao/instagram.md). A parte 2 (comentários colados, aba Instagram desta tela) foi construída e está desligada: [`instagram-fase-a.md`](../prospeccao/instagram-fase-a.md). A parte 3 (Business Discovery na nota de 0 a 100 desta busca) foi construída e está desligada: [`instagram-fase-b.md`](../prospeccao/instagram-fase-b.md).
+**Prospecção Instagram**: [`docs/prospeccao/instagram.md`](../prospeccao/instagram.md). A parte 2 (comentários colados, aba Instagram desta tela) foi construída e está desligada: [`instagram-fase-a.md`](../prospeccao/instagram-fase-a.md). A parte 3 (Business Discovery na nota de 0 a 100 desta busca) foi construída e está desligada: [`instagram-fase-b.md`](../prospeccao/instagram-fase-b.md). A parte 1 (comentários nos posts e anúncios da Wings e a resposta privada, aba Instagram → Comentários da Wings) foi construída e está desligada: [`instagram-fase-c.md`](../prospeccao/instagram-fase-c.md).
 
 ## Regras do Google (Maps Platform) e como são cumpridas
 
