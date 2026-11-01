@@ -94,7 +94,7 @@ export async function runInstagramHousekeeping(
         ),
       )
       .returning({ id: prospectOpportunities.id });
-    if (purged.length)
+    if (purged.length || people.length)
       await writeAudit(tx, {
         action: 'prospect_ai.instagram_purged',
         entity: 'prospect_ai_settings',

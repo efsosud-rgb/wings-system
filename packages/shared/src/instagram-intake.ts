@@ -135,9 +135,13 @@ export function privateReplyChangeDenial(
   before: PrivateReplySettings,
   after: PrivateReplySettings,
   canAutoReply: boolean,
+  /** The policy's link (Ajustes → mensagens) changed: it goes inside the reply's text. */
+  linkChanged = false,
 ): string | null {
   if (canAutoReply) return null;
   if (after.texto !== before.texto) return 'Só o Admin Master troca o texto da resposta privada.';
+  if (linkChanged && (before.modo === 'automatico' || after.modo === 'automatico'))
+    return 'Com a resposta privada saindo sozinha, só o Admin Master troca o link da política.';
   if (after.modo === 'automatico' && before.modo !== 'automatico')
     return 'Só o Admin Master liga a resposta privada sozinha.';
   if (after.modo === 'automatico' && after.confiancaAutomatica < before.confiancaAutomatica)

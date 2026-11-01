@@ -6,12 +6,14 @@ import {
   repliesAlone,
   type InstagramProspectingSettings,
 } from '@wings/shared';
-import { and, asc, eq, inArray, isNotNull, lt, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, lt, lte, or, sql } from 'drizzle-orm';
+import { createHash } from 'node:crypto';
 import type { Database } from '../../db/client.js';
 import { WINGS_TENANT_ID } from '../../db/schema/ads.js';
 import {
   clients,
   igPeople,
+  igPrivateReplies,
   igWebhookEvents,
   leads,
   prospectClassifications,
@@ -52,6 +54,16 @@ const DAY_MS = 86_400_000;
 /** The raw event (it holds the text) is emptied after this; the row (the key) stays. */
 export const IG_PAYLOAD_RETENTION_DAYS = 30;
 const PART_ONE_SOURCES = ['instagram_comment', 'instagram_ad_comment'];
+/** Nothing of the person is kept for these (§2.4, minimization): the raw event is emptied at once. */
+const NOTHING_KEPT = [
+  'nao_contatar',
+  'cliente',
+  'outros',
+  'conta_wings',
+  'outra_conta',
+  'sem_conta',
+  'sem_comentario',
+];
 
 export interface InstagramIntakeDeps {
   db: Database;
@@ -329,11 +341,30 @@ async function processMessage(
       .select({ id: igPeople.id })
       .from(igPeople)
       .where(eq(igPeople.igsid, message.recipientId));
-    if (person)
-      await db
-        .update(prospectOpportunities)
-        .set({ respondedAt: at, updatedAt: now })
-        .where(and(openOfPerson(person.id), sql`${prospectOpportunities.respondedAt} is null`));
+    if (!person) return { status: 'done', code: 'eco' };
+    // The echo of the private reply the API sent is not a person's answer: by Meta's id, or by
+    // the text's hash (the row exists before the call, so a fast echo is caught too).
+    const sha = message.text ? createHash('sha256').update(message.text).digest('hex') : null;
+    const [ours] = await db
+      .select({ id: igPrivateReplies.id })
+      .from(igPrivateReplies)
+      .where(
+        or(
+          eq(igPrivateReplies.graphMessageId, message.mid),
+          sha
+            ? and(
+                eq(igPrivateReplies.igPersonId, person.id),
+                eq(igPrivateReplies.messageSha256, sha),
+              )
+            : undefined,
+        ),
+      )
+      .limit(1);
+    if (ours) return { status: 'done', code: 'eco_resposta_privada' };
+    await db
+      .update(prospectOpportunities)
+      .set({ respondedAt: at, updatedAt: now })
+      .where(and(openOfPerson(person.id), sql`${prospectOpportunities.respondedAt} is null`));
     return { status: 'done', code: 'eco' };
   }
   if (message.senderId === event.igAccountId || message.senderId === deps.accountId)
@@ -464,12 +495,16 @@ export async function processInstagramEvents(
     if (!claimed) continue;
     result.processed += 1;
     try {
-      const outcome =
-        claimed.kind === 'comment'
-          ? await processComment(deps, settings, claimed, now)
-          : claimed.kind === 'message' || claimed.kind === 'echo'
-            ? await processMessage(deps, claimed, now)
-            : ({ status: 'ignored', code: 'tipo' } as Outcome);
+      // Only Wings' own account: a comment on another account the app may see is not Wings'.
+      const outcome = !deps.accountId
+        ? ({ status: 'ignored', code: 'sem_conta' } as Outcome)
+        : claimed.igAccountId !== deps.accountId
+          ? ({ status: 'ignored', code: 'outra_conta' } as Outcome)
+          : claimed.kind === 'comment'
+            ? await processComment(deps, settings, claimed, now)
+            : claimed.kind === 'message' || claimed.kind === 'echo'
+              ? await processMessage(deps, claimed, now)
+              : ({ status: 'ignored', code: 'tipo' } as Outcome);
       await deps.db
         .update(igWebhookEvents)
         .set({
@@ -477,6 +512,7 @@ export async function processInstagramEvents(
           lastError: outcome.status === 'failed' ? (outcome.code ?? null) : null,
           processedAt: now,
           opportunityId: outcome.opportunityId ?? null,
+          ...(NOTHING_KEPT.includes(outcome.code ?? '') ? { payload: null } : {}),
         })
         .where(eq(igWebhookEvents.id, claimed.id));
       if (outcome.status === 'failed') result.failed += 1;

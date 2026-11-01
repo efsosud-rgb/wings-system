@@ -287,6 +287,7 @@ export const instagramProspectingRoutes: FastifyPluginAsync = async (app) => {
       before.privateReply,
       body.data.privateReply,
       grantedScope(request.session.actor, 'prospect_ai.instagram_auto_reply') !== null,
+      before.messages.linkPolitica !== body.data.messages.linkPolitica,
     );
     if (denied) return reply.status(403).send({ error: 'forbidden', message: denied });
     await saveInstagramSettings(db, body.data, request.session.actor.employeeId, now());

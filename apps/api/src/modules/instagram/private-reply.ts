@@ -76,6 +76,22 @@ async function commentOf(db: Database, opportunityId: string) {
 }
 
 type Comment = NonNullable<Awaited<ReturnType<typeof commentOf>>>;
+type Tx = Parameters<Parameters<Database['transaction']>[0]>[0];
+
+/** 600 replies (possibly delivered) in the last hour: the next one waits. Under the lock. */
+async function hourIsFull(tx: Tx, now: Date): Promise<boolean> {
+  const [hour] = await tx
+    .select({ n: sql<number>`count(*)::int` })
+    .from(igPrivateReplies)
+    .where(
+      and(
+        eq(igPrivateReplies.tenantId, WINGS_TENANT_ID),
+        inArray(igPrivateReplies.status, COUNTED),
+        sql`coalesce(${igPrivateReplies.sentAt}, ${igPrivateReplies.createdAt}) > ${new Date(now.getTime() - 60 * 60_000).toISOString()}::timestamptz`,
+      ),
+    );
+  return (hour?.n ?? 0) >= PRIVATE_REPLIES_PER_HOUR;
+}
 
 /** The gates that need no lock, in the spec's order: the first refusal, or the text to send. */
 async function openGate(
@@ -140,16 +156,7 @@ async function claim(
         );
       if ((person?.n ?? 0) > 0) return { block: 'limite_pessoa' as const };
     }
-    const [hour] = await tx
-      .select({ n: sql<number>`count(*)::int` })
-      .from(igPrivateReplies)
-      .where(
-        and(
-          counted,
-          sql`${when} > ${new Date(deps.now.getTime() - 60 * 60_000).toISOString()}::timestamptz`,
-        ),
-      );
-    if ((hour?.n ?? 0) >= PRIVATE_REPLIES_PER_HOUR) return { block: 'limite_hora' as const };
+    if (await hourIsFull(tx, deps.now)) return { block: 'limite_hora' as const };
     const [row] = await tx
       .insert(igPrivateReplies)
       .values({
@@ -275,11 +282,18 @@ export async function retryPrivateReplies(deps: PrivateReplyDeps): Promise<numbe
         .where(and(eq(igPrivateReplies.id, row.id), eq(igPrivateReplies.status, 'rate_limited')));
       continue;
     }
-    const [claimed] = await deps.db
-      .update(igPrivateReplies)
-      .set({ status: 'sending', attempts: sql`${igPrivateReplies.attempts} + 1` })
-      .where(and(eq(igPrivateReplies.id, row.id), eq(igPrivateReplies.status, 'rate_limited')))
-      .returning({ attempts: igPrivateReplies.attempts });
+    // The hour's 600 again, counted and claimed under the same lock as a new reply (lição 5); a
+    // full hour leaves it waiting for the next pass (the 7 days are checked again there).
+    const claimed = await deps.db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${LOCK_KEY}))`);
+      if (await hourIsFull(tx, deps.now)) return null;
+      const [taken] = await tx
+        .update(igPrivateReplies)
+        .set({ status: 'sending', attempts: sql`${igPrivateReplies.attempts} + 1` })
+        .where(and(eq(igPrivateReplies.id, row.id), eq(igPrivateReplies.status, 'rate_limited')))
+        .returning({ attempts: igPrivateReplies.attempts });
+      return taken ?? null;
+    });
     if (!claimed) continue;
     if ((await deliver(deps, row.id, comment!, gate.text, claimed.attempts)) === 'sent') sent += 1;
   }
