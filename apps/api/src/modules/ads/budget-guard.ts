@@ -252,7 +252,7 @@ function periodState(row: {
 }
 
 async function recordGuardrailEvent(
-  db: Database,
+  db: Database | Transaction,
   adAccountId: string,
   kind:
     | 'cap_would_be_exceeded'
@@ -331,7 +331,7 @@ async function lockOpenPeriod(
  * never be held to different rules. Returns null when the commitment fits.
  */
 async function ceilingRefusal(
-  db: Database,
+  db: Database | Transaction,
   adAccountId: string,
   current: PeriodState,
   exposureDeltaCents: number,
@@ -1175,8 +1175,9 @@ export async function claimWithinCeiling(
       `);
       const runningCents =
         (await mirroredExposureCents(tx, account, now)) + Number(inFlight.rows[0]?.total ?? 0);
+      // Recorded through this transaction: it commits with the refusal, on the connection already held.
       const refusal = await ceilingRefusal(
-        db,
+        tx,
         account.id,
         { ...period.state, committedCents: runningCents },
         change.exposureDeltaCents,
