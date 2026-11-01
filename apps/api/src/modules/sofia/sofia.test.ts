@@ -715,6 +715,48 @@ describe('who answers', () => {
       });
     }
     expect(sends.length).toBe(before);
+
+    // A third phone: one partner of a deal said SAIR in the deal's chat, another says it now.
+    const [shared] = await db
+      .insert(leads)
+      .values({
+        source: 'manual',
+        name: 'Outra negociação',
+        phone: newPhone(),
+        pipeline: 'formatacao',
+      })
+      .returning({ id: leads.id });
+    const partners = [newPhone(), newPhone()];
+    for (const [i, partner] of partners.entries()) {
+      const [row] = await db
+        .insert(crmContacts)
+        .values({ name: `Sócio ${i + 1}`, phone: partner })
+        .returning();
+      await db.insert(leadContacts).values({ leadId: shared!.id, contactId: row!.id });
+    }
+    const [first] = await db.insert(waContacts).values({ phone: partners[0]! }).returning();
+    const [firstChat] = await db
+      .insert(waConversations)
+      .values({ contactId: first!.id, leadId: shared!.id, attendance: 'waiting_human' })
+      .returning();
+    await db.insert(waMessages).values({
+      conversationId: firstChat!.id,
+      contactId: first!.id,
+      leadId: shared!.id,
+      direction: 'in',
+      author: 'contact',
+      kind: 'text',
+      text: 'parar',
+    });
+    clock += 60_000;
+    await write(partners[1]!, text('SAIR'));
+    expect((await conversationOf(partners[1]!)).leadId).toBe(shared!.id);
+    await sofiaAnswers();
+    expect(await conversationOf(partners[1]!)).toMatchObject({
+      attendance: 'waiting_human',
+      reason: 'nao_me_contate',
+    });
+    expect(sends.length).toBe(before);
   });
 
   it('a "não me contate" recorded while the model reads stops what she was about to say', async () => {
