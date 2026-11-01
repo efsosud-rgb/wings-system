@@ -1,5 +1,10 @@
 import { instagramUsernameOf } from '@wings/shared/instagram';
-import { submitSiteForm, type LoadResult, type SiteFormSpec } from '../../lib/api.js';
+import {
+  submitSiteForm,
+  type LoadResult,
+  type SiteFormSpec,
+  type SubmitResult,
+} from '../../lib/api.js';
 import {
   CONSENT_MESSAGE,
   FIELD_RULES,
@@ -8,6 +13,7 @@ import {
   missingLineOf,
   missingOf,
 } from '../../lib/form-rules.js';
+import type { EventName, EventStep } from '../../lib/events.js';
 import { submitBodyOf, type FormValues } from '../../lib/payload.js';
 import type { Tracking } from '../../lib/tracking.js';
 import { renderTurnstile, type TurnstileWidget } from '../../lib/turnstile.js';
@@ -19,7 +25,7 @@ import { applyWhatsappUrl } from '../../lib/whatsapp.js';
  * it says what is still missing. A sent form gives way to the thank-you.
  */
 
-export const SEND_LABEL = 'Enviar e falar com a Wings';
+export const SEND_LABEL = 'Quero meu diagnóstico';
 export const SENDING_LABEL = 'Enviando…';
 
 export const MESSAGES = {
@@ -34,6 +40,14 @@ export const MESSAGES = {
   unavailable: 'Não foi possível enviar agora. Tente de novo em instantes.',
 } as const;
 
+/** Why a send failed, as the server counts it (`submit_error`). */
+const ERROR_STEP = {
+  invalid: 'validation',
+  captcha_refused: 'captcha',
+  rate_limited: 'rate_limited',
+  unavailable: 'network',
+} as const satisfies Record<Exclude<SubmitResult['kind'], 'ok'>, EventStep>;
+
 export interface FormSetup {
   slug: string;
   apiBase: string;
@@ -43,6 +57,8 @@ export interface FormSetup {
   whatsappUrl: () => string | null;
   /** After a sent form: the chosen option's value, for the dataLayer. */
   onSent: (answer: string) => void;
+  /** The form's steps for the server's count (first touch, each try, why it failed, sent); absent, none is counted. */
+  onEvent?: (event: EventName, step?: EventStep) => void;
   /** The address sent as the lead's page; the page's own when absent. */
   href?: string;
   /** In an iframe (the Wings site's form): the thank-you does not scroll the page that frames it. */
@@ -106,6 +122,7 @@ export function setupForm(setup: FormSetup): FormController {
 
   const valueOf = (id: string) => byId<HTMLInputElement | HTMLSelectElement>(id).value;
   const touched = new Set<string>();
+  let started = false;
 
   function check(showAll: boolean): boolean {
     const values: Record<string, string> = {};
@@ -143,6 +160,10 @@ export function setupForm(setup: FormSetup): FormController {
   const touch = (e: Event) => {
     const target = e.target as HTMLElement | null;
     if (target?.id) touched.add(target.id);
+    if (!started) {
+      started = true;
+      setup.onEvent?.('form_start');
+    }
     check(false);
   };
   f.addEventListener('input', touch);
@@ -186,8 +207,10 @@ export function setupForm(setup: FormSetup): FormController {
   f.addEventListener('submit', (e) => {
     e.preventDefault();
     if (sending) return;
+    setup.onEvent?.('submit_attempt');
     sendError.textContent = '';
     if (!check(true)) {
+      setup.onEvent?.('submit_error', 'validation');
       const bad =
         f.querySelector<HTMLElement>('[aria-invalid="true"]') ?? (consent.checked ? slot : consent);
       bad.focus();
@@ -205,6 +228,7 @@ export function setupForm(setup: FormSetup): FormController {
       siteUrl: valueOf('f-site'),
       qualifierValue: qualifier.value,
       qualifierText: option?.textContent?.trim() ?? '',
+      monthlyRevenue: valueOf('f-fat'),
       website: honeypot.value,
     };
     const body = submitBodyOf({
@@ -219,10 +243,12 @@ export function setupForm(setup: FormSetup): FormController {
       if (result.kind === 'ok') {
         sending = false;
         setup.onSent(values.qualifierValue);
+        setup.onEvent?.('submit_ok');
         showThanks(result.whatsappUrl ?? setup.whatsappUrl());
         return;
       }
       setSending(false);
+      setup.onEvent?.('submit_error', ERROR_STEP[result.kind]);
       if (result.kind === 'invalid') {
         // checked before the robot check spends its token: the token still holds
         sendError.textContent = result.message;

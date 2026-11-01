@@ -1,6 +1,6 @@
 <form class="form" id="lead-form" novalidate aria-labelledby="form-title">
-  <h2 class="ft" id="form-title">Quero conversar com a Wings</h2>
-  <p class="sub">Responda em menos de um minuto. A conversa é com a equipe da Wings.</p>
+  <h2 class="ft" id="form-title">Peça seu diagnóstico gratuito</h2>
+  <p class="sub">Só quatro respostas, em menos de um minuto. A Wings chama você no WhatsApp.</p>
   <div class="field">
     <label for="f-nome">Nome completo</label
     ><input
@@ -13,75 +13,18 @@
     />
     <p class="err" id="e-nome"></p>
   </div>
-  <div class="row2">
-    <div class="field">
-      <label for="f-tel">WhatsApp</label
-      ><input
-        id="f-tel"
-        name="telefone"
-        type="tel"
-        inputmode="tel"
-        autocomplete="tel-national"
-        required
-        placeholder="(21) 99999-9999"
-      />
-      <p class="err" id="e-tel"></p>
-    </div>
-    <div class="field">
-      <label for="f-email">E-mail</label
-      ><input
-        id="f-email"
-        name="email"
-        type="email"
-        inputmode="email"
-        autocomplete="email"
-        required
-        placeholder="voce@empresa.com.br"
-      />
-      <p class="err" id="e-email"></p>
-    </div>
-  </div>
   <div class="field">
-    <label for="f-empresa">Nome da empresa</label
+    <label for="f-tel">WhatsApp</label
     ><input
-      id="f-empresa"
-      name="companyName"
-      autocomplete="organization"
+      id="f-tel"
+      name="telefone"
+      type="tel"
+      inputmode="tel"
+      autocomplete="tel-national"
       required
-      minlength="2"
-      placeholder="Nome do seu negócio"
+      placeholder="(21) 99999-9999"
     />
-    <p class="err" id="e-empresa"></p>
-  </div>
-  <div class="row2">
-    <div class="field">
-      <label for="f-ig">Instagram da sua marca</label>
-      <div class="ig">
-        <input
-          id="f-ig"
-          name="instagram"
-          autocomplete="off"
-          autocapitalize="none"
-          spellcheck="false"
-          required
-          placeholder="suamarca"
-        />
-      </div>
-      <p class="err" id="e-ig"></p>
-    </div>
-    <div class="field">
-      <label for="f-site">Site da empresa <span class="opt">(opcional)</span></label
-      ><input
-        id="f-site"
-        name="siteUrl"
-        type="url"
-        inputmode="url"
-        autocomplete="url"
-        autocapitalize="none"
-        placeholder="www.suaempresa.com.br"
-      />
-      <p class="err" id="e-site"></p>
-    </div>
+    <p class="err" id="e-tel"></p>
   </div>
   <div class="field">
     <label for="f-int">O que você procura?</label>
@@ -94,6 +37,76 @@
     </select>
     <p class="err" id="e-int"></p>
   </div>
+  <div class="field">
+    <label for="f-fat">Faturamento mensal da empresa</label>
+    <select id="f-fat" name="monthlyRevenue" required>
+      <option value="">Escolha uma opção</option>
+      <option value="ate-50k">Até R$ 50 mil</option>
+      <option value="50k-100k">De R$ 50 mil a R$ 100 mil</option>
+      <option value="100k-300k">De R$ 100 mil a R$ 300 mil</option>
+      <option value="300k-1mi">De R$ 300 mil a R$ 1 milhão</option>
+      <option value="acima-1mi">Acima de R$ 1 milhão</option>
+      <option value="nao-informar">Prefiro não informar</option>
+    </select>
+    <p class="err" id="e-fat"></p>
+  </div>
+  <details class="more" id="f-more">
+    <summary>Quer adiantar? <span class="opt">(opcional)</span></summary>
+    <div class="more-fields">
+      <div class="row2">
+        <div class="field">
+          <label for="f-email">E-mail</label
+          ><input
+            id="f-email"
+            name="email"
+            type="email"
+            inputmode="email"
+            autocomplete="email"
+            placeholder="voce@empresa.com.br"
+          />
+          <p class="err" id="e-email"></p>
+        </div>
+        <div class="field">
+          <label for="f-empresa">Nome da empresa</label
+          ><input
+            id="f-empresa"
+            name="companyName"
+            autocomplete="organization"
+            placeholder="Nome do seu negócio"
+          />
+        </div>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label for="f-ig">Instagram da sua marca</label>
+          <div class="ig">
+            <input
+              id="f-ig"
+              name="instagram"
+              autocomplete="off"
+              autocapitalize="none"
+              spellcheck="false"
+              placeholder="suamarca"
+            />
+          </div>
+          <p class="err" id="e-ig"></p>
+        </div>
+        <div class="field">
+          <label for="f-site">Site da empresa</label
+          ><input
+            id="f-site"
+            name="siteUrl"
+            type="url"
+            inputmode="url"
+            autocomplete="url"
+            autocapitalize="none"
+            placeholder="www.suaempresa.com.br"
+          />
+          <p class="err" id="e-site"></p>
+        </div>
+      </div>
+    </div>
+  </details>
   <div class="hp" aria-hidden="true">
     <label for="f-hp">Não preencha</label
     ><input id="f-hp" name="website" tabindex="-1" autocomplete="off" />
@@ -119,17 +132,17 @@
     disabled
     aria-describedby="f-missing"
   >
-    <span>Enviar e falar com a Wings</span>
+    <span>Quero meu diagnóstico</span>
   </button>
   <p class="err send-err" id="f-error" aria-live="assertive"></p>
   <p class="missing" id="f-missing" aria-live="polite"></p>
 </form>
 <div class="form thanks" id="thanks" hidden>
-  <p class="eyebrow">Recebemos</p>
-  <p class="big">Obrigado! A Wings vai falar com você.</p>
+  <p class="eyebrow">Diagnóstico gratuito</p>
+  <p class="big">Recebemos.</p>
   <p>
-    Um consultor entra em contato pelo WhatsApp ou e-mail que você informou. Se preferir, chame a
-    Wings agora.
+    Um consultor da Wings chama você no WhatsApp em até 1 hora útil. Se preferir, chame a Wings
+    agora.
   </p>
   <a class="btn btn-primary magnetic" href="#" data-wa><span>Chamar no WhatsApp</span></a>
 </div>

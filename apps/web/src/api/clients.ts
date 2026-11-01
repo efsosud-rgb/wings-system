@@ -11,12 +11,13 @@ import {
   type ClientPartnerInput,
   type ClientRecord,
   type ClientWhatsAppArt,
+  type CrmRelatedLead,
   type DriveUploadTicket,
 } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client.js';
 
-/** Who work is done for: Wings Company first, then the rest. Read by the studio, kept in Administração. */
+/** Who work is done for: Wings Company first, then the rest. Read by the studio, kept in Formatação. */
 export function useClients(enabled = true) {
   return useQuery({
     queryKey: ['clients'],
@@ -53,6 +54,15 @@ export function useUpdateClient() {
 }
 
 // --- the full record ("ficha") -------------------------------------------------------
+
+/** The deals of the CRM companies linked to the client, in the caller's own leads.read scope. */
+export function useClientDeals(id: string) {
+  return useQuery({
+    queryKey: ['clients', id, 'deals'],
+    queryFn: () => api.get<{ deals: CrmRelatedLead[] }>(`/clients/${id}/deals`),
+    retry: false,
+  });
+}
 
 export function useClientRecord(id: string) {
   return useQuery({

@@ -652,6 +652,104 @@
       "when": 1792439676361,
       "tag": "0094_whatsapp_bulk_import",
       "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1792521813953,
+      "tag": "0095_wa_numbers",
+      "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1793028688633,
+      "tag": "0096_wa_template_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "7",
+      "when": 1793129312821,
+      "tag": "0097_prospecting",
+      "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1793281672593,
+      "tag": "0098_contact_opt_outs",
+      "breakpoints": true
+    },
+    {
+      "idx": 99,
+      "version": "7",
+      "when": 1793292671239,
+      "tag": "0099_wa_message_files",
+      "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "7",
+      "when": 1793292674799,
+      "tag": "0100_wa_central",
+      "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1793292678396,
+      "tag": "0101_wa_attendance",
+      "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1793292681812,
+      "tag": "0102_wa_reliability",
+      "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1793371241535,
+      "tag": "0103_crm_email_free_text",
+      "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1793384110170,
+      "tag": "0104_crm_email_inbound",
+      "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1793405422935,
+      "tag": "0105_prospect_instagram_paste",
+      "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1793415079425,
+      "tag": "0106_prospect_instagram_discovery",
+      "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
+      "when": 1793421833101,
+      "tag": "0107_wa_voice_sends",
+      "breakpoints": true
+    },
+    {
+      "idx": 108,
+      "version": "7",
+      "when": 1793495591916,
+      "tag": "0108_gmail_history_seen",
+      "breakpoints": true
     }
   ]
 }

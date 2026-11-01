@@ -202,7 +202,7 @@ export async function login(
     : (await fakeVerify(), false);
 
   if (!passwordOk) {
-    await registerFailedAttempt(db, employee.id, credentials?.failedAttempts ?? 0);
+    await registerFailedAttempt(db, employee.id);
     await writeAudit(db, {
       actorEmployeeId: employee.id,
       action: 'session.login_failed',
@@ -273,25 +273,18 @@ export async function login(
   return { ok: true, token, expiresAt, user: toSessionUser(employee, expiresAt) };
 }
 
-async function registerFailedAttempt(
-  db: Database,
-  employeeId: string,
-  currentFailures: number,
-): Promise<void> {
-  const attempts = currentFailures + 1;
-  const locked = attempts >= LOGIN_MAX_ATTEMPTS;
+async function registerFailedAttempt(db: Database, employeeId: string): Promise<void> {
+  // Counted by the database, never from the row read before Argon2: a burst of parallel wrong
+  // passwords must count each one (security audit 2026-10-27, A6).
+  const lock = sql`now() + make_interval(mins => ${LOGIN_LOCK_MINUTES})`;
   await db
     .insert(employeeCredentials)
-    .values({
-      employeeId,
-      failedAttempts: attempts,
-      lockedUntil: locked ? new Date(Date.now() + LOGIN_LOCK_MINUTES * 60_000) : null,
-    })
+    .values({ employeeId, failedAttempts: 1, lockedUntil: null })
     .onConflictDoUpdate({
       target: employeeCredentials.employeeId,
       set: {
-        failedAttempts: attempts,
-        lockedUntil: locked ? new Date(Date.now() + LOGIN_LOCK_MINUTES * 60_000) : null,
+        failedAttempts: sql`${employeeCredentials.failedAttempts} + 1`,
+        lockedUntil: sql`case when ${employeeCredentials.failedAttempts} + 1 >= ${LOGIN_MAX_ATTEMPTS} then ${lock} else null end`,
         updatedAt: new Date(),
       },
     });

@@ -300,9 +300,6 @@ importers:
       '@fontsource/limelight':
         specifier: 5.1.0
         version: 5.1.0
-      '@fortawesome/fontawesome-free':
-        specifier: 6.5.2
-        version: 6.5.2
       '@types/three':
         specifier: ^0.186.0
         version: 0.186.0
@@ -1106,10 +1103,6 @@ packages:
 
   '@fontsource/limelight@5.1.0':
     resolution: {integrity: sha512-AOg/DpNiaMgg9X0xp4giO8Pq5eFTijlNrRe9nSiHXwg+et+SaXuwFW7CMpTWxJQlAODjsflMUrBCDHU6TS13RQ==}
-
-  '@fortawesome/fontawesome-free@6.5.2':
-    resolution: {integrity: sha512-hRILoInAx8GNT5IMkrtIt9blOdrqHOnPBH+k70aWUAqPZPgopb9G5EQJFpaBx/S8zp2fC+mPW349Bziuk1o28Q==}
-    engines: {node: '>=6'}
 
   '@hookform/resolvers@5.9.1':
     resolution: {integrity: sha512-7b7vsbraJxKgjVSA1Nur9tLwj539WGJUBLA7QNvXnFoT2pM5Z7G+6rlukk4B2/QrTZy6huRtH6wKeESPKuIr6w==}
@@ -3654,8 +3647,6 @@ snapshots:
   '@fontsource-variable/nunito@5.1.0': {}
 
   '@fontsource/limelight@5.1.0': {}
-
-  '@fortawesome/fontawesome-free@6.5.2': {}
 
   '@hookform/resolvers@5.9.1(ajv@8.20.0)(react-hook-form@7.88.0(react@19.3.0))(zod@4.6.5)':
     dependencies:

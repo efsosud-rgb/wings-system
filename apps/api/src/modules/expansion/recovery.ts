@@ -229,6 +229,19 @@ export const expansionRecoveryRoutes: FastifyPluginAsync = async (app) => {
         });
         const summary = summarize(result);
         const finishedAt = new Date();
+        // The trail first: a reader that finds "done" must find the run closed there too.
+        await writeAudit(db, {
+          actorEmployeeId: request.session.actor.employeeId,
+          action: input.dryRun ? 'expansion.recovery_dry_run_done' : 'expansion.recovery_done',
+          entity: 'expansion_recovery',
+          entityId: planId,
+          metadata: {
+            wouldCreate: summary.wouldCreate,
+            existingDeal: summary.existingDeal,
+            failed: summary.failed,
+            dealIds: summary.createdDealIds,
+          },
+        }).catch(() => undefined);
         current = {
           state: 'done',
           mode,
@@ -245,18 +258,6 @@ export const expansionRecoveryRoutes: FastifyPluginAsync = async (app) => {
             wouldCreate: summary.wouldCreate,
           };
         }
-        await writeAudit(db, {
-          actorEmployeeId: request.session.actor.employeeId,
-          action: input.dryRun ? 'expansion.recovery_dry_run_done' : 'expansion.recovery_done',
-          entity: 'expansion_recovery',
-          entityId: planId,
-          metadata: {
-            wouldCreate: summary.wouldCreate,
-            existingDeal: summary.existingDeal,
-            failed: summary.failed,
-            dealIds: summary.createdDealIds,
-          },
-        }).catch(() => undefined);
       } catch (error) {
         await writeAudit(db, {
           actorEmployeeId: request.session.actor.employeeId,

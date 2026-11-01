@@ -338,6 +338,7 @@ describe('T6: brand contacts (Eric, 01/10)', () => {
 });
 
 describe('on sale and pages switched off in RD (Eric, 02/10)', () => {
+  // Runs the whole seed first: about 2 s on a quiet runner, past 5 s on a busy one (CI of #57).
   it('marks the brands on or off sale, dates the switched-off pages and keeps them mapping, and is safe to rerun', async () => {
     await seed(db);
     const familia =
@@ -381,7 +382,7 @@ describe('on sale and pages switched off in RD (Eric, 02/10)', () => {
 
     const again = await applyOnSale20261002(db, { apply: true });
     expect([again.brands.created, again.marks, again.unpublished]).toEqual([[], [], []]);
-  });
+  }, 30_000);
 });
 
 describe('the rule of a new page takes LANDING_PAGE_BASE_URL', () => {

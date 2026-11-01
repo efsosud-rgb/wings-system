@@ -207,6 +207,14 @@ const ORDER_LABEL: Record<CampaignOrder, string> = {
 
 const isRunning = (status: string) => status === 'ACTIVE' || status === 'ENABLED';
 
+/** Google can keep ENABLED on a campaign that ended: the end wins over the status set. */
+const campaignStatusLabel = (campaign: CampaignNode) =>
+  campaign.ended ? 'Encerrada' : statusLabel(campaign.status);
+
+/** Neither spend nor an impression in the window: a row of zeros would read as a fault. */
+const delivered = (campaign: CampaignNode) =>
+  campaign.totals.spendCents > 0 || campaign.totals.impressions > 0;
+
 const ACTION_LABEL: Record<ChangeRequestInput['kind'], string> = {
   pause_campaign: 'Pausar',
   resume_campaign: 'Retomar',
@@ -231,8 +239,8 @@ function CampaignActions({ campaign }: { campaign: CampaignNode }) {
   const idBase = `acao-${campaign.platform}-${campaign.externalId}`;
 
   const kinds: ChangeRequestInput['kind'][] = [
-    ...(isRunning(campaign.status) ? (['pause_campaign'] as const) : []),
-    ...(campaign.status === 'PAUSED' ? (['resume_campaign'] as const) : []),
+    ...(!campaign.ended && isRunning(campaign.status) ? (['pause_campaign'] as const) : []),
+    ...(!campaign.ended && campaign.status === 'PAUSED' ? (['resume_campaign'] as const) : []),
     ...(campaign.budgetLevel === 'campaign' ? (['set_daily_budget'] as const) : []),
   ];
 
@@ -350,7 +358,15 @@ function CampaignActions({ campaign }: { campaign: CampaignNode }) {
   );
 }
 
-function CampaignRows({ campaign, canRequest }: { campaign: CampaignNode; canRequest: boolean }) {
+function CampaignRows({
+  campaign,
+  canRequest,
+  days,
+}: {
+  campaign: CampaignNode;
+  canRequest: boolean;
+  days: number;
+}) {
   const [open, setOpen] = useState(false);
   const children = campaign.adSets.length + campaign.orphanAds.length;
   return (
@@ -392,8 +408,10 @@ function CampaignRows({ campaign, canRequest }: { campaign: CampaignNode; canReq
           )}
         </td>
         <td>
-          <span className={`status campaign-${campaign.status.toLowerCase()}`}>
-            {statusLabel(campaign.status)}
+          <span
+            className={`status campaign-${campaign.ended ? 'ended' : campaign.status.toLowerCase()}`}
+          >
+            {campaignStatusLabel(campaign)}
           </span>
         </td>
         <td className="mono">
@@ -408,7 +426,14 @@ function CampaignRows({ campaign, canRequest }: { campaign: CampaignNode; canReq
                 : 'sem orçamento próprio'}
           </span>
         </td>
-        <Figures totals={campaign.totals} />
+        {delivered(campaign) ? (
+          <Figures totals={campaign.totals} />
+        ) : (
+          <td colSpan={7} className="cell-sub">
+            Sem veiculação nos últimos {days} dias
+            {campaign.lastSpendDate && ` · último gasto em ${dayMonth(campaign.lastSpendDate)}`}
+          </td>
+        )}
         <td>
           {campaign.systemCreated && canRequest ? <CampaignActions campaign={campaign} /> : null}
         </td>
@@ -445,10 +470,14 @@ export function CampaignsTab({ data }: { data: DashboardCampaigns }) {
       ? data.campaigns.filter((campaign) => campaign.name.toLowerCase().includes(needle))
       : data.campaigns;
     // The API sends the newest first; the other two orders are made here.
-    if (order === 'antigas') return [...matched].reverse();
-    if (order === 'gasto')
-      return [...matched].sort((a, b) => b.totals.spendCents - a.totals.spendCents);
-    return matched;
+    const ordered =
+      order === 'antigas'
+        ? [...matched].reverse()
+        : order === 'gasto'
+          ? [...matched].sort((a, b) => b.totals.spendCents - a.totals.spendCents)
+          : matched;
+    // Within the order picked, the campaigns that delivered in the window come first.
+    return [...ordered.filter(delivered), ...ordered.filter((campaign) => !delivered(campaign))];
   }, [data.campaigns, filter, order]);
 
   const exportCsv = () => {
@@ -486,7 +515,7 @@ export function CampaignsTab({ data }: { data: DashboardCampaigns }) {
         '',
         CAMPAIGN_VERDICT_LABEL[campaign.verdict.verdict],
         reasons,
-        statusLabel(campaign.status),
+        campaignStatusLabel(campaign),
         reais(campaign.dailyBudgetCents),
         ...csvFigures(campaign.totals),
       ]);
@@ -613,6 +642,7 @@ export function CampaignsTab({ data }: { data: DashboardCampaigns }) {
                     key={`${campaign.platform}:${campaign.externalId}`}
                     campaign={campaign}
                     canRequest={canRequest}
+                    days={data.days}
                   />
                 ))}
               </tbody>

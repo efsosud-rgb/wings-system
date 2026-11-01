@@ -10,6 +10,7 @@ import { hasPermission, useSession } from '../../api/auth.js';
 import { ApiError } from '../../api/client.js';
 import {
   useCallPermission,
+  useCallRequestPreview,
   useRequestCallPermission,
   useRingingCalls,
   useWhatsAppThread,
@@ -329,8 +330,10 @@ export function WhatsAppCallSection({
   const ask = useRequestCallPermission(leadId);
   const permission = live.data ?? thread.data?.callPermission ?? null;
   const granted = permission?.status === 'temporary' || permission?.status === 'permanent';
+  // A "não me contate" on WhatsApp or the phone: no call and no request start from here.
+  const blocked = thread.data?.callBlock.blocked ? thread.data.callBlock.reason : null;
   const canCall =
-    on && Boolean(phone) && !center.active && (granted || live.data?.canCall === true);
+    on && Boolean(phone) && !center.active && !blocked && (granted || live.data?.canCall === true);
   const windowOpen = thread.data?.window.open ?? false;
 
   return (
@@ -360,7 +363,9 @@ export function WhatsAppCallSection({
         <p className="crm-sub">O WhatsApp oficial ainda não está ligado no sistema.</p>
       ) : !thread.data.calling ? (
         <p className="crm-sub">As ligações ainda não estão ligadas neste número do WhatsApp.</p>
-      ) : !phone ? null : (
+      ) : !phone ? null : blocked ? (
+        <p className="crm-error">Não me contate: {blocked}</p>
+      ) : (
         <>
           <p className="crm-sub">
             {permission?.status
@@ -376,15 +381,16 @@ export function WhatsAppCallSection({
                 type="button"
                 className="crm-btn"
                 disabled={ask.isPending || live.data?.canRequest === false}
-                onClick={() => ask.mutate()}
+                onClick={() => ask.mutate(undefined)}
               >
                 Pedir permissão para ligar
               </button>
             ) : (
-              <p className="crm-sub">
-                Fora das 24 h: o pedido de ligação vai por um modelo aprovado (na conversa, "Usar
-                modelo").
-              </p>
+              <CallRequestByTemplate
+                leadId={leadId}
+                ask={ask}
+                disabled={live.data?.canRequest === false}
+              />
             ))}
           {live.data?.canRequest === false && !granted && (
             <p className="crm-sub">A Meta só deixa pedir 1 vez por dia e 2 por semana.</p>
@@ -399,6 +405,96 @@ export function WhatsAppCallSection({
         </>
       )}
       {center.active && <p className="crm-sub">Já há uma ligação em andamento neste navegador.</p>}
+    </div>
+  );
+}
+
+/**
+ * Outside the 24 h the request goes by the approved call-request template the server picks
+ * (Expansão for a brand's lead, Wings for the others): its preview first, then the click.
+ */
+function CallRequestByTemplate({
+  leadId,
+  ask,
+  disabled,
+}: {
+  leadId: string;
+  ask: ReturnType<typeof useRequestCallPermission>;
+  disabled: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const preview = useCallRequestPreview(leadId, open);
+  if (!open)
+    return (
+      <button
+        type="button"
+        className="crm-btn"
+        disabled={disabled || ask.isPending}
+        onClick={() => {
+          ask.reset();
+          setOpen(true);
+        }}
+      >
+        Pedir pelo modelo
+      </button>
+    );
+  const shown = preview.data?.preview;
+  return (
+    <div className="crm-call-request" aria-label="Pedido de ligação pelo modelo">
+      {!shown ? (
+        preview.error ? (
+          <p className="crm-error">
+            {messageOf(preview.error, 'Não foi possível montar a prévia.')}
+          </p>
+        ) : (
+          <p className="crm-sub">Montando a prévia…</p>
+        )
+      ) : (
+        <>
+          <p className={`crm-wa-mode ${shown.charged ? 'is-charged' : 'is-free'}`}>
+            {shown.sendAs === 'template'
+              ? `Fora das 24 h: vai o modelo aprovado ${shown.version}${shown.charged ? ', cobrado pela Meta' : ''}.`
+              : 'Vai o pedido de ligação da Meta, sem custo.'}
+          </p>
+          {shown.notices.map((notice) => (
+            <p key={notice} className="crm-wa-notice">
+              {notice}
+            </p>
+          ))}
+          <div className="crm-wa-card" aria-label="Prévia da mensagem">
+            <p className="crm-wa-preview">{shown.text}</p>
+          </div>
+          {!shown.ready && (
+            <p className="crm-sub">
+              Falta um campo do modelo: envie pela conversa, em "Usar modelo", e preencha.
+            </p>
+          )}
+        </>
+      )}
+      <div className="crm-call-card-actions">
+        <button
+          type="button"
+          className="crm-btn is-primary"
+          disabled={!shown?.ready || ask.isPending}
+          onClick={() =>
+            shown &&
+            ask.mutate(
+              {
+                template: {
+                  params: shown.fields.map((field) => field.value),
+                  expect: { sendAs: shown.sendAs, charged: shown.charged },
+                },
+              },
+              { onSuccess: () => setOpen(false) },
+            )
+          }
+        >
+          Enviar pedido
+        </button>
+        <button type="button" className="crm-btn" onClick={() => setOpen(false)}>
+          Cancelar
+        </button>
+      </div>
     </div>
   );
 }

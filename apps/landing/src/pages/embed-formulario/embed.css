@@ -39,6 +39,10 @@ html.embed.standalone {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
+/* the site's column can be 280 px wide: the page's 17 px label ("Enviar e falar com a Wings") would not fit the pill */
+.embed .form .btn {
+  font-size: 15px;
+}
 /* the site has its own text: title and subtitle only with ?titulo=1 (the form is still named by the title) */
 .embed:not(.with-title) .form .ft,
 .embed:not(.with-title) .form .sub {

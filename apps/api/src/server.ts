@@ -2,18 +2,26 @@ import { buildApp } from './app.js';
 import { createDb } from './db/client.js';
 import { loadDotEnv } from './db/load-env.js';
 import { loadEnv } from './env.js';
+import { storageOf } from './lib/storage/index.js';
 import { createOpenRouterLlm } from './modules/agent/llm.js';
 import { startFormatacaoIntakeScheduler } from './modules/expansion/formatacao.js';
 import { startExpansionIntakeScheduler } from './modules/expansion/scheduler.js';
 import { startInsightsScheduler } from './modules/insights/scheduler.js';
 import { startCrmAutomationsScheduler } from './modules/leads/automations-scheduler.js';
+import { startEmailRepliesScheduler } from './modules/leads/email-replies.js';
+import { googleWorkspaceDepsOf } from './modules/google-workspace/service.js';
 import { onLeadArrivedKick } from './modules/leads/crm-alerts.js';
 import { createCrmMailTransport } from './modules/leads/crm-mail.js';
 import { sendPendingNoticeMails } from './modules/leads/crm-notice-mail.js';
 import { startMetaLeadgenIntake } from './modules/leads/meta-intake.js';
+import { startInstagramHousekeeping } from './modules/prospect-ai/housekeeping.js';
+import { startProspectingRetentionScheduler } from './modules/prospecting/retention.js';
 import { startSofia } from './modules/sofia/engine.js';
 import { whatsappConfigOf } from './modules/whatsapp/graph.js';
 import { startWhatsAppIntake } from './modules/whatsapp/intake.js';
+import { startWhatsAppMediaStore } from './modules/whatsapp/media-store.js';
+import { numberConfigOf, numbersDepsOf } from './modules/whatsapp/numbers.js';
+import { createSecretBox } from './lib/secret-box.js';
 import { startYoutubeScheduler } from './modules/youtube/scheduler.js';
 
 const pageIdsOf = (value: string | undefined) =>
@@ -119,10 +127,15 @@ async function main() {
   // WhatsApp (Cloud API) queue: runs whenever the webhook can receive. The
   // webhook stores each signed body; this reads them into the deals.
   if (env.WHATSAPP_APP_SECRET && env.WHATSAPP_WEBHOOK_VERIFY_TOKEN) {
+    const whatsappConfig = whatsappConfigOf(env);
+    const whatsappSend = whatsappConfig ? { config: whatsappConfig, fetch } : null;
     const intake = startWhatsAppIntake({
       db,
       phoneNumberId: env.WHATSAPP_PHONE_NUMBER_ID ?? null,
+      wabaId: env.WHATSAPP_WABA_ID ?? null,
       log: (facts) => app.log.info(facts),
+      send: whatsappSend,
+      numbers: numbersDepsOf({ db, env }),
     });
     app.wings.whatsappKick = intake.kick;
     app.addHook('onClose', async () => intake.stop());
@@ -139,6 +152,24 @@ async function main() {
       log: (facts) => app.log.info(facts),
     });
     app.addHook('onClose', async () => sofia.stop());
+
+    // Received files go to our storage, so they outlive Meta's 30 days (docs/whatsapp/cloud-api.md).
+    const storage = storageOf(app.wings);
+    const config = whatsappConfigOf(env);
+    if (storage && config) {
+      const box = env.INTEGRATIONS_ENCRYPTION_KEY
+        ? createSecretBox(env.INTEGRATIONS_ENCRYPTION_KEY)
+        : null;
+      const files = startWhatsAppMediaStore({
+        db,
+        storage,
+        config,
+        numberConfig: (numberId) => numberConfigOf(db, box, numberId),
+        fetchImpl: fetch,
+        log: (facts) => app.log.info(facts),
+      });
+      app.addHook('onClose', async () => files.stop());
+    }
   }
 
   // CRM automations: due rules and sequence steps, then the deadline alerts, then
@@ -174,6 +205,38 @@ async function main() {
       onLeadArrivedKick(null);
       stop();
     });
+  }
+
+  // The leads' e-mail replies from the sellers' Gmail (docs/crm/automacoes.md "E-mail recebido"):
+  // every 5 minutes, only with CRM_EMAIL_REPLIES_ENABLED=true and the Google client configured.
+  const google = googleWorkspaceDepsOf(app.wings);
+  if (env.CRM_EMAIL_REPLIES_ENABLED === 'true' && google) {
+    const stop = startEmailRepliesScheduler({
+      db,
+      google,
+      storage: storageOf(app.wings),
+      maxFileBytes: env.DRIVE_MAX_FILE_BYTES,
+      minutes: 5,
+      log: (facts) => app.log.info(facts),
+    });
+    app.addHook('onClose', async () => stop());
+  }
+
+  // Prospecção: expired reservations back to free, old enrichment cleared, every
+  // 6 hours (docs/crm/prospeccao.md). Our own data only: no call to Google.
+  {
+    const stop = startProspectingRetentionScheduler({
+      db,
+      log: (facts) => app.log.info(facts),
+    });
+    app.addHook('onClose', async () => stop());
+  }
+
+  // Prospecção Instagram (docs/prospeccao/instagram-meta-lgpd.md §8.4): a prospect that did not
+  // become a lead in 30 days is deleted with its comments, every hour. Runs even with the paste off.
+  {
+    const stop = startInstagramHousekeeping({ db, log: (facts) => app.log.info(facts) });
+    app.addHook('onClose', async () => stop());
   }
 
   // YouTube channel (public data, docs/integracoes/youtube-data-api.md): one

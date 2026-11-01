@@ -40,7 +40,20 @@ import {
   type LeadSourceRuleKind,
   type ScoreCriterion,
 } from '@wings/shared';
-import { and, asc, desc, eq, gte, isNotNull, isNull, lt, notInArray, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  notInArray,
+  or,
+  sql,
+} from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   adAds,
@@ -51,6 +64,7 @@ import {
   employees,
   jobs,
   leadEnrichmentLedger,
+  crmEmailInbound,
   leadEvents,
   leadSourceRules,
   leadTrackingLinks,
@@ -63,6 +77,7 @@ import { announceLeadReturned, announceNewLead } from './crm-alerts.js';
 import {
   attachLeadContact,
   contactOnForeignDeal,
+  numberInAttendance,
   contactsOfLead,
   findOrCreateCompany,
 } from './contacts.js';
@@ -562,6 +577,16 @@ async function recentSiteFormArrival(tx: Executor, leadId: string): Promise<bool
   return event !== undefined;
 }
 
+/** The phone is in a conversation Sofia or the team is attending, with no deal yet (WA-03). */
+export class NumberInAttendanceError extends ForeignLeadError {}
+
+/** The refusal of a seller's deal (or contact) on a number in attendance (WA-03). */
+export const NUMBER_IN_ATTENDANCE_REPLY = {
+  error: 'number_in_attendance',
+  message:
+    'Esta pessoa já está em atendimento (com a Sofia ou com a equipe) e ainda não tem negociação. Peça à Diretoria para passar a conversa a você.',
+} as const;
+
 export async function upsertLead(db: Database, given: IncomingLead): Promise<UpsertResult> {
   const incoming = withFormFields(given);
   const result = await upsertLeadTx(db, incoming);
@@ -648,6 +673,15 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
       (await contactOnForeignDeal(tx, { phone, email }, incoming.mergeOnlyIfOwnedBy))
     )
       throw new ForeignLeadError();
+    // Nor a number someone is attending with no deal yet: the screen's "busy", decided here (WA-03).
+    // A deal found by e-mail with no phone would take it as a gap, and the conversation with it.
+    if (
+      incoming.mergeOnlyIfOwnedBy !== undefined &&
+      !existing?.phone &&
+      phone &&
+      (await numberInAttendance(tx, phone))
+    )
+      throw new NumberInAttendanceError();
 
     // The person is known, but their lead is closed or nobody works it: the
     // arrival opens a deal of its own (same contact, the two tied on the
@@ -998,6 +1032,7 @@ export function toLead(
       source: row.consentSource,
       text: row.consentText,
     },
+    googlePlaceId: row.googlePlaceId,
     research: {
       state: row.enrichmentState as Lead['research']['state'],
       summary: row.enrichmentSummary,
@@ -1140,6 +1175,21 @@ export async function loadLead(db: Database, id: string): Promise<LoadedLead | n
       : Promise.resolve(undefined),
     adNamesOf(db, row),
   ]);
+  // A lead's e-mail shows its text in the history too; the text itself stays only in its own table.
+  const inboundIds = events
+    .filter((event) => event.kind === 'lead.email_received')
+    .map((event) => (event.detail as { inboundId?: unknown } | null)?.inboundId)
+    .filter((value): value is string => typeof value === 'string');
+  const inboundText = new Map(
+    inboundIds.length
+      ? (
+          await db
+            .select({ id: crmEmailInbound.id, body: crmEmailInbound.body })
+            .from(crmEmailInbound)
+            .where(and(eq(crmEmailInbound.leadId, row.id), inArray(crmEmailInbound.id, inboundIds)))
+        ).map((r) => [r.id, r.body] as const)
+      : [],
+  );
   return {
     lead: toLead(row, {
       adNames,
@@ -1150,12 +1200,17 @@ export async function loadLead(db: Database, id: string): Promise<LoadedLead | n
       company: company ?? null,
       contacts,
     }),
-    events: events.map((event) => ({
-      id: event.id,
-      at: event.at.toISOString(),
-      kind: event.kind,
-      detail: (event.detail ?? {}) as Record<string, unknown>,
-    })),
+    events: events.map((event) => {
+      const detail = (event.detail ?? {}) as Record<string, unknown>;
+      const text =
+        typeof detail.inboundId === 'string' ? inboundText.get(detail.inboundId) : undefined;
+      return {
+        id: event.id,
+        at: event.at.toISOString(),
+        kind: event.kind,
+        detail: text === undefined ? detail : { ...detail, text },
+      };
+    }),
     notes,
     tasks,
     history,

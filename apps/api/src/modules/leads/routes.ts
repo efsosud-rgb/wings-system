@@ -35,6 +35,8 @@ import {
   brandOfLink,
   enqueueResearch,
   ForeignLeadError,
+  NUMBER_IN_ATTENDANCE_REPLY,
+  NumberInAttendanceError,
   funnelSummary,
   listLeads,
   loadLead,
@@ -165,6 +167,8 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
           event: { kind: 'lead.created_manually', actorEmployeeId: actor },
         });
       } catch (error) {
+        if (error instanceof NumberInAttendanceError)
+          return reply.status(409).send(NUMBER_IN_ATTENDANCE_REPLY);
         if (error instanceof ForeignLeadError)
           return reply.status(409).send({
             error: 'duplicate',

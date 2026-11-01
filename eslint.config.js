@@ -22,6 +22,8 @@ export default tseslint.config(
       '.github/agents/**',
       '.github/hooks/**',
       '.github/skills/**',
+      // One-off Google Tag Manager scripts (not product code; they run by hand, once): not linted.
+      'scripts/gtm/**',
       'packages/studio/src/**',
       'packages/studio/tests/**',
     ],
@@ -47,6 +49,15 @@ export default tseslint.config(
           'requestAnimationFrame',
           'window',
         ].map((name) => [name, 'readonly']),
+      ),
+    },
+  },
+  {
+    // The API's end-to-end runner and flows (pnpm e2e): plain Node scripts.
+    files: ['apps/api/e2e/**/*.mjs'],
+    languageOptions: {
+      globals: Object.fromEntries(
+        ['console', 'fetch', 'process', 'setTimeout', 'URL'].map((name) => [name, 'readonly']),
       ),
     },
   },

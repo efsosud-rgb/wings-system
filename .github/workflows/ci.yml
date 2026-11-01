@@ -7,7 +7,8 @@ on:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, wings]
+    timeout-minutes: 40
 
     services:
       postgres:
@@ -17,18 +18,23 @@ jobs:
           POSTGRES_PASSWORD: wings_ci
           POSTGRES_DB: wings_system
         ports:
-          - 5432:5432
+          - "127.0.0.1:5432:5432"
         options: >-
           --health-cmd "pg_isready -U wings -d wings_system"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+          --tmpfs /var/lib/postgresql/data
 
     env:
       DATABASE_URL: postgresql://wings:wings_ci@127.0.0.1:5432/wings_system
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Two commits: on a pull request HEAD is the merge commit and HEAD^1 the base branch,
+          # which the new-file size check below compares against.
+          fetch-depth: 2
 
       - uses: pnpm/action-setup@v4
 
@@ -41,7 +47,6 @@ jobs:
       - run: pnpm build
       - run: pnpm typecheck
       - run: pnpm lint
-      - run: pnpm format:check
 
       # Migrations and seeds must stay runnable from scratch. These run before
       # the tests because the API integration tests create their own throwaway
@@ -51,4 +56,23 @@ jobs:
       # Re-running the seed must be a no-op, not a duplicate-key error.
       - run: pnpm --filter @wings/api db:seed
 
-      - run: pnpm test
+      - run: pnpm -r --workspace-concurrency=1 test
+
+      # Quality gate of 27/10/2026 (docs/decisoes.md). The escalation tests of the 27/10 audit
+      # already run inside pnpm test; this named step only keeps them visible (a PR can still drop it).
+      - name: Testes de escalada de privilégio (auditoria 27/10)
+        run: pnpm --filter @wings/api exec vitest run --config ../../vitest.config.ts src/modules/employees/escalation.test.ts
+
+      # The audit's end-to-end flows against the built API on a throwaway wings_e2e database in
+      # the service above, with the network kill switch preloaded (apps/api/e2e/run.mjs).
+      - name: Fluxos de ponta a ponta (pnpm e2e)
+        run: pnpm e2e
+
+      - name: Nenhum arquivo novo com mais de 600 linhas
+        if: github.event_name == 'pull_request'
+        run: sh scripts/arquivos-novos-grandes.sh HEAD^1
+
+      # shortcut: runs last and does not block the job while the general Prettier pass is pending,
+      # so migrations, seeds and tests still run; remove continue-on-error in that pass's PR.
+      - run: pnpm format:check
+        continue-on-error: true

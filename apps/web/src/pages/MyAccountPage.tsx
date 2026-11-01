@@ -77,7 +77,8 @@ export function GoogleAccountCard() {
           <h2 id="google-title">Google Agenda, Meet e Gmail</h2>
           <p className="muted">
             Com a sua conta conectada, "Agendar reunião" cria o evento e o Meet na sua agenda ou na
-            da Wings Company, convida o lead, e o e-mail ao lead sai do seu endereço.
+            da Wings Company, convida o lead, e o e-mail ao lead sai do seu endereço; as respostas
+            dos leads aparecem na negociação.
           </p>
         </div>
         <span className={`integration-state integration-state-${current.state}`} role="status">
@@ -107,6 +108,16 @@ export function GoogleAccountCard() {
         <Alert kind="warning">
           {ERROR_TEXT[current.lastError ?? ''] ?? 'O Google parou de aceitar a sua conexão.'}{' '}
           Conecte de novo.
+        </Alert>
+      )}
+      {current.state === 'connected' && current.mailRead === 'reconnect' && (
+        <Alert kind="warning">
+          Reconecte sua conta Google para receber os e-mails dos leads. O sistema passou a ler, na
+          sua caixa, só as respostas aos e-mails das negociações e os e-mails dos contatos delas; o
+          envio continua igual até lá.{' '}
+          <button type="button" className="link-button" disabled={busy} onClick={goToGoogle}>
+            Reconectar
+          </button>
         </Alert>
       )}
       {connect.isError && (

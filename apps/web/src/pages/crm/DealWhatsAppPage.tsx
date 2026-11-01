@@ -1,17 +1,16 @@
-import { LEAD_PIPELINE_LABELS, type LeadNote } from '@wings/shared';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { hasPermission, useSession } from '../../api/auth.js';
-import { useAddNote, useLead, type LoadedLead } from '../../api/leads.js';
+import { useLead } from '../../api/leads.js';
 import { Icon } from '../../components/Icon.js';
 import { LoadFailure } from '../../components/LoadFailure.js';
-import { useWhatsAppThread } from '../../api/whatsapp.js';
+import { useConversationAttendance, useWhatsAppThread } from '../../api/whatsapp.js';
 import { CallPanel } from './CallPanel.js';
-import { FilesTab } from './DealTabs.js';
+import { DealSidePanel } from './DealSidePanel.js';
 import { ImportChatPanel } from './ImportChatPanel.js';
 import { WhatsAppChat } from './WhatsAppChat.js';
-import { EnteredAt } from './EnteredAt.js';
-import { formatDateTime, formatDay, formatPhone, money } from './format.js';
+import { AttendanceBar, heldByOf } from './WhatsAppAttendance.js';
+import { formatPhone } from './format.js';
 
 /**
  * The WhatsApp conversation of a deal, opened from its page (Eric, 06/10/2026):
@@ -137,112 +136,17 @@ export function DealWhatsAppPage() {
       )}
       <div className="crm-wa-body">
         <DealChat leadId={lead.id} canSend={canWhatsApp} />
-        <aside className="crm-wa-side">
-          <section className="crm-panel" aria-label="Visão geral">
-            <h2>Visão geral</h2>
-            <dl className="crm-kv crm-about">
-              <div style={{ display: 'contents' }}>
-                <dt>Funil</dt>
-                <dd>{lead.pipeline ? LEAD_PIPELINE_LABELS[lead.pipeline] : '—'}</dd>
-              </div>
-              <div style={{ display: 'contents' }}>
-                <dt>Etapa</dt>
-                <dd>{lead.work.stage ?? '—'}</dd>
-              </div>
-              <div style={{ display: 'contents' }}>
-                <dt>Dono</dt>
-                <dd>{lead.work.ownerName ?? '—'}</dd>
-              </div>
-              <div style={{ display: 'contents' }}>
-                <dt>Valor</dt>
-                <dd>{lead.valueCents !== null ? money(lead.valueCents, true) : '—'}</dd>
-              </div>
-              <div style={{ display: 'contents' }}>
-                <dt>Previsão</dt>
-                <dd>{lead.expectedCloseAt ? formatDay(lead.expectedCloseAt) : '—'}</dd>
-              </div>
-              {lead.company && (
-                <div style={{ display: 'contents' }}>
-                  <dt>Empresa</dt>
-                  <dd>{lead.company.name}</dd>
-                </div>
-              )}
-              <div style={{ display: 'contents' }}>
-                <dt>Entrou em</dt>
-                <dd>
-                  <EnteredAt at={lead.enteredAt} source={lead.enteredAtSource} />
-                </dd>
-              </div>
-            </dl>
-          </section>
-          <NotesPanel data={data} canWrite={canWrite} />
-          <section className="crm-panel" aria-label="Arquivos">
-            <h2>Arquivos</h2>
-            <FilesTab lead={lead} canWrite={canWrite} />
-          </section>
-        </aside>
+        <DealSidePanel data={data} canWrite={canWrite} />
       </div>
     </div>
   );
 }
 
-function NotesPanel({ data, canWrite }: { data: LoadedLead; canWrite: boolean }) {
-  const note = useAddNote(data.lead.id);
-  const [body, setBody] = useState('');
-  const notes = [...(data.notes as LeadNote[])].sort((a, b) => b.at.localeCompare(a.at));
-  return (
-    <section className="crm-panel" aria-label="Anotações">
-      <h2>Anotações</h2>
-      {canWrite && (
-        <form
-          className="crm-record-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            note.mutate({ body }, { onSuccess: () => setBody('') });
-          }}
-        >
-          <textarea
-            className="crm-textarea"
-            placeholder="Anotar sobre a conversa"
-            value={body}
-            maxLength={4000}
-            rows={2}
-            onChange={(e) => setBody(e.target.value)}
-          />
-          <div className="crm-quick-row">
-            <button
-              type="submit"
-              className="crm-btn is-small is-primary"
-              disabled={note.isPending || body.trim().length === 0}
-            >
-              Anotar
-            </button>
-          </div>
-        </form>
-      )}
-      {notes.length === 0 && <p className="crm-muted">Nenhuma anotação.</p>}
-      <ol className="crm-timeline">
-        {notes.map((item) => (
-          <li key={item.id}>
-            <span className="crm-tl-icon is-note" aria-hidden="true">
-              <Icon name="edit" size={13} />
-            </span>
-            <div>
-              <div className="crm-tl-head">
-                <b>{item.authorName ?? 'Anotação'}</b>
-                <span>{formatDateTime(item.at)}</span>
-              </div>
-              <div className="crm-tl-body">{item.body}</div>
-            </div>
-          </li>
-        ))}
-      </ol>
-    </section>
-  );
-}
-
 function DealChat({ leadId, canSend }: { leadId: string; canSend: boolean }) {
   const thread = useWhatsAppThread({ leadId }, canSend);
+  const session = useSession();
+  // Who answers it, as in the Central: a person who does not hold it takes it here too.
+  const attendance = useConversationAttendance(thread.data?.conversationId ?? null);
   if (!canSend)
     return (
       <section className="crm-wa-chat" aria-label="Conversa">
@@ -271,19 +175,46 @@ function DealChat({ leadId, canSend }: { leadId: string; canSend: boolean }) {
         )}
       </section>
     );
+  const numberChats = thread.data.numberChats ?? [];
   return (
     <WhatsAppChat
       thread={{ leadId }}
       data={thread.data}
       canSend={canSend}
+      heldBy={heldByOf(attendance.data, session.data?.employeeId)}
       notice={
-        thread.isError ? (
-          <LoadFailure
-            what="a conversa"
-            error={thread.error}
-            onRetry={() => void thread.refetch()}
-          />
-        ) : undefined
+        <>
+          {attendance.data && (
+            <AttendanceBar
+              id={attendance.data.attendance.conversationId}
+              view={attendance.data}
+              me={session.data?.employeeId ?? null}
+            />
+          )}
+          {thread.isError && (
+            <LoadFailure
+              what="a conversa"
+              error={thread.error}
+              onRetry={() => void thread.refetch()}
+            />
+          )}
+          {/* This page is the official number's; the deal's chats on work numbers open in the Central. */}
+          {numberChats.length > 0 && (
+            <p className="crm-wa-window">
+              Também pelo WhatsApp de:{' '}
+              {numberChats.map((chat, i) => (
+                <span key={chat.conversationId}>
+                  {i > 0 && ', '}
+                  <Link to={`/crm-vendas/whatsapp/${chat.conversationId}`}>
+                    {chat.number.label ??
+                      (chat.number.phone ? formatPhone(chat.number.phone) : 'número')}
+                    {chat.number.ownerName ? ` (${chat.number.ownerName})` : ''}
+                  </Link>
+                </span>
+              ))}
+            </p>
+          )}
+        </>
       }
     />
   );

@@ -2,7 +2,13 @@ import type {
   DealWhatsApp,
   WaCall,
   WaCallPermissionLive,
+  WaCallPermissionRequest,
+  WaChatNumber,
   WaConversationItem,
+  WaInboxFilter,
+  WaInboxPage,
+  WaInboxQuery,
+  WaNewTarget,
   WaBulkImport,
   WaBulkItem,
   WaImportBatch,
@@ -10,19 +16,28 @@ import type {
   WaMessage,
   WaTargets,
   WaArtLink,
+  WaSendMedia,
   WaSendText,
   WaTemplate,
   WaTemplatePreview,
   WaRingingSnapshot,
   WaTemplateSend,
+  WaFieldSpec,
+  WaManagedTemplate,
+  WaManagedTemplates,
+  WaTemplateCreate,
+  WaTemplateEdit,
+  WaAssignmentMode,
+  WaAttendanceView,
 } from '@wings/shared';
 import { waExportChatOf } from '@wings/shared';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { permissionScope, useSession } from './auth.js';
-import { api } from './client.js';
+import { api, ApiError } from './client.js';
 import { sendLeadFile } from './crm.js';
 import { openRingingStream } from './ringing-stream.js';
+import { INBOX_SUMMARY_KEY, inboxStreamDown, receiveInboxSummary } from './whatsapp-inbox.js';
 
 /**
  * The official WhatsApp of the CRM (docs/whatsapp/cloud-api.md). The open
@@ -62,7 +77,12 @@ export function useWhatsAppConversations(unanswered: boolean) {
   });
 }
 
-export type WhatsAppInboxFilter = 'all' | 'unread' | 'unanswered';
+export type WhatsAppInboxFilter = WaInboxFilter;
+
+/** The Central's selects (docs/whatsapp/central.md), on top of the tab and the search. */
+export type WhatsAppInboxNarrow = Partial<
+  Pick<WaInboxQuery, 'number' | 'sector' | 'state' | 'from' | 'to'>
+>;
 
 /** The reader's WhatsApp list (WhatsApp Web): search, unread per reader, last status. */
 /** Whether the official number is live (Eric, 14/10): until then a seller sees WhatsApp as "em breve". */
@@ -98,14 +118,73 @@ export function useSetOfficialNumber() {
   });
 }
 
-export function useWhatsAppInbox(filter: WhatsAppInboxFilter, q: string) {
+/**
+ * The Central's list, a page of 50 at a time (`fetchNextPage` for the next): the pages read as one
+ * list. Refreshed every 10 s, and at once when the stream says the inbox moved.
+ */
+export function useWhatsAppInbox(
+  filter: WhatsAppInboxFilter,
+  q: string,
+  narrow: WhatsAppInboxNarrow = {},
+) {
   const params = new URLSearchParams({ filter });
   if (q.trim()) params.set('q', q.trim());
-  return useQuery({
-    queryKey: ['whatsapp', 'conversations', 'list', filter, q.trim()],
-    queryFn: () =>
-      api.poll<{ conversations: WaConversationItem[] }>(`/whatsapp/conversations?${params}`),
+  for (const [key, value] of Object.entries(narrow)) if (value) params.set(key, value);
+  const query = useInfiniteQuery({
+    queryKey: ['whatsapp', 'conversations', 'list', params.toString()],
+    queryFn: ({ pageParam }) =>
+      api.poll<WaInboxPage>(
+        `/whatsapp/conversations?${params}${pageParam ? `&before=${encodeURIComponent(pageParam)}` : ''}`,
+      ),
+    initialPageParam: '',
+    getNextPageParam: (page) => page.next ?? undefined,
     refetchInterval: 10_000,
+  });
+  return {
+    ...query,
+    data: query.data && { conversations: query.data.pages.flatMap((page) => page.conversations) },
+  };
+}
+
+/** The work numbers the reader reaches (their own; every one at full scope). */
+export function useChatNumbers() {
+  return useQuery({
+    queryKey: ['whatsapp', 'chat-numbers'],
+    queryFn: () =>
+      api.get<{ numbers: (WaChatNumber & { sector: string | null; connected: boolean })[] }>(
+        '/whatsapp/chat-numbers',
+      ),
+    staleTime: 60_000,
+  });
+}
+
+/** A chat with no deal: the deals of its phone in the reader's reach. */
+export function useConversationDeals(id: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['whatsapp', 'conversations', 'deals', id],
+    queryFn: () => api.get<{ deals: WaNewTarget[] }>(`/whatsapp/conversations/${id}/deals`),
+    enabled,
+  });
+}
+
+/** The reader joins the chat to one of its phone's deals. */
+export function useLinkConversation(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (leadId: string) =>
+      api.post<void>(`/whatsapp/conversations/${id}/link`, { leadId }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['whatsapp', 'conversations'] }),
+  });
+}
+
+/** "Nova conversa" by a work number: its chat with the deal's phone (nothing is sent). */
+export function useStartNumberChat() {
+  return useMutation({
+    mutationFn: (input: { numberId: string; leadId: string; phone: string }) =>
+      api.post<{ conversationId: string }>(
+        `/whatsapp/chat-numbers/${input.numberId}/conversations`,
+        { leadId: input.leadId, phone: input.phone },
+      ),
   });
 }
 
@@ -119,13 +198,80 @@ export function useWhatsAppConversation(id: string | undefined) {
   });
 }
 
+/** Who answers the conversation, what the reader may do, its history (docs/whatsapp/central.md). */
+export function useConversationAttendance(id: string | null) {
+  return useQuery({
+    queryKey: ['whatsapp', 'conversations', 'attendance', id],
+    queryFn: () => api.poll<WaAttendanceView>(`/whatsapp/conversations/${id}/attendance`),
+    enabled: id !== null,
+    // "Está respondendo" lasts seconds: looked at again often while the conversation is open.
+    refetchInterval: 10_000,
+  });
+}
+
+export type AttendanceAction =
+  | { kind: 'assign'; employeeId: string | null; queue?: string }
+  | { kind: 'resolve' }
+  | { kind: 'reopen' }
+  | { kind: 'sofia'; action: 'pause' | 'resume' };
+
+/** One change of hands, made on the version the screen saw (a stale one answers 409). */
+export function useAttendanceAction(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ version, action }: { version: number; action: AttendanceAction }) => {
+      const base = `/whatsapp/conversations/${id}`;
+      if (action.kind === 'assign')
+        return api.post<void>(`${base}/assign`, {
+          version,
+          employeeId: action.employeeId,
+          ...(action.queue ? { queue: action.queue } : {}),
+        });
+      if (action.kind === 'sofia')
+        return api.post<void>(`${base}/sofia`, { version, action: action.action });
+      return api.post<void>(`${base}/${action.kind}`, { version });
+    },
+    // Refused or done, what the screen shows is looked at again.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['whatsapp', 'conversations'] }),
+  });
+}
+
+/** The composer says the reader is typing (renewed at most every 20 s while they type). */
+export function useReplying(id: string) {
+  return useMutation({
+    mutationFn: () =>
+      api.post<{ replyingName: string | null }>(`/whatsapp/conversations/${id}/replying`),
+  });
+}
+
+/** Who gets a conversation nobody holds: its queue, or the funnel's rotation. */
+export function useAssignmentMode(enabled: boolean) {
+  return useQuery({
+    queryKey: ['whatsapp', 'assignment'],
+    queryFn: () => api.get<{ mode: WaAssignmentMode }>('/whatsapp/assignment'),
+    enabled,
+  });
+}
+
+export function useSetAssignmentMode() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (mode: WaAssignmentMode) =>
+      api.put<{ mode: WaAssignmentMode }>('/whatsapp/assignment', { mode }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['whatsapp', 'assignment'] }),
+  });
+}
+
 /** The reader opened the conversation: its unread count goes to zero, for them only. */
 export function useMarkWhatsAppRead() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.passivePost<void>(`/whatsapp/conversations/${id}/read`),
-    onSuccess: () =>
-      void queryClient.invalidateQueries({ queryKey: ['whatsapp', 'conversations', 'list'] }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['whatsapp', 'conversations', 'list'] });
+      // Asked again only while the stream is down; when live, the stream brings it.
+      void queryClient.invalidateQueries({ queryKey: INBOX_SUMMARY_KEY });
+    },
   });
 }
 
@@ -140,46 +286,144 @@ export function useWhatsAppTargets(q: string) {
   });
 }
 
-export function useWhatsAppTemplates(enabled: boolean) {
+/** The official number's approved templates, or with `numberId` that work number's own (its WABA). */
+const templatesPath = (numberId: string | null) =>
+  `/whatsapp/templates${numberId ? `?numberId=${numberId}` : ''}`;
+const templatesKey = (numberId: string | null) => ['whatsapp', 'templates', numberId ?? 'official'];
+
+export function useWhatsAppTemplates(enabled: boolean, numberId: string | null = null) {
   return useQuery({
-    queryKey: ['whatsapp', 'templates'],
+    queryKey: templatesKey(numberId),
     queryFn: () =>
       api.get<{ templates: WaTemplate[]; configured: boolean; syncError: string | null }>(
-        '/whatsapp/templates',
+        templatesPath(numberId),
       ),
     enabled,
     staleTime: 5 * 60_000,
   });
 }
 
-export function useRefreshWhatsAppTemplates() {
+export function useRefreshWhatsAppTemplates(numberId: string | null = null) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: () =>
       api.get<{ templates: WaTemplate[]; configured: boolean; syncError: string | null }>(
-        '/whatsapp/templates?refresh=1',
+        `${templatesPath(numberId)}${numberId ? '&' : '?'}refresh=1`,
       ),
-    onSuccess: (data) => queryClient.setQueryData(['whatsapp', 'templates'], data),
+    onSuccess: (data) => queryClient.setQueryData(templatesKey(numberId), data),
   });
 }
+
+function afterSend(queryClient: ReturnType<typeof useQueryClient>, thread: WhatsAppThread) {
+  void queryClient.invalidateQueries({ queryKey: threadKey(thread) });
+  void queryClient.invalidateQueries({ queryKey: ['whatsapp', 'conversations'] });
+  // A person writing takes the conversation from Sofia: her screen shows it at once.
+  void queryClient.invalidateQueries({ queryKey: ['sofia'] });
+}
+
+/** CRM Vendas → WhatsApp → Modelos (docs/whatsapp/modelos.md): every template, read again from Meta. */
+export function useManagedTemplates() {
+  return useQuery({
+    queryKey: ['whatsapp', 'templates', 'manage'],
+    queryFn: () => api.get<WaManagedTemplates>('/whatsapp/templates/manage'),
+  });
+}
+
+function useTemplateWrite<T>(write: (input: T) => Promise<{ template: WaManagedTemplate }>) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: write,
+    // The prefix covers this screen's list and the sellers' list of approved templates.
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['whatsapp', 'templates'] }),
+  });
+}
+
+export const useCreateTemplate = () =>
+  useTemplateWrite((input: WaTemplateCreate) => api.post('/whatsapp/templates/manage', input));
+
+/** New words go back to Meta's review. */
+export const useEditTemplate = () =>
+  useTemplateWrite(({ id, ...input }: WaTemplateEdit & { id: string }) =>
+    api.put(`/whatsapp/templates/manage/${id}`, input),
+  );
+
+/** Only what fills each {{n}}: stays in the system, Meta sees nothing. */
+export const useSaveTemplateFields = () =>
+  useTemplateWrite(({ id, fields }: { id: string; fields: WaFieldSpec[] }) =>
+    api.put(`/whatsapp/templates/manage/${id}/fields`, { fields }),
+  );
 
 function useSend<T>(thread: WhatsAppThread, kind: 'text' | 'template') {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: T) =>
       api.post<{ message: WaMessage }>(`${threadPath(thread)}/${kind}`, input),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: threadKey(thread) });
-      void queryClient.invalidateQueries({ queryKey: ['whatsapp', 'conversations'] });
-      // A person writing takes the conversation from Sofia: her screen shows it at once.
-      void queryClient.invalidateQueries({ queryKey: ['sofia'] });
-    },
+    onSuccess: () => afterSend(queryClient, thread),
   });
 }
 
 export const useSendWhatsAppText = (thread: WhatsAppThread) => useSend<WaSendText>(thread, 'text');
 export const useSendWhatsAppTemplate = (thread: WhatsAppThread) =>
   useSend<WaTemplateSend>(thread, 'template');
+
+/**
+ * A file in the conversation: it goes up to the deal's Arquivos first (`sendLeadFile`), then the
+ * conversation sends it by its id. `uploaded` is a file already there (the one of the same name, or
+ * this one after a send that failed past the upload): it goes without going up again.
+ */
+export function useSendWhatsAppFile(thread: WhatsAppThread, leadId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      file: File | null;
+      uploaded: string | null;
+      caption: string;
+      onProgress: (fraction: number) => void;
+      onUploaded: (fileId: string) => void;
+    }) => {
+      let fileId = input.uploaded;
+      if (!fileId) {
+        if (!leadId || !input.file) throw new Error(NO_DEAL_FOR_FILES);
+        fileId = (await sendLeadFile({ leadId, file: input.file, onProgress: input.onProgress }))
+          .fileId;
+        input.onUploaded(fileId);
+      }
+      const body: WaSendMedia = { fileId, ...(input.caption ? { caption: input.caption } : {}) };
+      return api.post<{ message: WaMessage }>(`${threadPath(thread)}/media`, body);
+    },
+    onSuccess: () => afterSend(queryClient, thread),
+    // The deal's Arquivos, its count and timeline show the file that went up, whatever happened after.
+    onSettled: () => {
+      if (leadId) void queryClient.invalidateQueries({ queryKey: ['leads'] });
+    },
+  });
+}
+
+/**
+ * A voice note recorded in the conversation: the recording goes as it is, and the API converts
+ * it, keeps it in the deal's Arquivos and sends it as a WhatsApp voice message.
+ */
+export function useSendWhatsAppVoice(thread: WhatsAppThread, leadId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    // The recording's key goes with it: a second try of the same one gets the audio that went.
+    mutationFn: (input: { recording: Blob; key: string }) =>
+      api.upload<{ message: WaMessage }>(`${threadPath(thread)}/voice`, input.recording, {
+        'Idempotency-Key': input.key,
+      }),
+    onSuccess: () => afterSend(queryClient, thread),
+    // The deal's Arquivos show the audio kept there. A refusal by the API kept nothing, so the
+    // deals are not read again; a network error may hide a send that went, so they are.
+    onSettled: (_data, error) => {
+      if (leadId && !(error instanceof ApiError))
+        void queryClient.invalidateQueries({ queryKey: ['leads'] });
+    },
+  });
+}
+
+/** Why a conversation with no deal sends no file (the API says the same). */
+export const NO_DEAL_FOR_FILES =
+  'O arquivo fica nos arquivos da negociação: esta conversa ainda não tem negociação.';
 
 /**
  * What the chosen template becomes now (a common message inside the window,
@@ -225,10 +469,24 @@ export function useCallPermission(leadId: string, enabled: boolean) {
   });
 }
 
+/** The call-request template for this deal (outside the window), before it goes. Sends nothing. */
+export function useCallRequestPreview(leadId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['whatsapp', 'call-request-preview', leadId],
+    queryFn: () =>
+      api.post<{ preview: WaTemplatePreview }>(`/leads/${leadId}/whatsapp/call-permission/preview`),
+    enabled,
+    staleTime: 0,
+    retry: false,
+  });
+}
+
+/** No input: Meta's free request (inside the window); `template`: by the approved template. */
 export function useRequestCallPermission(leadId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: () => api.post<{ message: WaMessage }>(`/leads/${leadId}/whatsapp/call-permission`),
+    mutationFn: (input?: WaCallPermissionRequest) =>
+      api.post<{ message: WaMessage }>(`/leads/${leadId}/whatsapp/call-permission`, input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['whatsapp', 'call-permission', leadId] });
       void queryClient.invalidateQueries({ queryKey: threadKey({ leadId }) });
@@ -260,11 +518,17 @@ export function useRingingCalls(enabled: boolean) {
           .cancelQueries({ queryKey: RINGING_KEY })
           .then(() => queryClient.setQueryData(RINGING_KEY, snapshot));
       },
-      onLive: setLive,
+      // The same stream brings the inbox: the menu's count, and new messages at once.
+      onInbox: (summary) => receiveInboxSummary(queryClient, summary),
+      onLive: (live) => {
+        setLive(live);
+        if (!live) inboxStreamDown(queryClient);
+      },
     });
     return () => {
       close();
       setLive(false);
+      inboxStreamDown(queryClient);
     };
   }, [enabled, queryClient]);
 

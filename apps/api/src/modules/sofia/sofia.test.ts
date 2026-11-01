@@ -7,6 +7,7 @@ import {
   type RoleKey,
   type SofiaConversationDetail,
   type SofiaSettings,
+  type WaAttendanceView,
 } from '@wings/shared';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -16,6 +17,7 @@ import type { Database } from '../../db/client.js';
 import {
   auditLog,
   clients,
+  contactOptOuts,
   crmContacts,
   crmDistributionMembers,
   crmNotifications,
@@ -27,6 +29,7 @@ import {
   sofiaAiRuns,
   waTemplates,
   waContacts,
+  waConversationEvents,
   waConversations,
   waMessages,
 } from '../../db/schema/index.js';
@@ -41,7 +44,7 @@ import {
 import type { AgentLlm, LlmRequest } from '../agent/llm.js';
 import { whatsappConfigOf } from '../whatsapp/graph.js';
 import { processWhatsAppEvents } from '../whatsapp/intake.js';
-import { guardReply } from './brain.js';
+import { guardReply, SOFIA_ACKNOWLEDGEMENTS } from './brain.js';
 import { nameFrom, runDueSofiaTurns, type SofiaDeps } from './engine.js';
 import { saveSofiaSettings } from './settings.js';
 
@@ -76,12 +79,24 @@ const sends: Record<string, unknown>[] = [];
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 let sent = 0;
+/** What Meta (simulated) does with the next sends: refuse with a code, or never answer. */
+let metaNext: (number | 'silence')[] = [];
 const whatsappFetch = (async (input: string | URL | Request, init?: RequestInit) => {
   const url = new URL(
     typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
   );
   if (url.pathname.endsWith(`/${PHONE_ID}/messages`)) {
     sends.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    const meanwhile = duringSend;
+    duringSend = null;
+    if (meanwhile) await meanwhile();
+    const next = metaNext.shift();
+    if (next === 'silence') throw new Error('timeout');
+    if (next !== undefined)
+      return json(
+        { error: { code: next, message: 'Recipient phone number not in allowed list' } },
+        400,
+      );
     return json({ messaging_product: 'whatsapp', messages: [{ id: `wamid.SOFIA${++sent}` }] });
   }
   if (url.pathname.endsWith(`/${PHONE_ID}/settings`))
@@ -92,9 +107,16 @@ const whatsappFetch = (async (input: string | URL | Request, init?: RequestInit)
 /** The model, scripted: each call takes the next answer (or throws). */
 const llmCalls: LlmRequest[] = [];
 let llmAnswers: (Record<string, unknown> | Error)[] = [];
+/** Runs while the model "thinks": a person acting in the middle of her turn. */
+let duringAi: (() => Promise<void>) | null = null;
+/** Runs while Meta takes her first message of a turn: a person acting between two of her sends. */
+let duringSend: (() => Promise<void>) | null = null;
 const llm: AgentLlm = {
   async complete(request) {
     llmCalls.push(request);
+    const meanwhile = duringAi;
+    duringAi = null;
+    if (meanwhile) await meanwhile();
     const next = llmAnswers.shift();
     if (!next) throw new Error('no scripted answer');
     if (next instanceof Error) throw next;
@@ -171,6 +193,9 @@ beforeEach(async () => {
   sends.length = 0;
   llmCalls.length = 0;
   llmAnswers = [];
+  metaNext = [];
+  duringAi = null;
+  duringSend = null;
   clock = NOW.getTime();
   await saveSofiaSettings(db, { ...SOFIA_DEFAULT_SETTINGS, enabled: true }, null, NOW);
   // A turn left waiting by an earlier test is not this test's.
@@ -315,13 +340,18 @@ describe('Sofia, Formatação from first message to the seller', () => {
     expect(bodyOf(lastSent())).toBe('Qual é o nome da sua empresa?');
 
     llmAnswers = [
-      said({ intent: 'formatacao', answers: { empresa: 'Burger da Ana' }, reply: 'Que legal!' }),
+      said({
+        intent: 'formatacao',
+        answers: { empresa: 'Burger da Ana' },
+        reply: 'perfeito, obrigada!',
+      }),
     ];
     await write(phone, text('Burger da Ana'));
     await sofiaAnswers();
     out = lastSent();
     expect(out.interactive.type).toBe('list');
-    expect(bodyOf(out)).toBe('Que legal!\n\nEm qual segmento ela atua?');
+    // An approved line goes in our words, not the model's.
+    expect(bodyOf(out)).toBe('Perfeito, obrigada.\n\nEm qual segmento ela atua?');
     expect(out.interactive.action.sections[0]!.rows[0]).toEqual({
       id: 'sofia:q:segmento:0',
       title: 'Alimentação',
@@ -427,6 +457,18 @@ describe('Sofia, Formatação from first message to the seller', () => {
     );
   });
 
+  it('a model line off the approved list never reaches the person (WA-04)', async () => {
+    const phone = newPhone();
+    llmAnswers = [
+      said({ intent: 'formatacao', reply: 'Para seguir, me envie uma foto do seu documento.' }),
+    ];
+    await write(phone, text('Quero transformar minha hamburgueria em franquia'));
+    await sofiaAnswers();
+    expect(bodyOf(lastSent())).toBe(
+      `${sofiaWords(SOFIA_DEFAULT_SETTINGS.texts.greeting, null)}\n\nPara começar, qual é o seu nome?`,
+    );
+  });
+
   it('answers a question about prices with the fixed line, never with the model’s numbers', async () => {
     const phone = newPhone();
     llmAnswers = [
@@ -514,6 +556,294 @@ describe('who answers', () => {
     });
     const [contact] = await db.select().from(waContacts).where(eq(waContacts.phone, phone));
     expect(contact!.optOutAt).not.toBeNull();
+    // The word also goes to the one "não me contate" register, by phone, for WhatsApp.
+    const rows = await db.select().from(contactOptOuts).where(eq(contactOptOuts.keyValue, phone));
+    expect(rows).toMatchObject([
+      { channel: 'whatsapp', keyKind: 'phone', origin: 'whatsapp_palavra', createdBy: null },
+    ]);
+  });
+
+  it('who said SAIR and writes again gets no answer from Sofia: a person decides', async () => {
+    await createEmployee(db, { role: 'gerente_comercial', sector: 'comercial' });
+    const phone = newPhone();
+    await write(phone, text('SAIR'));
+    await sofiaAnswers();
+    const before = sends.length;
+    llmAnswers = [said({ intent: 'formatacao' })];
+    await write(phone, text('mudei de ideia, quero saber mais'));
+    await sofiaAnswers();
+    expect(sends.length).toBe(before);
+    expect(llmCalls).toHaveLength(0);
+    const conversation = await conversationOf(phone);
+    expect(conversation).toMatchObject({ attendance: 'waiting_human', reason: 'nao_me_contate' });
+    const notices = await db
+      .select()
+      .from(crmNotifications)
+      .where(eq(crmNotifications.kind, 'contact_opt_out_wrote'));
+    expect(notices.length).toBeGreaterThan(0);
+    expect(notices[0]!.message).toContain('Pediu para não ser contatado e escreveu de novo');
+  });
+
+  it('a second SAIR gets no second confirmation: the conversation waits for a person (WA-12)', async () => {
+    await createEmployee(db, { role: 'gerente_comercial', sector: 'comercial' });
+    const phone = newPhone();
+    await write(phone, text('SAIR'));
+    await sofiaAnswers();
+    expect(bodyOf(lastSent())).toBe(SOFIA_DEFAULT_SETTINGS.texts.optOut);
+    const before = sends.length;
+    clock += 60_000;
+    await write(phone, text('parar'));
+    await sofiaAnswers();
+    expect(sends.length).toBe(before);
+    expect(llmCalls).toHaveLength(0);
+    expect(await conversationOf(phone)).toMatchObject({
+      attendance: 'waiting_human',
+      reason: 'nao_me_contate',
+    });
+  });
+
+  it('who asked to stop in words, or in the CRM, and then sends SAIR hears nothing more from her', async () => {
+    const worded = newPhone();
+    llmAnswers = [said({ intent: 'nao_contatar' })];
+    await write(worded, text('não quero mais receber mensagens de vocês'));
+    await sofiaAnswers();
+    expect(bodyOf(lastSent())).toBe(SOFIA_DEFAULT_SETTINGS.texts.optOut);
+    const registered = newPhone();
+    await db.insert(contactOptOuts).values({
+      channel: 'all',
+      keyKind: 'phone',
+      keyValue: registered,
+      origin: 'crm',
+      reason: 'Pediu por telefone',
+    });
+    const before = sends.length;
+    for (const phone of [worded, registered]) {
+      clock += 60_000;
+      await write(phone, text('SAIR'));
+      await sofiaAnswers();
+      expect(await conversationOf(phone)).toMatchObject({
+        attendance: 'waiting_human',
+        reason: 'nao_me_contate',
+      });
+    }
+    expect(sends.length).toBe(before);
+  });
+
+  it('who asked in words before her confirmations were marked, and sends SAIR now, hears nothing more', async () => {
+    await createEmployee(db, { role: 'gerente_comercial', sector: 'comercial' });
+    const phone = newPhone();
+    llmAnswers = [said({ intent: 'nao_contatar' })];
+    await write(phone, text('não quero mais receber mensagens de vocês'));
+    await sofiaAnswers();
+    expect(bodyOf(lastSent())).toBe(SOFIA_DEFAULT_SETTINGS.texts.optOut);
+    // As it was before PR #69: the confirmation without its mark, the register row days old.
+    await db
+      .update(waMessages)
+      .set({ content: {} })
+      .where(
+        and(
+          eq(waMessages.author, 'sofia'),
+          eq(waMessages.text, SOFIA_DEFAULT_SETTINGS.texts.optOut),
+        ),
+      );
+    await db
+      .update(contactOptOuts)
+      .set({ createdAt: new Date(Date.now() - 3 * 86_400_000) })
+      .where(eq(contactOptOuts.keyValue, phone));
+    const before = sends.length;
+    clock += 60_000;
+    await write(phone, text('SAIR'));
+    await sofiaAnswers();
+    expect(sends.length).toBe(before);
+    expect(await conversationOf(phone)).toMatchObject({
+      attendance: 'waiting_human',
+      reason: 'nao_me_contate',
+    });
+  });
+
+  it('a SAIR said before from the same phone without its 9th digit, or from another phone of the deal, counts', async () => {
+    await createEmployee(db, { role: 'gerente_comercial', sector: 'comercial' });
+    // An older contact row kept the number as Meta gave it, without the 9th digit.
+    const phone = newPhone();
+    const [old] = await db
+      .insert(waContacts)
+      .values({ phone: phone.slice(0, 4) + phone.slice(5) })
+      .returning();
+    const [oldChat] = await db
+      .insert(waConversations)
+      .values({ contactId: old!.id, attendance: 'closed', reason: 'nao_contatar' })
+      .returning();
+    await db.insert(waMessages).values({
+      conversationId: oldChat!.id,
+      contactId: old!.id,
+      direction: 'in',
+      author: 'contact',
+      kind: 'text',
+      text: 'SAIR',
+    });
+
+    // The deal's main phone said SAIR (and heard the confirmation) before the deal was made.
+    const main = newPhone();
+    await write(main, text('SAIR'));
+    await sofiaAnswers();
+    expect(bodyOf(lastSent())).toBe(SOFIA_DEFAULT_SETTINGS.texts.optOut);
+    const [lead] = await db
+      .insert(leads)
+      .values({
+        source: 'manual',
+        name: 'Negociação fictícia',
+        phone: main,
+        pipeline: 'formatacao',
+      })
+      .returning({ id: leads.id });
+    const other = newPhone();
+    const [contact] = await db
+      .insert(crmContacts)
+      .values({ name: 'Sócio fictício', phone: other })
+      .returning();
+    await db.insert(leadContacts).values({ leadId: lead!.id, contactId: contact!.id });
+
+    const before = sends.length;
+    for (const from of [phone, other]) {
+      clock += 60_000;
+      await write(from, text('SAIR'));
+      expect((await conversationOf(from)).leadId).toBe(from === other ? lead!.id : null);
+      await sofiaAnswers();
+      expect(await conversationOf(from), from).toMatchObject({
+        attendance: 'waiting_human',
+        reason: 'nao_me_contate',
+      });
+    }
+    expect(sends.length).toBe(before);
+
+    // A third phone: one partner of a deal said SAIR in the deal's chat, another says it now.
+    const [shared] = await db
+      .insert(leads)
+      .values({
+        source: 'manual',
+        name: 'Outra negociação',
+        phone: newPhone(),
+        pipeline: 'formatacao',
+      })
+      .returning({ id: leads.id });
+    const partners = [newPhone(), newPhone()];
+    for (const [i, partner] of partners.entries()) {
+      const [row] = await db
+        .insert(crmContacts)
+        .values({ name: `Sócio ${i + 1}`, phone: partner })
+        .returning();
+      await db.insert(leadContacts).values({ leadId: shared!.id, contactId: row!.id });
+    }
+    const [first] = await db.insert(waContacts).values({ phone: partners[0]! }).returning();
+    const [firstChat] = await db
+      .insert(waConversations)
+      .values({ contactId: first!.id, leadId: shared!.id, attendance: 'waiting_human' })
+      .returning();
+    await db.insert(waMessages).values({
+      conversationId: firstChat!.id,
+      contactId: first!.id,
+      leadId: shared!.id,
+      direction: 'in',
+      author: 'contact',
+      kind: 'text',
+      text: 'parar',
+    });
+    clock += 60_000;
+    await write(partners[1]!, text('SAIR'));
+    expect((await conversationOf(partners[1]!)).leadId).toBe(shared!.id);
+    await sofiaAnswers();
+    expect(await conversationOf(partners[1]!)).toMatchObject({
+      attendance: 'waiting_human',
+      reason: 'nao_me_contate',
+    });
+    expect(sends.length).toBe(before);
+  });
+
+  it('a "não me contate" recorded while the model reads stops what she was about to say', async () => {
+    const phone = newPhone();
+    llmAnswers = [said({ intent: 'indefinido' })];
+    duringAi = async () => {
+      await db.insert(contactOptOuts).values({
+        channel: 'whatsapp',
+        keyKind: 'phone',
+        keyValue: phone,
+        origin: 'crm',
+        reason: 'Pediu por telefone',
+      });
+    };
+    const before = sends.length;
+    await write(phone, text('oi'));
+    await sofiaAnswers();
+    expect(llmCalls).toHaveLength(1);
+    expect(sends.length).toBe(before);
+  });
+
+  it('after a SAIR the team cannot write either, even after the person writes again, until a manager revokes', async () => {
+    const admin = await sessionFor('admin_master');
+    const phone = newPhone();
+    await write(phone, text('SAIR'));
+    await sofiaAnswers();
+    const conversation = await conversationOf(phone);
+    const before = sends.length;
+    const writeToo = () =>
+      app.inject({
+        method: 'POST',
+        url: `/whatsapp/conversations/${conversation.id}/text`,
+        cookies: admin.cookies,
+        payload: { text: 'Posso ajudar em algo?' },
+      });
+    const refused = await writeToo();
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({ error: 'contact_blocked' });
+    // A sticker is not writing again.
+    await write(phone, { type: 'sticker', sticker: { id: 'st2', mime_type: 'image/webp' } });
+    expect((await writeToo()).statusCode).toBe(409);
+    expect(sends.length).toBe(before);
+
+    clock += 60_000;
+    await write(phone, text('na verdade quero falar com alguém'));
+    await sofiaAnswers();
+    expect(sends.length).toBe(before);
+    expect(await conversationOf(phone)).toMatchObject({ attendance: 'waiting_human' });
+    // Inside the window, still nothing goes (Eric, 31/10): the block is lifted in the CRM only.
+    expect((await writeToo()).statusCode).toBe(409);
+    expect(sends.length).toBe(before);
+    await db
+      .update(contactOptOuts)
+      .set({ revokedAt: new Date(clock), revokedBy: admin.id, revokedReason: 'Voltou a pedir' })
+      .where(eq(contactOptOuts.keyValue, phone));
+    expect((await writeToo()).statusCode).toBe(201);
+    expect(sends.length).toBe(before + 1);
+  });
+
+  it('a "não me contate" from the CRM, or the Prospecção opt-in rule, keeps Sofia quiet too', async () => {
+    const registered = newPhone();
+    await db.insert(contactOptOuts).values({
+      channel: 'all',
+      keyKind: 'phone',
+      keyValue: registered,
+      origin: 'crm',
+      reason: 'Pediu por telefone',
+    });
+    const prospected = newPhone();
+    await db.insert(leads).values({
+      source: 'google_places',
+      name: 'Empresa da prospecção',
+      phone: prospected,
+      pipeline: 'formatacao',
+      legalBasis: 'legitimate_interest',
+      consentSource: 'prospeccao',
+    });
+    const before = sends.length;
+    for (const phone of [registered, prospected]) {
+      await write(phone, text('oi'));
+      await sofiaAnswers();
+      expect(await conversationOf(phone)).toMatchObject({
+        attendance: 'waiting_human',
+        reason: 'nao_me_contate',
+      });
+    }
+    expect(sends.length).toBe(before);
   });
 
   it('an AI failure sends the fixed line and a person takes over', async () => {
@@ -1001,6 +1331,11 @@ describe('what the review found (each was a real path)', () => {
       cookies: admin.cookies,
       payload: { action: 'close' },
     });
+    // The PARAR went to the register: a manager revoked it (the person's choice), Sofia may talk.
+    await db
+      .update(contactOptOuts)
+      .set({ revokedAt: new Date(), revokedReason: 'Pediu para continuar' })
+      .where(eq(contactOptOuts.keyValue, phone));
     llmAnswers = [said({ intent: 'formatacao' })];
     await write(phone, text('Quero franquear minha empresa'));
     await sofiaAnswers();
@@ -1162,6 +1497,14 @@ describe('what the review found (each was a real path)', () => {
     await write(other, text('oi, sou o sócio'));
     const conversation = await conversationOf(other);
     expect(conversation.leadId).toBe(lead!.id);
+    // The deal is the seller's: the Admin takes the conversation before writing (attendance.ts).
+    const take = await app.inject({
+      method: 'POST',
+      url: `/whatsapp/conversations/${conversation.id}/assign`,
+      cookies: admin.cookies,
+      payload: { version: conversation.version, employeeId: admin.id },
+    });
+    expect(take.statusCode).toBe(204);
     const res = await app.inject({
       method: 'POST',
       url: `/whatsapp/conversations/${conversation.id}/text`,
@@ -1187,15 +1530,396 @@ describe('what the review found (each was a real path)', () => {
   });
 });
 
+/** A delivery status of one of our messages, as Meta sends it later (made-up data). */
+function statusBody(wamid: string, status: 'sent' | 'delivered' | 'failed', code?: number) {
+  return JSON.stringify({
+    object: 'whatsapp_business_account',
+    entry: [
+      {
+        id: WABA,
+        changes: [
+          {
+            field: 'messages',
+            value: {
+              messaging_product: 'whatsapp',
+              metadata: { display_phone_number: '15556696643', phone_number_id: PHONE_ID },
+              statuses: [
+                {
+                  id: wamid,
+                  status,
+                  timestamp: unix(new Date(clock)),
+                  recipient_id: '5521900000000',
+                  ...(code ? { errors: [{ code, title: 'Message undeliverable' }] } : {}),
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  });
+}
+async function metaSays(payload: string) {
+  const res = await app.inject({
+    method: 'POST',
+    url: '/integrations/whatsapp/webhook',
+    headers: { 'content-type': 'application/json', 'x-hub-signature-256': sign(payload) },
+    payload,
+  });
+  expect(res.statusCode).toBe(200);
+  await processWhatsAppEvents({
+    db,
+    phoneNumberId: PHONE_ID,
+    log: () => {},
+    now: () => new Date(clock),
+  });
+}
+const answersOf = async (phone: string) =>
+  ((await conversationOf(phone)).sofiaFacts as { answers: Record<string, string> }).answers;
+const sofiaMessages = async (phone: string) => {
+  const conversation = await conversationOf(phone);
+  return db
+    .select({ text: waMessages.text, status: waMessages.status, wamid: waMessages.wamid })
+    .from(waMessages)
+    .where(and(eq(waMessages.conversationId, conversation.id), eq(waMessages.author, 'sofia')))
+    .orderBy(waMessages.createdAt);
+};
+
+/** The person starts, taps "Franquear negócio": the next question is the name. */
+async function upToTheName(phone: string) {
+  await write(phone, text('oi'));
+  llmAnswers = [said({ intent: 'indefinido' })];
+  await sofiaAnswers();
+  await write(phone, tap('sofia:formatacao', 'Franquear negócio'));
+}
+
+describe('her state moves only when Meta took the message (staging, 26/10)', () => {
+  it('the name question refused with 131030: the next "Teste" is not the name; she asks again', async () => {
+    const phone = newPhone();
+    await upToTheName(phone);
+    metaNext = [131030];
+    await sofiaAnswers();
+    expect(bodyOf(lastSent())).toBe('Para começar, qual é o seu nome?');
+    expect((await sofiaMessages(phone)).at(-1)).toMatchObject({ status: 'failed', wamid: null });
+
+    // The person never saw the question and writes something else.
+    sends.length = 0;
+    await write(phone, text('Teste'));
+    await sofiaAnswers();
+    expect(await answersOf(phone)).not.toHaveProperty('nome');
+    expect(sends).toHaveLength(1);
+    expect(bodyOf(lastSent())).toBe('Para começar, qual é o seu nome?');
+    expect(llmCalls).toHaveLength(1);
+    expect((await conversationOf(phone)).sofiaMisses).toBe(0);
+
+    // This time it went: the answer to it is the name.
+    await write(phone, text('Ana Paula'));
+    await sofiaAnswers();
+    expect((await answersOf(phone)).nome).toBe('Ana Paula');
+    expect(bodyOf(lastSent())).toBe('Qual é o nome da sua empresa?');
+  });
+
+  it('refused twice in a row: a person takes over, and nothing else is sent', async () => {
+    const phone = newPhone();
+    await upToTheName(phone);
+    metaNext = [131030, 131030];
+    await sofiaAnswers();
+    await write(phone, text('Teste'));
+    await sofiaAnswers();
+    sends.length = 0;
+    await write(phone, text('Oi?'));
+    await sofiaAnswers();
+    expect(sends).toHaveLength(0);
+    expect(await conversationOf(phone)).toMatchObject({
+      attendance: 'waiting_human',
+      reason: 'envio_recusado',
+    });
+    expect(await answersOf(phone)).not.toHaveProperty('nome');
+  });
+
+  it('a question Meta took and failed later (the status webhook) is asked again too', async () => {
+    const phone = newPhone();
+    await upToTheName(phone);
+    await sofiaAnswers();
+    const question = (await sofiaMessages(phone)).at(-1)!;
+    expect(question.status).toBe('sent');
+    await metaSays(statusBody(question.wamid!, 'failed', 131026));
+    sends.length = 0;
+    await write(phone, text('Teste'));
+    await sofiaAnswers();
+    expect(await answersOf(phone)).not.toHaveProperty('nome');
+    expect(bodyOf(lastSent())).toBe('Para começar, qual é o seu nome?');
+  });
+
+  it('with no answer from Meta, and her very first words lost, she introduces herself again', async () => {
+    const phone = newPhone();
+    await write(phone, text('oi'));
+    llmAnswers = [said({ intent: 'indefinido' })];
+    metaNext = ['silence'];
+    await sofiaAnswers();
+    expect((await sofiaMessages(phone)).at(-1)).toMatchObject({ status: 'pending', wamid: null });
+    sends.length = 0;
+    await write(phone, text('alô'));
+    await sofiaAnswers();
+    expect(llmCalls).toHaveLength(1);
+    expect(bodyOf(lastSent())).toContain('atendente virtual da Wings');
+    expect(lastSent().interactive.action.buttons.map((b) => b.reply.title)).toContain(
+      'Franquear negócio',
+    );
+  });
+});
+
+describe('Sofia per conversation, and a person in the middle of her turn', () => {
+  it("paused: she stops, never takes it again (even after it ends), until someone with Sofia's screen turns her on", async () => {
+    const admin = await sessionFor('admin_master');
+    const phone = newPhone();
+    await upToTheName(phone);
+    await sofiaAnswers();
+    let conversation = await conversationOf(phone);
+    const pause = await app.inject({
+      method: 'POST',
+      url: `/whatsapp/conversations/${conversation.id}/sofia`,
+      cookies: admin.cookies,
+      payload: { version: conversation.version, action: 'pause' },
+    });
+    expect(pause.statusCode).toBe(204);
+    expect(await conversationOf(phone)).toMatchObject({
+      attendance: 'waiting_human',
+      reason: 'sofia_pausada',
+      sofiaPaused: true,
+    });
+    sends.length = 0;
+    await write(phone, text('Ana Paula'));
+    expect(await sofiaAnswers()).toBe(0);
+    conversation = await conversationOf(phone);
+    await app.inject({
+      method: 'POST',
+      url: `/whatsapp/conversations/${conversation.id}/resolve`,
+      cookies: admin.cookies,
+      payload: { version: conversation.version },
+    });
+    await write(phone, text('Voltei'));
+    expect(await sofiaAnswers()).toBe(0);
+    expect(sends).toHaveLength(0);
+    expect(await conversationOf(phone)).toMatchObject({
+      attendance: 'waiting_human',
+      reason: 'sofia_pausada',
+    });
+
+    // A seller does not turn her on; the Admin does, and she answers the next message only.
+    conversation = await conversationOf(phone);
+    const seller = await sessionFor('vendedor_formatacao');
+    await db
+      .update(waConversations)
+      .set({ assigneeEmployeeId: seller.id })
+      .where(eq(waConversations.id, conversation.id));
+    const bySeller = await app.inject({
+      method: 'POST',
+      url: `/whatsapp/conversations/${conversation.id}/sofia`,
+      cookies: seller.cookies,
+      payload: { version: conversation.version, action: 'resume' },
+    });
+    expect(bySeller.statusCode).toBe(403);
+    const byAdmin = await app.inject({
+      method: 'POST',
+      url: `/whatsapp/conversations/${conversation.id}/sofia`,
+      cookies: admin.cookies,
+      payload: { version: conversation.version, action: 'resume' },
+    });
+    expect(byAdmin.statusCode).toBe(204);
+    expect(await conversationOf(phone)).toMatchObject({ attendance: 'sofia', sofiaPaused: false });
+    const events = await db
+      .select({ kind: waConversationEvents.kind })
+      .from(waConversationEvents)
+      .where(eq(waConversationEvents.conversationId, conversation.id));
+    expect(events.map((e) => e.kind)).toEqual(
+      expect.arrayContaining(['sofia_paused', 'sofia_resumed']),
+    );
+  });
+
+  it("a person's message stops her at once, and it is in the history", async () => {
+    const admin = await sessionFor('admin_master');
+    const phone = newPhone();
+    await upToTheName(phone);
+    const conversation = await conversationOf(phone);
+    expect(conversation.sofiaDueAt).not.toBeNull();
+    const res = await app.inject({
+      method: 'POST',
+      url: `/whatsapp/conversations/${conversation.id}/text`,
+      cookies: admin.cookies,
+      payload: { text: 'Oi! Aqui é uma pessoa do time.' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(await sofiaAnswers()).toBe(0);
+    expect(await conversationOf(phone)).toMatchObject({
+      attendance: 'with_person',
+      assigneeEmployeeId: admin.id,
+    });
+    const [event] = await db
+      .select({ kind: waConversationEvents.kind })
+      .from(waConversationEvents)
+      .where(eq(waConversationEvents.conversationId, conversation.id));
+    expect(event?.kind).toBe('sofia_suspended');
+  });
+
+  it('a person takes it and gives it back while she thinks: the version moved, her answer never goes', async () => {
+    const admin = await sessionFor('admin_master');
+    const phone = newPhone();
+    await write(phone, text('oi'));
+    const conversation = await conversationOf(phone);
+    duringAi = async () => {
+      for (const action of ['take', 'give_back'])
+        expect(
+          (
+            await app.inject({
+              method: 'POST',
+              url: `/sofia/conversations/${conversation.id}/attendance`,
+              cookies: admin.cookies,
+              payload: { action },
+            })
+          ).statusCode,
+        ).toBe(200);
+    };
+    llmAnswers = [said({ intent: 'indefinido' })];
+    sends.length = 0;
+    await sofiaAnswers();
+    expect(llmCalls).toHaveLength(1);
+    expect(sends).toHaveLength(0);
+    expect((await conversationOf(phone)).attendance).toBe('sofia');
+  });
+
+  it('a person who takes it between two of her messages of one turn stops the second one', async () => {
+    const admin = await sessionFor('admin_master');
+    // A long greeting and the values text: her first words go as their own text, then the buttons.
+    await saveSofiaSettings(
+      db,
+      {
+        ...SOFIA_DEFAULT_SETTINGS,
+        enabled: true,
+        texts: {
+          ...SOFIA_DEFAULT_SETTINGS.texts,
+          // Each {quem} becomes "da Wings Company": the greeting grows past Meta's 1,024 with the values.
+          greeting: `Olá! Sou a atendente virtual {quem}. ${'{quem} '.repeat(50)}`,
+          values: `Sobre valores: ${'quem passa os números é o time. '.repeat(8)}`,
+        },
+      },
+      null,
+      NOW,
+    );
+    const phone = newPhone();
+    await write(phone, text('oi, quanto custa?'));
+    const conversation = await conversationOf(phone);
+    duringSend = async () => {
+      const take = await app.inject({
+        method: 'POST',
+        url: `/sofia/conversations/${conversation.id}/attendance`,
+        cookies: admin.cookies,
+        payload: { action: 'take' },
+      });
+      expect(take.statusCode).toBe(200);
+    };
+    llmAnswers = [said({ intent: 'indefinido', asked_values: true })];
+    sends.length = 0;
+    await sofiaAnswers();
+    expect(sends).toHaveLength(1);
+    expect((sends[0] as unknown as Sent).type).toBe('text');
+    expect((await conversationOf(phone)).attendance).toBe('with_person');
+  });
+
+  it('her handover leaves its reason and what she found out on the Central panel', async () => {
+    const admin = await sessionFor('admin_master');
+    const phone = newPhone();
+    await upToTheName(phone);
+    await sofiaAnswers();
+    await write(phone, text('Ana Paula'));
+    await sofiaAnswers();
+    llmAnswers = [said({ intent: 'quer_pessoa' })];
+    await write(phone, text('quero falar com uma pessoa'));
+    await sofiaAnswers();
+    const conversation = await conversationOf(phone);
+    expect(conversation.attendance).toBe('waiting_human');
+    const res = await app.inject({
+      method: 'GET',
+      url: `/whatsapp/conversations/${conversation.id}/attendance`,
+      cookies: admin.cookies,
+    });
+    const view = res.json<WaAttendanceView>();
+    expect(view.attendance.sofia).toEqual({
+      reason: 'Pediu para falar com uma pessoa',
+      facts: [expect.objectContaining({ key: 'nome', answer: 'Ana Paula' })],
+    });
+    expect(view.events[0]).toMatchObject({ kind: 'sofia_handoff', actorName: null });
+  });
+});
+
+describe("Sofia's list", () => {
+  it('goes 50 at a time and past the 200 where it used to stop', async () => {
+    const admin = await sessionFor('admin_master');
+    const newest = Date.parse('2030-01-01T00:00:00Z');
+    const contacts = await db
+      .insert(waContacts)
+      .values(
+        Array.from({ length: 260 }, (_, i) => ({ phone: `55218${String(i).padStart(8, '0')}` })),
+      )
+      .returning({ id: waContacts.id });
+    await db.insert(waConversations).values(
+      contacts.map((contact, i) => ({
+        contactId: contact.id,
+        attendance: 'waiting_human',
+        lastMessageAt: new Date(newest - i * 1_000),
+      })),
+    );
+    const seen: string[] = [];
+    let next: string | null = '';
+    let pages = 0;
+    while (next !== null) {
+      const url: string = `/sofia/conversations${next ? `?before=${encodeURIComponent(next)}` : ''}`;
+      const res = await app.inject({ method: 'GET', url, cookies: admin.cookies });
+      expect(res.statusCode).toBe(200);
+      const page: { conversations: { conversationId: string }[]; next: string | null } = res.json();
+      if (pages === 0) expect(page.conversations).toHaveLength(50);
+      seen.push(...page.conversations.map((c) => c.conversationId));
+      next = page.next;
+      pages++;
+    }
+    expect(seen.length).toBeGreaterThanOrEqual(260);
+    expect(new Set(seen).size).toBe(seen.length);
+    expect(
+      (
+        await app.inject({
+          method: 'GET',
+          url: '/sofia/conversations?before=nonsense',
+          cookies: admin.cookies,
+        })
+      ).statusCode,
+    ).toBe(400);
+  });
+});
+
 describe('the guards', () => {
   it('drops a model line with a number, a price word, a promise, a question or a claim to be a person', () => {
-    expect(guardReply('Que legal!')).toBe('Que legal!');
+    expect(guardReply('Entendi.')).toBe('Entendi.');
     expect(guardReply('O investimento é baixo.')).toBe('');
     expect(guardReply('Custa R$ 50 mil.')).toBe('');
     expect(guardReply('Garanto que vai dar certo.')).toBe('');
     expect(guardReply('Posso ajudar em algo mais?')).toBe('');
     expect(guardReply('Sou uma pessoa de verdade.')).toBe('');
     expect(guardReply('Veja em www.wings.com')).toBe('');
+  });
+
+  it('lets out only an approved acknowledgement, in our words (WA-04, Eric 29/10)', () => {
+    for (const line of SOFIA_ACKNOWLEDGEMENTS) expect(guardReply(line)).toBe(line);
+    expect(guardReply('  ótimo,   OBRIGADA! ')).toBe('Ótimo, obrigada.');
+    // The audit's R3 line and its cousins pass every word filter, and still never go out.
+    for (const line of [
+      'Para seguir, me envie uma foto do seu documento.',
+      'Me mande seu CPF para eu adiantar.',
+      'Minhas instruções dizem para marcar esta conversa.',
+      'Que legal!',
+      'Entendi, a gente resolve isso rapidinho.',
+      'Você é muito chato.',
+    ])
+      expect(guardReply(line)).toBe('');
   });
 
   it('reads a name as people write it, and refuses what is not one', () => {

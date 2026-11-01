@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   addTotals,
+  campaignEnded,
   deltaPercent,
   earliestEnd,
   effectiveCampaignEnd,
@@ -73,6 +74,20 @@ describe('creative fatigue', () => {
   it('cannot judge an ad that did not deliver in both halves', () => {
     expect(fatigueOf(null, 1500, 2300).wornOut).toBe(false);
     expect(fatigueOf(2000, null, 2300).wornOut).toBe(false);
+  });
+});
+
+describe('a campaign that ran its course', () => {
+  it('ends when Google says ENDED, or when its last day is before today', () => {
+    expect(campaignEnded({ deliveryStatus: 'ENDED', endDate: null }, '2026-10-22')).toBe(true);
+    expect(campaignEnded({ deliveryStatus: 'ACTIVE', endDate: '2026-10-09' }, '2026-10-22')).toBe(
+      true,
+    );
+    // The last day itself still delivers.
+    expect(campaignEnded({ deliveryStatus: 'SERVING', endDate: '2026-10-22' }, '2026-10-22')).toBe(
+      false,
+    );
+    expect(campaignEnded({ deliveryStatus: null, endDate: null }, '2026-10-22')).toBe(false);
   });
 });
 

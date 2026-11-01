@@ -140,7 +140,16 @@ export interface WaFieldSpec {
   form?: WaNameForm;
   /** For a free field: what to type ("Dia", "Link da reunião"). */
   label?: string;
+  /** What goes when the CRM has no value, so a missing one never blocks the send (Meta refuses an empty field). */
+  fallback?: string;
 }
+
+/** A lead without a company still gets "transformar a sua empresa em franquia" (Eric, 26/10). */
+export const WA_COMPANY_FALLBACK = 'sua empresa';
+
+/** The fallback of a field: its own, or the role's. */
+export const waFieldFallback = (spec: WaFieldSpec) =>
+  spec.fallback ?? (spec.role === 'company' ? WA_COMPANY_FALLBACK : '');
 
 const lead: WaFieldSpec = { role: 'lead' };
 const seller: WaFieldSpec = { role: 'seller' };
@@ -183,7 +192,20 @@ export const WA_TEMPLATE_FIELDS: Readonly<Record<string, readonly WaFieldSpec[]>
   wings_formatacao_retomar_contato_arte: [lead, company('article')],
   sofia_formatacao_retomar_atendimento: [lead],
   sofia_formatacao_retomar_atendimento_arte: [lead],
+  // Made on 30/10 with Meta's call-permission request (docs/whatsapp/modelos.md).
+  expansao_pedir_ligacao: [lead, seller, brand('plain')],
+  wings_formatacao_pedir_ligacao: [lead, seller],
 };
+
+/**
+ * The approved template that asks for the call permission outside the 24-hour window: a brand's
+ * lead hears the brand's expansion team, anyone else Wings Company.
+ */
+export const WA_CALL_REQUEST_TEMPLATES = {
+  brand: 'expansao_pedir_ligacao',
+  wings: 'wings_formatacao_pedir_ligacao',
+} as const;
+export const WA_CALL_REQUEST_LANGUAGE = 'pt_BR';
 
 const ARTICLE_BEFORE = /(?:^|[\s(])(?:da|do|das|dos|de|a|o|as|os)\s*$/i;
 
@@ -251,6 +273,15 @@ export const waTemplateSendSchema = z.object({
   expect: z.object({ sendAs: z.enum(['free', 'template']), charged: z.boolean() }).optional(),
 });
 export type WaTemplateSend = z.input<typeof waTemplateSendSchema>;
+
+/**
+ * "Pedir permissão para ligar": empty inside the window (Meta's free request); outside it, the
+ * fields and what the preview showed, sent by the call-request template the server picks.
+ */
+export const waCallPermissionRequestSchema = z.object({
+  template: waTemplateSendSchema.pick({ params: true, expect: true }).optional(),
+});
+export type WaCallPermissionRequest = z.input<typeof waCallPermissionRequestSchema>;
 
 export interface WaTemplateField {
   /** 1 for `{{1}}`. */

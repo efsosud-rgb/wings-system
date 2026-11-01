@@ -1,4 +1,11 @@
-import type { DealWhatsApp, Lead, LeadNote, WaTemplate, WaTemplatePreview } from '@wings/shared';
+import type {
+  DealWhatsApp,
+  Lead,
+  LeadNote,
+  WaAttendanceView,
+  WaTemplate,
+  WaTemplatePreview,
+} from '@wings/shared';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -45,6 +52,9 @@ const {
     artQuery: {} as Record<string, unknown>,
     // A seller before the official number is live (useWhatsAppSoon).
     soon: false,
+    // Who answers the conversation (attendance.ts); null: not loaded.
+    attendance: null as WaAttendanceView | null,
+    actions: [] as unknown[],
   },
   mutation: (mutate = vi.fn()) => ({ mutate, isPending: false, error: null }),
 }));
@@ -58,9 +68,13 @@ const thread = (over: Partial<DealWhatsApp> = {}): DealWhatsApp => ({
   phone: '5521999990001',
   window: { open: true, expiresAt: '2026-10-07T18:00:00.000Z' },
   optedOut: false,
+  contactBlock: { blocked: false, reason: null, origin: null },
+  callBlock: { blocked: false, reason: null, origin: null },
   callPermission: { status: null, expiresAt: null, requestedAt: null },
   attendance: null,
   speaksFor: null,
+  number: null,
+  numberChats: [],
   messages: [],
   ...over,
 });
@@ -101,6 +115,7 @@ const lead = (): Lead => ({
   contacts: [],
   crm: null,
   consent: { legalBasis: null, consentedAt: null, source: null, text: null },
+  googlePlaceId: null,
   fields: { instagram: null, website: null, companyName: null, cnpj: null },
   checks: {},
   aiSummary: null,
@@ -140,6 +155,7 @@ vi.mock('../../api/auth.js', async () => {
     useSession: () => ({
       data: {
         id: 'e1',
+        employeeId: 'e1',
         fullName: 'Eric Souza',
         role: 'vendedor_expansao',
         permissions: queryState.permissions,
@@ -180,6 +196,12 @@ vi.mock('../../api/crm.js', () => ({
 }));
 
 vi.mock('../../api/whatsapp.js', () => ({
+  useConversationAttendance: () => ({ data: queryState.attendance ?? undefined }),
+  useAttendanceAction: () => ({
+    isPending: false,
+    isError: false,
+    mutate: (input: unknown) => queryState.actions.push(input),
+  }),
   useWhatsAppSoon: () => queryState.soon,
   WHATSAPP_SOON_TEXT: 'Em breve: texto do bloqueio do vendedor.',
   useWhatsAppThread: () => ({
@@ -198,6 +220,9 @@ vi.mock('../../api/whatsapp.js', () => ({
   useRefreshWhatsAppTemplates: () => mutation(),
   useSendWhatsAppText: () => mutation(textMutate),
   useSendWhatsAppTemplate: () => mutation(templateMutate),
+  useSendWhatsAppFile: () => ({ ...mutation(), reset: vi.fn() }),
+  useSendWhatsAppVoice: () => ({ ...mutation(), reset: vi.fn() }),
+  NO_DEAL_FOR_FILES: 'O arquivo fica nos arquivos da negociação.',
   useTemplatePreview: (_thread: unknown, input: { name: string } | null) => {
     if (input) previewCalls.push(input);
     // Like react-query's placeholderData: while a template's preview loads, the previous one is returned.
@@ -254,6 +279,8 @@ const show = () =>
   );
 
 beforeEach(() => {
+  queryState.attendance = null;
+  queryState.actions = [];
   noteMutate.mockClear();
   textMutate.mockClear();
   templateMutate.mockClear();
@@ -385,6 +412,66 @@ describe('the WhatsApp conversation screen', () => {
     expect(chat.getByText(/Janela de 24 h aberta até/)).toBeTruthy();
   });
 
+  it('shows a received photo, sticker, audio and video in the balloon, and "—" when one does not open', () => {
+    const file = (id: string, kind: 'image' | 'sticker' | 'audio' | 'video', mimeType: string) => ({
+      id,
+      direction: 'in' as const,
+      kind,
+      text: null,
+      media: { mimeType, filename: null },
+      template: null,
+      status: null,
+      error: null,
+      authorName: null,
+      bySofia: false,
+      imported: null,
+      fromTemplate: null,
+      withArt: false,
+      at: '2026-10-07T14:00:00.000Z',
+    });
+    queryState.thread = thread({
+      messages: [
+        file('p1', 'image', 'image/jpeg'),
+        file('s1', 'sticker', 'image/webp'),
+        file('a1', 'audio', 'audio/ogg'),
+        file('v1', 'video', 'video/mp4'),
+        file('a2', 'audio', 'audio/amr'),
+      ],
+    });
+    const { container } = show();
+    const chat = within(screen.getByRole('region', { name: 'Conversa' }));
+    const photo = chat.getByRole('img', { name: 'Imagem recebida pelo WhatsApp' });
+    expect(photo.getAttribute('src')).toBe('/api/whatsapp/messages/p1/media');
+    expect(photo.closest('a')?.getAttribute('href')).toBe('/api/whatsapp/messages/p1/media');
+    expect(chat.getByRole('img', { name: 'Figurinha recebida pelo WhatsApp' }).className).toBe(
+      'is-sticker',
+    );
+    // A browser cannot play AMR: a download, never a player that fails.
+    expect(container.querySelectorAll('audio')).toHaveLength(1);
+    expect(
+      chat.getAllByRole('link', { name: 'Baixar áudio' }).map((link) => link.getAttribute('href')),
+    ).toContain('/api/whatsapp/messages/a2/media');
+    const audio = container.querySelector('audio')!;
+    expect(audio.getAttribute('src')).toBe('/api/whatsapp/messages/a1/media');
+    expect(audio.getAttribute('preload')).toBe('none');
+    const video = container.querySelector('video')!;
+    expect(video.getAttribute('src')).toBe('/api/whatsapp/messages/v1/media');
+    expect(video.getAttribute('preload')).toBe('none');
+
+    fireEvent.error(photo);
+    fireEvent.error(audio);
+    expect(
+      chat.getByText(
+        /— Imagem: não abriu aqui\. Tente pelo link; se a mensagem tem mais de 30 dias/,
+      ),
+    ).toBeTruthy();
+    expect(chat.getByText(/— Áudio: não abriu aqui\./)).toBeTruthy();
+    expect(chat.getByRole('link', { name: 'Abrir imagem' }).getAttribute('href')).toBe(
+      '/api/whatsapp/messages/p1/media',
+    );
+    expect(chat.queryByRole('img', { name: 'Imagem recebida pelo WhatsApp' })).toBeNull();
+  });
+
   it('sends free text inside the window with Enter', () => {
     show();
     const chat = within(screen.getByRole('region', { name: 'Conversa' }));
@@ -436,6 +523,7 @@ describe('the WhatsApp conversation screen', () => {
         body: 'Olá {{1}}, aqui é {{2}} da Wings.',
         paramCount: 2,
         artVersion: false,
+        unsupported: null,
       },
     ];
     show();
@@ -454,6 +542,7 @@ describe('the WhatsApp conversation screen', () => {
         body: 'Olá {{1}}, aqui é {{2}} da Wings.',
         paramCount: 2,
         artVersion: false,
+        unsupported: null,
       },
     ];
     queryState.preview = {
@@ -469,9 +558,7 @@ describe('the WhatsApp conversation screen', () => {
       footer: null,
       buttons: [],
       withArt: false,
-      notices: [
-        'Cadastre a arte do WhatsApp da Wings (Administração → Clientes, em Wings Company).',
-      ],
+      notices: ['Cadastre a arte do WhatsApp da Wings (Formatação → Clientes, em Wings Company).'],
       fields: [
         { index: 1, role: 'free', label: 'Campo {{1}}', value: 'Elena', locked: false },
         { index: 2, role: 'free', label: 'Campo {{2}}', value: '', locked: false },
@@ -522,6 +609,7 @@ describe('the WhatsApp conversation screen', () => {
         body: 'Olá, {{1}}! Aqui é {{2}}, da Wings Company. … transformar a {{3}} em franquia.',
         paramCount: 3,
         artVersion: true,
+        unsupported: null,
       },
     ];
     queryState.preview = {
@@ -611,6 +699,7 @@ describe('the WhatsApp conversation screen', () => {
         body: 'x',
         paramCount: 2,
         artVersion: false,
+        unsupported: null,
       },
       {
         name: 'lembrete',
@@ -619,6 +708,7 @@ describe('the WhatsApp conversation screen', () => {
         body: 'y',
         paramCount: 3,
         artVersion: false,
+        unsupported: null,
       },
     ];
     queryState.previews = {
@@ -666,6 +756,71 @@ describe('the WhatsApp conversation screen', () => {
       }),
       expect.anything(),
     );
+  });
+
+  it('keeps the field (and the focus) while the same template asks for a new preview', () => {
+    queryState.templates = [
+      {
+        name: 'boas_vindas',
+        language: 'pt_BR',
+        category: 'UTILITY',
+        body: 'x',
+        paramCount: 1,
+        artVersion: false,
+        unsupported: null,
+      },
+    ];
+    queryState.preview = {
+      family: 'boas_vindas',
+      version: 'boas_vindas',
+      language: 'pt_BR',
+      category: 'UTILITY',
+      sendAs: 'template',
+      charged: true,
+      reason: null,
+      windowExpiresAt: null,
+      text: 'Olá, transformar a sua empresa em franquia',
+      footer: null,
+      buttons: [],
+      withArt: false,
+      notices: [],
+      fields: [
+        {
+          index: 1,
+          role: 'company',
+          label: 'Empresa do lead',
+          value: 'sua empresa',
+          locked: false,
+        },
+      ],
+      usesCompanyArticle: true,
+      ready: true,
+    };
+    const page = show();
+    const chat = within(screen.getByRole('region', { name: 'Conversa' }));
+    fireEvent.click(chat.getByRole('button', { name: 'Usar modelo' }));
+    fireEvent.change(chat.getByLabelText('Modelo'), { target: { value: 'boas_vindas|pt_BR' } });
+    const field = chat.getByLabelText('Empresa do lead ({{1}})') as HTMLInputElement;
+    field.focus();
+    fireEvent.change(field, { target: { value: 'Padaria' } });
+    // The typed value asks the server again: while it answers, the field is the same element.
+    queryState.loading.add('boas_vindas');
+    page.rerender(
+      <MemoryRouter initialEntries={['/crm-vendas/negociacoes/l1/whatsapp']}>
+        <Routes>
+          <Route path="/crm-vendas/negociacoes/:id/whatsapp" element={<DealWhatsAppPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(chat.getByLabelText('Empresa do lead ({{1}})')).toBe(field);
+    expect(document.activeElement).toBe(field);
+    expect(field.value).toBe('Padaria');
+    expect(chat.queryByText('Montando a prévia…')).toBeNull();
+    // Only a fresh preview can be sent.
+    expect(
+      (chat.getByRole('button', { name: 'Enviar modelo' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    queryState.loading.delete('boas_vindas');
   });
 
   it('keeps the conversation closed to who has no WhatsApp access', () => {
@@ -819,6 +974,7 @@ describe('the WhatsApp conversation screen', () => {
           body: 'Olá, {{1}}!',
           paramCount: 1,
           artVersion: true,
+          unsupported: null,
         },
       ];
       queryState.preview = {
@@ -855,5 +1011,41 @@ describe('the WhatsApp conversation screen', () => {
       show();
       expect(screen.getByText(/Nenhum modelo aprovado ainda/)).toBeTruthy();
     });
+  });
+});
+
+describe('who answers it, on the deal’s tab too (docs/whatsapp/central.md, "Atendimento")', () => {
+  it('a conversation the seller holds: no field to write, and Assumir with the version on screen', () => {
+    queryState.permissions = { 'leads.read': 'all', 'leads.whatsapp': 'all' };
+    queryState.attendance = {
+      attendance: {
+        conversationId: 'c1',
+        version: 3,
+        holderId: 'e2',
+        holderName: 'Daniele',
+        assigned: false,
+        queue: null,
+        replyingName: null,
+        sofiaPaused: false,
+        sofia: null,
+        can: {
+          take: true,
+          transfer: true,
+          resolve: true,
+          reopen: false,
+          pauseSofia: false,
+          resumeSofia: false,
+        },
+      },
+      events: [],
+      people: [],
+    };
+    show();
+    expect(screen.queryByRole('textbox', { name: 'Mensagem' })).toBeNull();
+    expect(screen.getByText(/Esta conversa está com Daniele/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Assumir' }));
+    expect(queryState.actions).toEqual([
+      { version: 3, action: { kind: 'assign', employeeId: 'e1' } },
+    ]);
   });
 });

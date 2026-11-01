@@ -1,11 +1,22 @@
 import { createHmac } from 'node:crypto';
 import { SESSION_COOKIE, type DealWhatsApp, type RoleKey, type WaCall } from '@wings/shared';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
-import { leadActivities, leads, waCalls, waContacts } from '../../db/schema/index.js';
+import {
+  clients,
+  leadActivities,
+  leadEvents,
+  leads,
+  leadTasks,
+  waCalls,
+  waContacts,
+  waMessages,
+  waTemplates,
+} from '../../db/schema/index.js';
+import { recordContactOptOut } from '../leads/contact-block.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import {
@@ -15,7 +26,7 @@ import {
   TEST_INDEX_KEY,
 } from '../../test/factories.js';
 import { forgetCallingSettings } from './calling.js';
-import { processWhatsAppEvents, sweepCalls } from './intake.js';
+import { CALL_REQUEST_TASK, processWhatsAppEvents, sweepCalls } from './intake.js';
 
 /**
  * WhatsApp voice calls against a simulated Meta: placing one (the browser's
@@ -40,6 +51,7 @@ let connectAnswer: () => Response = () =>
   json({ messaging_product: 'whatsapp', calls: [{ id: 'wacid.OUT1' }] });
 let permissionAnswer: unknown = { permission: { status: 'no_permission' }, actions: [] };
 const posts: Record<string, unknown>[] = [];
+let wamids = 0;
 /** Every request that reached the simulated Meta, whatever it was. */
 const fetched: string[] = [];
 
@@ -67,7 +79,8 @@ const whatsappFetch = (async (input: string | URL | Request, init?: RequestInit)
     return json({
       messaging_product: 'whatsapp',
       contacts: [{ wa_id: String(body.to) }],
-      messages: [{ id: `wamid.M${posts.length}` }],
+      // Unique across the file: wa_messages.wamid is unique.
+      messages: [{ id: `wamid.M${++wamids}` }],
     });
   }
   return json({ error: { code: 100 } }, 400);
@@ -255,6 +268,37 @@ describe('placing a call', () => {
       actorEmployeeId: owner.id,
       note: 'Pelo WhatsApp · ligação feita',
     });
+  });
+
+  it('a "não me contate" on WhatsApp or on the phone stops the call before Meta', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    for (const [phone, channel] of [
+      ['5521977001112', 'whatsapp'],
+      ['5521977001113', 'phone'],
+    ] as const) {
+      const leadId = await deal(phone, owner.id);
+      await recordContactOptOut(db, {
+        leadId,
+        channels: [channel],
+        origin: 'crm',
+        reason: 'Pediu',
+        createdBy: owner.id,
+      });
+      const refused = await app.inject({
+        method: 'POST',
+        url: `/leads/${leadId}/whatsapp/calls`,
+        cookies: owner.cookies,
+        payload: { sdp: OFFER },
+      });
+      expect(refused.statusCode, channel).toBe(409);
+      expect(refused.json().error).toBe('contact_blocked');
+      const [event] = await db
+        .select()
+        .from(leadEvents)
+        .where(and(eq(leadEvents.leadId, leadId), eq(leadEvents.kind, 'lead.contact_blocked')));
+      expect(event?.detail).toMatchObject({ path: 'ligacao', origin: 'crm' });
+    }
+    expect(posts).toHaveLength(0);
   });
 
   it('finds the call by our own id when Meta’s webhook beats its answer', async () => {
@@ -646,5 +690,411 @@ describe('the seller lock until the official number is live (Eric, 19/10)', () =
       expect(started.statusCode, role).toBe(201);
       expect(posts, role).toHaveLength(1);
     }
+  });
+});
+
+describe('"Prefiro uma ligação" on a template (Eric, 26/10)', () => {
+  const send = {
+    config: { token: TOKEN, phoneNumberId: PHONE_ID, wabaId: WABA },
+    fetch: whatsappFetch,
+  };
+  async function tap(phone: string, id: string) {
+    const body = JSON.stringify({
+      object: 'whatsapp_business_account',
+      entry: [
+        {
+          id: WABA,
+          changes: [
+            {
+              field: 'messages',
+              value: {
+                messaging_product: 'whatsapp',
+                metadata: { phone_number_id: PHONE_ID },
+                contacts: [{ wa_id: phone, profile: { name: 'Elena' } }],
+                messages: [
+                  {
+                    from: phone,
+                    id,
+                    timestamp: unix(new Date()),
+                    type: 'button',
+                    button: { text: 'Prefiro uma ligação', payload: 'Prefiro uma ligação' },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/integrations/whatsapp/webhook',
+      headers: { 'content-type': 'application/json', 'x-hub-signature-256': sign(body) },
+      payload: body,
+    });
+    expect(response.statusCode).toBe(200);
+    await processWhatsAppEvents({ db, phoneNumberId: PHONE_ID, log: () => {}, send });
+  }
+  const callTasks = (leadId: string) =>
+    db
+      .select()
+      .from(leadTasks)
+      .where(and(eq(leadTasks.leadId, leadId), eq(leadTasks.title, CALL_REQUEST_TASK)));
+
+  it('gives the owner a task to call now and asks Meta for the permission once', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977200001', owner.id);
+    await tap('5521977200001', 'wamid.CALLME1');
+    const [task] = await callTasks(leadId);
+    expect(task).toMatchObject({ kind: 'call', assigneeEmployeeId: owner.id, auto: true });
+    const requests = posts.filter((p) => p.type === 'interactive');
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      to: '5521977200001',
+      interactive: { type: 'call_permission_request' },
+    });
+    const [contact] = await db
+      .select()
+      .from(waContacts)
+      .where(eq(waContacts.phone, '5521977200001'));
+    expect(contact?.callPermission).toBe('requested');
+    // The system's own request is not an answer: the conversation still waits for a person.
+    const admin = await sessionFor('admin_master');
+    const waiting = await app.inject({
+      method: 'GET',
+      url: '/whatsapp/conversations?filter=unanswered',
+      cookies: admin.cookies,
+    });
+    expect(
+      waiting
+        .json<{ conversations: { leadId: string | null }[] }>()
+        .conversations.map((c) => c.leadId),
+    ).toContain(leadId);
+    // A second tap the same day: no second task, no second request (Meta allows 1 a day).
+    await tap('5521977200001', 'wamid.CALLME2');
+    expect(await callTasks(leadId)).toHaveLength(1);
+    expect(posts.filter((p) => p.type === 'interactive')).toHaveLength(1);
+  });
+
+  it('sends no third automatic request in the week, even a day apart', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    await deal('5521977200020', owner.id);
+    // Each request moved back two days: past Meta's 1 a day, inside its 2 a week.
+    const twoDaysBack = async () => {
+      const [contact] = await db
+        .select()
+        .from(waContacts)
+        .where(eq(waContacts.phone, '5521977200020'));
+      await db
+        .update(waMessages)
+        .set({ createdAt: sql`now() - interval '2 days'` })
+        .where(eq(waMessages.contactId, contact!.id));
+      await db
+        .update(waContacts)
+        .set({ callPermissionRequestedAt: sql`now() - interval '2 days'` })
+        .where(eq(waContacts.id, contact!.id));
+    };
+    const requests = () => posts.filter((p) => p.type === 'interactive').length;
+    await tap('5521977200020', 'wamid.CALLME20');
+    expect(requests()).toBe(1);
+    await twoDaysBack();
+    await tap('5521977200020', 'wamid.CALLME21');
+    expect(requests()).toBe(2);
+    await twoDaysBack();
+    await tap('5521977200020', 'wamid.CALLME22');
+    expect(requests()).toBe(2);
+  });
+
+  it('a "não me contate" keeps the task for the owner and sends no request', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977200010', owner.id);
+    await recordContactOptOut(db, {
+      phone: '5521977200010',
+      channels: ['all'],
+      origin: 'crm',
+      reason: 'Pediu',
+      createdBy: owner.id,
+    });
+    await tap('5521977200010', 'wamid.CALLME10');
+    expect(await callTasks(leadId)).toHaveLength(1);
+    expect(posts.filter((p) => p.type === 'interactive')).toHaveLength(0);
+    const [event] = await db
+      .select()
+      .from(leadEvents)
+      .where(and(eq(leadEvents.leadId, leadId), eq(leadEvents.kind, 'lead.contact_blocked')));
+    expect(event?.detail).toMatchObject({ path: 'pedido_ligacao_automatico' });
+  });
+
+  it('with no open deal (a closed one only), nothing is sent and no task made', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const closed = await deal('5521977200009', owner.id);
+    await db.update(leads).set({ won: false, closedAt: new Date() }).where(eq(leads.id, closed));
+    await tap('5521977200009', 'wamid.CALLME9');
+    expect(posts.filter((p) => p.type === 'interactive')).toHaveLength(0);
+  });
+
+  it('before the number is live or with calling off: the task only, nothing sent', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    await setOfficialLive(db, false);
+    const first = await deal('5521977200002', owner.id);
+    await tap('5521977200002', 'wamid.CALLME3');
+    expect(await callTasks(first)).toHaveLength(1);
+    await setOfficialLive(db, true);
+    callingStatus = 'DISABLED';
+    forgetCallingSettings();
+    const second = await deal('5521977200003', owner.id);
+    await tap('5521977200003', 'wamid.CALLME4');
+    expect(await callTasks(second)).toHaveLength(1);
+    expect(posts).toHaveLength(0);
+  });
+});
+
+describe('asking for the call permission by template, outside the 24 h (d-t033)', () => {
+  const body = (text: string) => [{ type: 'BODY', text }, { type: 'CALL_PERMISSION_REQUEST' }];
+  beforeAll(async () => {
+    await db
+      .insert(waTemplates)
+      .values({
+        name: 'wings_formatacao_pedir_ligacao',
+        language: 'pt_BR',
+        category: 'MARKETING',
+        status: 'APPROVED',
+        components: body(
+          'Olá, {{1}}! Aqui é {{2}}, da Wings Company. Posso te ligar por aqui, pelo WhatsApp, para conversarmos sobre a formatação da sua franquia? Se puder, é só autorizar no botão abaixo.',
+        ),
+      })
+      .onConflictDoNothing();
+  });
+  const preview = (cookies: Record<string, string>, leadId: string) =>
+    app.inject({
+      method: 'POST',
+      url: `/leads/${leadId}/whatsapp/call-permission/preview`,
+      cookies,
+    });
+  const ask = (cookies: Record<string, string>, leadId: string, payload: unknown) =>
+    app.inject({
+      method: 'POST',
+      url: `/leads/${leadId}/whatsapp/call-permission`,
+      cookies,
+      payload: payload as Record<string, unknown>,
+    });
+  async function previewed(cookies: Record<string, string>, leadId: string) {
+    const response = await preview(cookies, leadId);
+    expect(response.statusCode).toBe(200);
+    const { preview: shown } = response.json<{
+      preview: { sendAs: 'free' | 'template'; charged: boolean; fields: { value: string }[] };
+    }>();
+    return {
+      shown,
+      template: {
+        params: shown.fields.map((f) => f.value),
+        expect: { sendAs: shown.sendAs, charged: shown.charged },
+      },
+    };
+  }
+
+  it('previews the Wings template, sends it once, marks it requested, and takes the reply', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977300001', owner.id);
+    const { shown, template } = await previewed(owner.cookies, leadId);
+    expect(shown).toMatchObject({
+      sendAs: 'template',
+      charged: true,
+      version: 'wings_formatacao_pedir_ligacao',
+    });
+    expect(posts).toHaveLength(0); // a preview sends nothing
+
+    const sent = await ask(owner.cookies, leadId, { template });
+    expect(sent.statusCode).toBe(201);
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toMatchObject({
+      to: '5521977300001',
+      type: 'template',
+      template: { name: 'wings_formatacao_pedir_ligacao', language: { code: 'pt_BR' } },
+    });
+    let thread = (
+      await app.inject({ method: 'GET', url: `/leads/${leadId}/whatsapp`, cookies: owner.cookies })
+    ).json<DealWhatsApp>();
+    expect(thread.callPermission.status).toBe('requested');
+
+    // Meta's 1 a day: neither a second preview nor a second send, and nothing reaches Meta.
+    for (const again of [
+      await preview(owner.cookies, leadId),
+      await ask(owner.cookies, leadId, { template }),
+    ]) {
+      expect(again.statusCode).toBe(429);
+      expect(again.json()).toMatchObject({ error: 'call_request_limit' });
+    }
+    expect(posts).toHaveLength(1);
+
+    await deliver(
+      {
+        contacts: [{ profile: { name: 'Elena' }, wa_id: '5521977300001' }],
+        messages: [
+          {
+            from: '5521977300001',
+            id: 'wamid.T033R',
+            timestamp: unix(new Date()),
+            type: 'interactive',
+            interactive: {
+              type: 'call_permission_reply',
+              call_permission_reply: {
+                response: 'accept',
+                is_permanent: true,
+                response_source: 'user_action',
+              },
+            },
+          },
+        ],
+      },
+      'messages',
+    );
+    thread = (
+      await app.inject({ method: 'GET', url: `/leads/${leadId}/whatsapp`, cookies: owner.cookies })
+    ).json<DealWhatsApp>();
+    expect(thread.callPermission.status).toBe('permanent');
+  });
+
+  it('refuses the third request of the week, even a day apart', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977300002', owner.id);
+    const { template } = await previewed(owner.cookies, leadId);
+    expect((await ask(owner.cookies, leadId, { template })).statusCode).toBe(201);
+    // Both requests of this week moved back two days: past the daily limit, inside the weekly one.
+    const [contact] = await db
+      .select()
+      .from(waContacts)
+      .where(eq(waContacts.phone, '5521977300002'));
+    await db
+      .update(waMessages)
+      .set({ createdAt: sql`now() - interval '2 days'` })
+      .where(eq(waMessages.contactId, contact!.id));
+    expect((await ask(owner.cookies, leadId, { template })).statusCode).toBe(201);
+    await db
+      .update(waMessages)
+      .set({ createdAt: sql`now() - interval '2 days'` })
+      .where(eq(waMessages.contactId, contact!.id));
+    const third = await ask(owner.cookies, leadId, { template });
+    expect(third.statusCode).toBe(429);
+    expect(third.json().message).toContain('2 vezes por semana');
+    expect(posts).toHaveLength(2);
+  });
+
+  it('a "não me contate" stops the template request before Meta', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977300003', owner.id);
+    const { template } = await previewed(owner.cookies, leadId);
+    await recordContactOptOut(db, {
+      leadId,
+      channels: ['whatsapp'],
+      origin: 'crm',
+      reason: 'Pediu',
+      createdBy: owner.id,
+    });
+    const refused = await ask(owner.cookies, leadId, { template });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({ error: 'contact_blocked' });
+    expect(posts).toHaveLength(0);
+  });
+
+  it('the free request inside the 24 h counts too, and a refusal sends nothing, not even later', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977300005', owner.id);
+    await deliver(
+      {
+        contacts: [{ profile: { name: 'Elena' }, wa_id: '5521977300005' }],
+        messages: [
+          {
+            from: '5521977300005',
+            id: 'wamid.T033W',
+            timestamp: unix(new Date()),
+            type: 'text',
+            text: { body: 'Pode me ligar' },
+          },
+        ],
+      },
+      'messages',
+    );
+    expect((await ask(owner.cookies, leadId, {})).statusCode).toBe(201);
+    const sent = posts.length;
+    const again = await ask(owner.cookies, leadId, {});
+    expect(again.statusCode).toBe(429);
+    expect(again.json()).toMatchObject({ error: 'call_request_limit' });
+    // The refusal ends the request: nothing reaches Meta after the answer either.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(posts).toHaveLength(sent);
+  });
+
+  /** The person writes: the 24-hour window opens, where the free request goes. */
+  const personWrites = (phone: string, id: string) =>
+    deliver(
+      {
+        contacts: [{ profile: { name: 'Elena' }, wa_id: phone }],
+        messages: [
+          { from: phone, id, timestamp: unix(new Date()), type: 'text', text: { body: 'Oi' } },
+        ],
+      },
+      'messages',
+    );
+
+  it('a request Meta refused does not count for the limit', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977300006', owner.id);
+    await personWrites('5521977300006', 'wamid.T033F');
+    expect((await ask(owner.cookies, leadId, {})).statusCode).toBe(201);
+    // Meta's "failed" status for it, as its webhook leaves it.
+    const [contact] = await db
+      .select()
+      .from(waContacts)
+      .where(eq(waContacts.phone, '5521977300006'));
+    await db
+      .update(waMessages)
+      .set({ status: 'failed' })
+      .where(and(eq(waMessages.contactId, contact!.id), eq(waMessages.direction, 'out')));
+    const again = await ask(owner.cookies, leadId, {});
+    expect(again.statusCode).toBe(201);
+    expect(posts.filter((p) => p.type === 'interactive')).toHaveLength(2);
+  });
+
+  it('two clicks at the same moment: one request goes, the other is refused', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977300007', owner.id);
+    await personWrites('5521977300007', 'wamid.T033D');
+    const both = await Promise.all([
+      ask(owner.cookies, leadId, {}),
+      ask(owner.cookies, leadId, {}),
+    ]);
+    expect(both.map((r) => r.statusCode).sort()).toEqual([201, 429]);
+    expect(both.find((r) => r.statusCode === 429)!.json()).toMatchObject({
+      error: 'call_request_limit',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(posts.filter((p) => p.type === 'interactive')).toHaveLength(1);
+    const [contact] = await db
+      .select()
+      .from(waContacts)
+      .where(eq(waContacts.phone, '5521977300007'));
+    const written = await db
+      .select()
+      .from(waMessages)
+      .where(and(eq(waMessages.contactId, contact!.id), eq(waMessages.direction, 'out')));
+    expect(written).toHaveLength(1);
+  });
+
+  it('a brand’s lead gets the Expansão template, not yet approved here: refused, nothing sent', async () => {
+    const owner = await sessionFor('admin_master');
+    const leadId = await deal('5521977300004', owner.id);
+    const [brand] = await db
+      .insert(clients)
+      .values({ name: 'Marca T033', slug: 'marca-t033', number: 933, relationship: 'expansao' })
+      .returning({ id: clients.id });
+    await db
+      .update(leads)
+      .set({ pipeline: 'expansao', clientId: brand!.id })
+      .where(eq(leads.id, leadId));
+    const response = await preview(owner.cookies, leadId);
+    expect(response.statusCode).toBe(422);
+    expect(response.json().message).toContain('expansao_pedir_ligacao');
+    expect(posts).toHaveLength(0);
   });
 });

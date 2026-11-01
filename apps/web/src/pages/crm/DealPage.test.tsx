@@ -1,4 +1,4 @@
-import type { Lead } from '@wings/shared';
+import { WHATSAPP_OPT_IN_MISSING_TEXT, type Lead } from '@wings/shared';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -81,6 +81,7 @@ const lead = (over: Omit<Partial<Lead>, 'work'> & { work?: Partial<Lead['work']>
   contacts: [],
   crm: null,
   consent: { legalBasis: null, consentedAt: null, source: null, text: null },
+  googlePlaceId: null,
   aiSummary: null,
   suspect: null,
   instagramCheck: null,
@@ -127,6 +128,13 @@ vi.mock('../../api/auth.js', async () => {
     }),
   };
 });
+
+// The "Não me contate" strip has its own tests (ContactOptOutStrip.test.tsx).
+vi.mock('../../api/contact-opt-outs.js', () => ({
+  useContactOptOuts: () => ({ data: undefined, isError: false }),
+  useRecordContactOptOut: () => ({ mutate: vi.fn(), isPending: false }),
+  useRevokeContactOptOut: () => ({ mutate: vi.fn(), isPending: false }),
+}));
 
 // Not a seller before the official number is live (the lock has its own tests).
 vi.mock('../../api/whatsapp.js', async () => {
@@ -542,5 +550,59 @@ describe('Contato', () => {
     queryState.lead = lead({ phone: null });
     show();
     expect(screen.queryByRole('link', { name: 'Abrir no WhatsApp do vendedor' })).toBeNull();
+  });
+});
+
+describe('WhatsApp sem aceite (prospecção)', () => {
+  const prospecting = (legalBasis: 'consent' | 'legitimate_interest') =>
+    lead({
+      phone: '5521900000001',
+      pipeline: 'formatacao',
+      origin: { ...lead({}).origin, source: 'google_places' },
+      consent: { legalBasis, consentedAt: null, source: 'prospeccao', text: null },
+    });
+
+  it('turns off every WhatsApp action of the card, with the reason, and leaves the phone call on', () => {
+    queryState.lead = prospecting('legitimate_interest');
+    show();
+    const action = screen.getByRole('button', {
+      name: 'WhatsApp (sem aceite)',
+    }) as HTMLButtonElement;
+    expect(action.disabled).toBe(true);
+    expect(action.title).toBe(WHATSAPP_OPT_IN_MISSING_TEXT);
+    expect(within(action).getByText('sem aceite')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'WhatsApp' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Conversa do WhatsApp' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Abrir no WhatsApp do vendedor' })).toBeNull();
+    for (const name of [
+      'Conversa do WhatsApp (sem aceite)',
+      'Abrir no WhatsApp do vendedor (sem aceite)',
+    ]) {
+      // Focusable, with the reason shown on the card and read out with the button.
+      const button = screen.getByRole('button', { name }) as HTMLButtonElement;
+      expect(button.getAttribute('aria-disabled')).toBe('true');
+      expect(button.title).toBe(WHATSAPP_OPT_IN_MISSING_TEXT);
+      const reason = document.getElementById(button.getAttribute('aria-describedby') ?? '');
+      expect(reason?.textContent).toBe(WHATSAPP_OPT_IN_MISSING_TEXT);
+    }
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ligar' }));
+    const dialog = screen.getByRole('dialog', { name: 'Ligação' });
+    expect(within(dialog).getByText(WHATSAPP_OPT_IN_MISSING_TEXT)).toBeTruthy();
+    const whatsappCall = within(dialog).getByRole('button', {
+      name: /Ligar pelo WhatsApp/,
+    }) as HTMLButtonElement;
+    expect(whatsappCall.disabled).toBe(true);
+    expect(
+      within(dialog).queryByRole('link', { name: 'Abrir no WhatsApp do vendedor' }),
+    ).toBeNull();
+  });
+
+  it('keeps WhatsApp on once the opt-in is on record', () => {
+    queryState.lead = prospecting('consent');
+    show();
+    expect(screen.getByRole('link', { name: 'WhatsApp' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Conversa do WhatsApp' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'WhatsApp (sem aceite)' })).toBeNull();
   });
 });

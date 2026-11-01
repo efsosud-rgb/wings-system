@@ -1,0 +1,1 @@
+ALTER TABLE "google_workspace_connections" ADD COLUMN "gmail_history_seen" text[] DEFAULT '{}' NOT NULL;

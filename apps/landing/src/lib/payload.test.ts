@@ -12,6 +12,7 @@ const VALUES: FormValues = {
   siteUrl: 'www.exemplo.com.br',
   qualifierValue: 'nao-sei',
   qualifierText: 'Ainda não sei',
+  monthlyRevenue: '100k-300k',
   website: '',
 };
 
@@ -38,6 +39,7 @@ const CONTRACT_KEYS = [
   'instagram',
   'siteUrl',
   'qualifierAnswer',
+  'monthlyRevenue',
   'consent',
   'page',
   'tracking',
@@ -63,6 +65,7 @@ describe('submitBodyOf', () => {
       instagram: 'marca.exemplo',
       siteUrl: 'https://www.exemplo.com.br',
       qualifierAnswer: 'nao-sei',
+      monthlyRevenue: '100k-300k',
       consent: true,
       page: 'https://fale.wingscompany.com.br/?utm_source=meta',
       tracking: { utm_source: 'meta', referrer: 'https://www.google.com/' },
@@ -84,6 +87,12 @@ describe('submitBodyOf', () => {
       href: 'https://fale.wingscompany.com.br/',
     });
     expect(robot).not.toHaveProperty('siteUrl');
+    expect(
+      submitBodyOf({
+        ...{ tracking: {}, turnstileToken: 't', href: 'https://x.test/' },
+        values: { ...VALUES, monthlyRevenue: '' },
+      }),
+    ).not.toHaveProperty('monthlyRevenue');
     expect(robot).not.toHaveProperty('tracking');
     expect(robot.website).toBe('http://spam.example');
   });

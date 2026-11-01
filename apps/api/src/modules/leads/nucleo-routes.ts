@@ -15,6 +15,7 @@ import {
   leadContactLinkSchema,
   leadDealUpdateSchema,
   leadListQuerySchema,
+  normalizeBrazilianPhone,
   type CrmBrand,
 } from '@wings/shared';
 import { eq, sql } from 'drizzle-orm';
@@ -33,6 +34,7 @@ import {
   contactsOfCompany,
   duplicateCompanies,
   duplicateContacts,
+  findContact,
   findOrCreateCompany,
   findOrCreateContact,
   leadsOfCompany,
@@ -42,6 +44,7 @@ import {
   listContacts,
   mergeCompanies,
   mergeContacts,
+  numberInAttendance,
   unlinkContact,
   updateCompany,
   updateContact,
@@ -49,7 +52,7 @@ import {
 import { exportLeads, previewImport, runImport } from './csv.js';
 import type { Executor } from './crm.js';
 import { brandsOnSale, changeDeal, createBrand, listBrands, setBrandOnSale } from './deal.js';
-import { loadLead } from './service.js';
+import { loadLead, NUMBER_IN_ATTENDANCE_REPLY } from './service.js';
 
 const idParam = z.object({ id: z.uuid() });
 const twoIds = z.object({ id: z.uuid(), contactId: z.uuid() });
@@ -119,6 +122,27 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
         : 'Já existe uma empresa com este nome ou CNPJ em outra negociação. Peça a um Admin para ligá-la.',
   });
 
+  /**
+   * A seller's deal does not take, as a contact, a number Sofia or the team is attending with no
+   * deal yet: the next message would carry the conversation to that deal (WA-03).
+   */
+  async function attendedFor(own: string | undefined, phone: string | null | undefined) {
+    const normalized = normalizeBrazilianPhone(phone);
+    return own !== undefined && normalized !== null && (await numberInAttendance(db, normalized));
+  }
+  /**
+   * The same for a typed contact: its phone, or the phone of the contact its e-mail already names,
+   * which `findOrCreateContact` would fill or link. Asked before anything is written.
+   */
+  async function typedAttendedFor(
+    own: string | undefined,
+    typed: { email?: string | null; phone?: string | null },
+  ) {
+    if (own === undefined) return false;
+    if (await attendedFor(own, typed.phone)) return true;
+    return attendedFor(own, (await findContact(db, typed))?.phone);
+  }
+
   // --- contacts ---------------------------------------------------------------------------
 
   app.get('/crm/contacts', read, async (request, reply) => {
@@ -140,6 +164,8 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
     if (!body.success) return reply.status(400).send(invalid(body.error.issues[0]?.message));
     const actor = request.session.actor.employeeId;
     const own = ownScope(request, 'leads.write');
+    if (await typedAttendedFor(own, body.data))
+      return reply.status(409).send(NUMBER_IN_ATTENDANCE_REPLY);
     const companyId = await resolveCompany(body.data, actor, own);
     if (companyId === 'not_found')
       return reply.status(400).send(invalid('Empresa não encontrada.'));
@@ -188,6 +214,12 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
     const own = ownScope(request, 'leads.write');
     if (own !== undefined && !(await contactVisibleTo(db, params.data.id, own)))
       return reply.status(404).send(notFound('Contato'));
+    if (
+      body.data.phone &&
+      normalizeBrazilianPhone(body.data.phone) !== (await contactOf(db, params.data.id))?.phone &&
+      (await attendedFor(own, body.data.phone))
+    )
+      return reply.status(409).send(NUMBER_IN_ATTENDANCE_REPLY);
     const actor = request.session.actor.employeeId;
     const companyId = await resolveCompany(body.data, actor, own);
     if (companyId === 'not_found')
@@ -273,6 +305,8 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
     const own = ownScope(request, 'leads.write');
     let contactId = body.data.contactId ?? null;
     if (!contactId && body.data.contact) {
+      if (await typedAttendedFor(own, body.data.contact))
+        return reply.status(409).send(NUMBER_IN_ATTENDANCE_REPLY);
       const companyId = await resolveCompany(body.data.contact, actor, own);
       if (companyId === 'not_found')
         return reply.status(400).send(invalid('Empresa não encontrada.'));
@@ -295,7 +329,10 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
     // A seller links only a person they already see (one of their leads has them, or they made them).
     if (own !== undefined && !(await contactVisibleTo(db, contactId, own)))
       return reply.status(404).send(notFound('Contato'));
-    if (!(await contactOf(db, contactId))) return reply.status(404).send(notFound('Contato'));
+    const contact = await contactOf(db, contactId);
+    if (!contact) return reply.status(404).send(notFound('Contato'));
+    if (await attendedFor(own, contact.phone))
+      return reply.status(409).send(NUMBER_IN_ATTENDANCE_REPLY);
     await db.transaction((tx) =>
       linkContact(tx, {
         leadId: row.id,
@@ -818,6 +855,7 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
       ownerEmployeeId: owner,
       actorEmployeeId: actor,
       canAssign: canChangeLeadOwner(request.session.actor),
+      canManageStages: app.can(request, 'crm.manage'),
     });
     await writeAudit(db, {
       actorEmployeeId: actor,

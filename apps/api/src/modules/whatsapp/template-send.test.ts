@@ -4,13 +4,16 @@ import {
   ART_MISSING_WINGS,
   ART_VERSION_PENDING,
   ARTICLE_MISSING,
+  CALL_REQUEST_FREE,
   payloadOf,
   planTemplate,
   toFreeMessage,
+  unsupportedOf,
   type PlanInput,
   type TemplateRow,
 } from './template-send.js';
-import { callPermissionText } from './routes.js';
+import { errorText } from './graph.js';
+import { callPermissionText } from './thread.js';
 
 /**
  * Which message a template becomes, with no database and no Meta: the window,
@@ -297,6 +300,43 @@ describe('which template goes with the window closed', () => {
     });
   });
 
+  it('a lead without a company goes with "sua empresa", never empty (lead 775262e5, 26/10)', () => {
+    const input = base({
+      request: {
+        name: 'wings_formatacao_boas_vindas',
+        language: 'pt_BR',
+        params: [],
+        companyArticle: 'o',
+      },
+      templates: [T.formatacaoBoasVindas, T.formatacaoBoasVindasArte],
+      voice: null,
+      defaults: { lead: 'Mariana', seller: 'Daniele', company: '' },
+    });
+    const arte = ok(input);
+    expect(arte.preview.ready).toBe(true);
+    expect(arte.preview.fields[2]).toMatchObject({ role: 'company', value: 'sua empresa' });
+    // Feminine even with "o" ticked.
+    expect(arte.preview.text).toContain('transformar a sua empresa em franquia');
+    expect(arte.preview.notices.join(' ')).toContain('empresa do lead → "sua empresa"');
+    // The first version carries the "a" in its text.
+    expect(ok({ ...input, hasArt: false }).preview.text).toContain(
+      'transformar a sua empresa em franquia',
+    );
+    // A seller who clears the field gets the fallback back, never an empty parameter.
+    const cleared = ok({
+      ...input,
+      request: { ...input.request, params: ['Mariana', 'Daniele', ''] },
+    });
+    expect(cleared.params[2]).toBe('a sua empresa');
+    // What the seller types wins.
+    const typed = ok({
+      ...input,
+      request: { ...input.request, params: ['Mariana', 'Daniele', 'Bar do Zé'] },
+    });
+    expect(typed.params[2]).toBe('o Bar do Zé');
+    expect(typed.preview.notices.join(' ')).not.toContain('texto padrão');
+  });
+
   it('puts the company article the seller chose (feminine by default)', () => {
     const input = base({
       request: {
@@ -550,5 +590,224 @@ describe('the call-permission text', () => {
       /^A Cabana da Barra gostaria/,
     );
     expect(callPermissionText({ name: 'Pecan', article: null })).toMatch(/^A Pecan gostaria/);
+  });
+});
+
+describe('a template written on the Modelos screen', () => {
+  const custom = {
+    ...row('lembrete_simples', 'UTILITY', 'Oi, {{1}}! Até {{2}}.', quick('Prefiro uma ligação')),
+    fields: [
+      { role: 'lead' as const, fallback: 'tudo bem' },
+      { role: 'free' as const, label: 'Dia' },
+    ],
+  };
+  const input = base({
+    request: { name: 'lembrete_simples', language: 'pt_BR', params: [], companyArticle: 'a' },
+    templates: [custom],
+    voice: null,
+    defaults: { lead: '', seller: 'Daniele', company: '' },
+  });
+
+  it('fills each {{n}} as saved, the fallback when the CRM has nothing', () => {
+    const plan = ok(input);
+    expect(plan.preview.fields).toMatchObject([
+      { role: 'lead', value: 'tudo bem' },
+      { role: 'free', label: 'Dia', value: '' },
+    ]);
+    // A free field without a fallback is still the seller's to fill.
+    expect(plan.preview.ready).toBe(false);
+  });
+
+  it('a custom company fallback follows the article the seller ticked', () => {
+    const own = {
+      ...T.formatacaoBoasVindasArte,
+      fields: [
+        { role: 'lead' as const },
+        { role: 'seller' as const },
+        { role: 'company' as const, form: 'article' as const, fallback: 'seu negócio' },
+      ],
+    };
+    const plan = ok({
+      ...input,
+      request: {
+        name: 'wings_formatacao_boas_vindas',
+        language: 'pt_BR',
+        params: [],
+        companyArticle: 'o',
+      },
+      templates: [T.formatacaoBoasVindas, own],
+      defaults: { lead: 'Mariana', seller: 'Daniele', company: '' },
+    });
+    expect(plan.preview.text).toContain('transformar o seu negócio em franquia');
+  });
+
+  it('the _arte version takes the fallback saved on its base, with its own article', () => {
+    const base = {
+      ...T.formatacaoBoasVindas,
+      fields: [
+        { role: 'lead' as const, fallback: 'tudo bem' },
+        { role: 'seller' as const },
+        { role: 'company' as const, fallback: 'sua empresa' },
+      ],
+    };
+    const plan = ok({
+      ...input,
+      request: {
+        name: 'wings_formatacao_boas_vindas',
+        language: 'pt_BR',
+        params: [],
+        companyArticle: 'a',
+      },
+      templates: [base, T.formatacaoBoasVindasArte],
+      defaults: { lead: '', seller: 'Daniele', company: '' },
+    });
+    expect(plan.version.name).toBe('wings_formatacao_boas_vindas_arte');
+    expect(plan.preview.text).toContain('Olá, tudo bem!');
+    expect(plan.preview.text).toContain('transformar a sua empresa em franquia');
+  });
+
+  it('with the call-permission request, goes as Meta’s free request inside the window', () => {
+    const asking = {
+      ...custom,
+      components: [...(custom.components as object[]), { type: 'CALL_PERMISSION_REQUEST' }],
+    };
+    const plan = ok({ ...input, templates: [asking], window: { open: true, expiresAt: null } });
+    expect(plan.preview).toMatchObject({ sendAs: 'free', charged: false, buttons: [] });
+    expect(plan.preview.notices).toContain(CALL_REQUEST_FREE);
+  });
+});
+
+describe("Meta's refusals in Portuguese", () => {
+  it('says the test number only reaches the numbers listed in the app (131030)', () => {
+    expect(errorText(131030, 'Recipient phone number not in allowed list')).toMatch(
+      /número de teste da Meta/,
+    );
+  });
+});
+
+describe('a template with a part the system does not fill yet (auditoria, item 4)', () => {
+  const plain = (...more: Record<string, unknown>[]) =>
+    row('aviso_teste', 'UTILITY', 'Olá, {{1}}! Temos novidades.', ...more);
+  const cases: [string, TemplateRow][] = [
+    ['a variable in the title', plain({ type: 'HEADER', format: 'TEXT', text: 'Oi, {{1}}' })],
+    [
+      'a link button with a variable part',
+      plain({
+        type: 'BUTTONS',
+        buttons: [{ type: 'URL', text: 'Ver proposta', url: 'https://exemplo.com.br/p/{{1}}' }],
+      }),
+    ],
+    ['a video header', plain({ type: 'HEADER', format: 'VIDEO' })],
+    ['a document header', plain({ type: 'HEADER', format: 'DOCUMENT' })],
+  ];
+  for (const [what, template] of cases)
+    it(`is refused before anything goes, window open or closed: ${what}`, () => {
+      for (const open of [false, true]) {
+        const plan = planTemplate(
+          base({
+            request: { name: 'aviso_teste', language: 'pt_BR', params: [], companyArticle: 'a' },
+            templates: [template],
+            window: { open, expiresAt: null },
+            hasArt: false,
+          }),
+        );
+        expect(plan).toMatchObject({ ok: false, status: 422, error: 'template_unsupported' });
+        expect(unsupportedOf(template)).toContain('Escolha outro modelo');
+      }
+    });
+
+  it('a fixed title and a fixed link still go', () => {
+    const fixed = plain(
+      { type: 'HEADER', format: 'TEXT', text: 'Novidades' },
+      { type: 'BUTTONS', buttons: [{ type: 'URL', text: 'Ver', url: 'https://exemplo.com.br/p' }] },
+    );
+    expect(unsupportedOf(fixed)).toBeNull();
+  });
+});
+
+describe('the call-request templates of 30/10 (call_permission_request)', () => {
+  const ask = { type: 'CALL_PERMISSION_REQUEST' };
+  const expansao = row(
+    'expansao_pedir_ligacao',
+    'MARKETING',
+    'Olá, {{1}}! Aqui é {{2}}, do time de expansão da {{3}}. Posso te ligar por aqui, pelo WhatsApp, para conversarmos sobre a franquia? Se puder, é só autorizar no botão abaixo.',
+    ask,
+  );
+  const wings = row(
+    'wings_formatacao_pedir_ligacao',
+    'MARKETING',
+    'Olá, {{1}}! Aqui é {{2}}, da Wings Company. Posso te ligar por aqui, pelo WhatsApp, para conversarmos sobre a formatação da sua franquia? Se puder, é só autorizar no botão abaixo.',
+    ask,
+  );
+  const request = (name: string) => ({
+    name,
+    language: 'pt_BR',
+    params: [],
+    companyArticle: 'a' as const,
+  });
+
+  it('outside the window, the brand template goes as the approved template, with the brand plain', () => {
+    const plan = ok(
+      base({
+        request: request('expansao_pedir_ligacao'),
+        templates: [expansao],
+        voice: { name: 'A Cabana da Barra', article: 'a' },
+      }),
+    );
+    expect(plan.preview).toMatchObject({ sendAs: 'template', charged: true, ready: true });
+    expect(plan.preview.fields.map((f) => f.role)).toEqual(['lead', 'seller', 'brand']);
+    expect(plan.preview.text).toContain('do time de expansão da Cabana da Barra.');
+    expect(payloadOf(plan, null)).toEqual({
+      type: 'template',
+      template: {
+        name: 'expansao_pedir_ligacao',
+        language: { code: 'pt_BR' },
+        components: [
+          {
+            type: 'body',
+            parameters: [
+              { type: 'text', text: 'Ricardo' },
+              { type: 'text', text: 'Fernando' },
+              { type: 'text', text: 'Cabana da Barra' },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
+  it('the Wings template has the lead and the seller only', () => {
+    const plan = ok(
+      base({ request: request('wings_formatacao_pedir_ligacao'), templates: [wings], voice: null }),
+    );
+    expect(plan.preview.fields.map((f) => f.role)).toEqual(['lead', 'seller']);
+    expect(plan.preview.text).toMatch(/^Olá, Ricardo! Aqui é Fernando, da Wings Company\./);
+  });
+
+  it('inside the window, never a common message: the free request, with the voice’s text', () => {
+    const plan = ok(
+      base({
+        request: request('expansao_pedir_ligacao'),
+        templates: [expansao],
+        window: { open: true, expiresAt: '2026-10-31T12:00:00.000Z' },
+      }),
+    );
+    const shown = callPermissionText({ name: 'Malkuth', article: 'a' });
+    expect(plan.free?.kind).toBe('call_permission');
+    expect(plan.needsArt).toBe(false);
+    expect(plan.preview).toMatchObject({
+      sendAs: 'free',
+      charged: false,
+      text: shown,
+      withArt: false,
+    });
+    expect(payloadOf(plan, null)).toEqual({
+      type: 'interactive',
+      interactive: {
+        type: 'call_permission_request',
+        body: { text: shown },
+        action: { name: 'call_permission_request' },
+      },
+    });
   });
 });

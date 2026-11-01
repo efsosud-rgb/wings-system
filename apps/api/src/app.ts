@@ -38,18 +38,24 @@ import { onStageEntered } from './modules/leads/automations.js';
 import { crmMailOf } from './modules/leads/crm-mail.js';
 import { crmRoutes } from './modules/leads/crm-routes.js';
 import { automationRoutes } from './modules/leads/automation-routes.js';
+import { contactOptOutRoutes } from './modules/leads/contact-opt-out-routes.js';
 import { leadEmailRoutes } from './modules/leads/lead-email-routes.js';
 import { leadFilesRoutes } from './modules/leads/lead-files-routes.js';
 import { nucleoRoutes } from './modules/leads/nucleo-routes.js';
+import { instagramProspectingRoutes } from './modules/prospect-ai/instagram-routes.js';
+import { prospectingRoutes } from './modules/prospecting/routes.js';
 import { leadRoutes } from './modules/leads/routes.js';
+import { siteEventRoutes } from './modules/leads/site-events.js';
 import { siteFormRoutes } from './modules/leads/site-forms.js';
 import { leadWebhookRoutes } from './modules/leads/webhooks.js';
 import { sofiaRoutes } from './modules/sofia/routes.js';
 import { whatsappCallRoutes } from './modules/whatsapp/call-routes.js';
 import { whatsappImportBulkRoutes } from './modules/whatsapp/import-bulk-routes.js';
 import { whatsappImportRoutes } from './modules/whatsapp/import-routes.js';
+import { whatsappNumbersRoutes } from './modules/whatsapp/numbers-routes.js';
 import { whatsappRingingStreamRoutes } from './modules/whatsapp/ringing-stream.js';
 import { whatsappRoutes } from './modules/whatsapp/routes.js';
+import { whatsappTemplateAdminRoutes } from './modules/whatsapp/template-admin-routes.js';
 import { whatsappWebhookRoutes } from './modules/whatsapp/webhook-routes.js';
 import { mediaRoutes } from './modules/media/routes.js';
 import { mediaStudioRoutes } from './modules/media/studio-routes.js';
@@ -63,7 +69,7 @@ import {
   createInstagramDiscovery,
   type LeadCheckDeps,
 } from './modules/leads/field-checks.js';
-import { probePublicUrl } from './lib/public-probe.js';
+import { probePublicUrl, type PageTransport } from './lib/public-probe.js';
 import {
   createJevClient,
   installLeadTriage,
@@ -111,6 +117,12 @@ declare module 'fastify' {
       googleFetch?: typeof fetch;
       /** Set only by tests, so no test ever reaches YouTube's public video check. */
       youtubeFetch?: typeof fetch;
+      /** Set only by tests, so no test ever reaches Google Places. */
+      placesFetch?: typeof fetch;
+      /** Set only by tests, so no test ever reaches Instagram's Business Discovery (Prospecção). */
+      instagramDiscoveryFetch?: typeof fetch;
+      /** Set only by tests, so no test ever reads a company's site (Prospecção). */
+      siteTransport?: PageTransport;
       storage?: ObjectStorage;
       /** Set only by tests, so a screen that reasons about "today" can be pinned to a day. */
       now?: () => Date;
@@ -152,6 +164,12 @@ export async function buildApp(deps: {
   googleFetch?: typeof fetch;
   /** Overridable so tests answer YouTube's public video check themselves. */
   youtubeFetch?: typeof fetch;
+  /** Overridable so tests talk to a simulated Google Places. */
+  placesFetch?: typeof fetch;
+  /** Overridable so tests play Instagram's Business Discovery themselves. */
+  instagramDiscoveryFetch?: typeof fetch;
+  /** Overridable so tests serve the companies' sites themselves. */
+  siteTransport?: PageTransport;
   storage?: ObjectStorage;
   /** Overridable so tests pin the dashboard's "today". */
   now?: () => Date;
@@ -253,6 +271,9 @@ export async function buildApp(deps: {
     whatsappFetch: deps.whatsappFetch,
     googleFetch: deps.googleFetch,
     youtubeFetch: deps.youtubeFetch,
+    placesFetch: deps.placesFetch,
+    instagramDiscoveryFetch: deps.instagramDiscoveryFetch,
+    siteTransport: deps.siteTransport,
     storage: deps.storage,
     now: deps.now,
     mailer: deps.mailer ?? createMailer(deps.env, { info: (msg) => app.log.info(msg) }),
@@ -336,7 +357,10 @@ export async function buildApp(deps: {
   await app.register(crmRoutes);
   await app.register(automationRoutes);
   await app.register(leadEmailRoutes);
+  await app.register(contactOptOutRoutes);
   await app.register(nucleoRoutes);
+  await app.register(prospectingRoutes);
+  await app.register(instagramProspectingRoutes);
   await app.register(leadFilesRoutes);
   await app.register(rdUserRoutes);
   await app.register(landingPageRoutes);
@@ -346,9 +370,12 @@ export async function buildApp(deps: {
   await app.register(whatsappCallRoutes);
   await app.register(whatsappImportRoutes);
   await app.register(whatsappImportBulkRoutes);
+  await app.register(whatsappNumbersRoutes);
+  await app.register(whatsappTemplateAdminRoutes);
   await app.register(whatsappRingingStreamRoutes);
   await app.register(sofiaRoutes);
   await app.register(siteFormRoutes);
+  await app.register(siteEventRoutes);
   await app.register(driveRoutes);
   await app.register(driveBlobRoutes);
   await app.register(kairogenRoutes);

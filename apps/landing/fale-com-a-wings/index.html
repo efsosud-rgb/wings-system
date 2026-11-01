@@ -3,11 +3,12 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>Fale com a Wings</title>
+    <title>Diagnóstico gratuito de franqueabilidade | Wings Company</title>
     <meta
       name="description"
-      content="Converse com a Wings Company sobre o próximo passo da sua expansão: consultoria de negócios, formatação de franquia, expansão e governança."
+      content="Formatação de franquias com a Wings Company, no Rio de Janeiro: peça o diagnóstico gratuito de franqueabilidade e descubra se a sua empresa está pronta para crescer com franquias."
     />
+    <link rel="canonical" href="https://fale.wingscompany.com.br/" />
     <meta name="robots" content="__LANDING_ROBOTS__" />
     <meta name="theme-color" content="#ffffff" />
     <meta name="wings:api-base" content="__LANDING_API_BASE__" />
@@ -15,10 +16,10 @@
     <meta property="og:type" content="website" />
     <meta property="og:locale" content="pt_BR" />
     <meta property="og:site_name" content="Wings Company" />
-    <meta property="og:title" content="Fale com a Wings" />
+    <meta property="og:title" content="Diagnóstico gratuito de franqueabilidade | Wings Company" />
     <meta
       property="og:description"
-      content="Toda expansão começa com uma boa leitura do negócio."
+      content="Formatação de franquias no Rio de Janeiro: peça o diagnóstico gratuito e descubra se a sua empresa está pronta para virar franquia."
     />
     <meta property="og:url" content="__LANDING_PAGE_URL__" />
     <meta property="og:image" content="__LANDING_ORIGIN__/og/fale-com-a-wings.png" vite-ignore />
@@ -50,13 +51,55 @@
         }
       }
     </script>
-    <link
-      rel="preload"
-      href="../node_modules/@fortawesome/fontawesome-free/webfonts/fa-brands-400.woff2"
-      as="font"
-      type="font/woff2"
-      crossorigin
-    />
+    <!-- the same five questions and answers as the "Perguntas frequentes" section (seo.test.ts) -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "Quanto custa formatar uma franquia?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Depende do escopo do projeto. No diagnóstico gratuito, a Wings avalia o seu caso e apresenta a proposta."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Quanto tempo leva?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Depende do negócio e dos módulos do projeto. O diagnóstico gratuito estima o prazo para o seu caso."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Meu negócio pode virar franquia?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Os sinais são uma operação lucrativa e estável, processos que se repetem, marca registrada ou em registro no INPI e um modelo que outra pessoa consiga operar. O diagnóstico confere cada um deles no seu negócio."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Preciso parar a operação?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Não. A sua empresa continua funcionando durante todo o trabalho."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "A Wings também ajuda a vender as unidades?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Sim. A frente de Expansão e Governança cuida do crescimento da rede, com critérios de seleção, acompanhamento das unidades e governança."
+            }
+          }
+        ]
+      }
+    </script>
     <script type="module" src="/src/pages/fale-com-a-wings/main.ts"></script>
   </head>
   <body>
@@ -154,15 +197,16 @@
             <div class="hero-copy">
               <p class="eyebrow">Fale com a Wings</p>
               <h1 id="h1" class="h1" data-words>
-                Toda expansão começa com uma <em>boa leitura</em> do negócio.
+                Diagnóstico gratuito de <em>franqueabilidade</em>
               </h1>
+              <p class="for">Para empresas validadas que querem crescer com franquias.</p>
               <p class="lead">
-                A primeira conversa com a Wings é uma leitura honesta sobre a sua operação, seus
-                desafios de crescimento e o caminho mais coerente para avançar com método. Não vamos
-                te empurrar uma solução pronta. Vamos descobrir o que faz mais sentido formatar,
-                expandir ou estruturar melhor o que já existe.
+                O diagnóstico é uma leitura honesta sobre a sua operação, seus desafios de
+                crescimento e o caminho mais coerente para avançar com método. Não vamos te empurrar
+                uma solução pronta. Vamos descobrir o que faz mais sentido formatar, expandir ou
+                estruturar melhor o que já existe.
               </p>
-              <p class="expect-title">O que você pode esperar da primeira conversa:</p>
+              <p class="expect-title">O que você recebe no diagnóstico:</p>
               <ul class="expect">
                 <li>Leitura honesta do momento atual</li>
                 <li>Identificação dos principais gargalos</li>
@@ -236,6 +280,16 @@
               <!-- include: src/pages/fale-com-a-wings/form.html -->
             </div>
           </div>
+        </div>
+      </section>
+
+      <!-- 1b. Prova: só números que o site da Wings publica (formatação de franquia e home, 27/10/2026) -->
+      <section class="proof" aria-label="A Wings em números">
+        <div class="wrap">
+          <ul class="proof-list">
+            <li><b>+1.400</b><span>marcas formatadas</span></li>
+            <li><b>+30 anos</b><span>de experiência em varejo e franchising</span></li>
+          </ul>
         </div>
       </section>
 
@@ -385,6 +439,49 @@
         </div>
       </section>
 
+      <!-- 4b. Perguntas frequentes (o mesmo texto do FAQPage no <head>) -->
+      <section id="perguntas" class="faq" aria-labelledby="h-faq">
+        <div class="wrap">
+          <p class="eyebrow">Dúvidas</p>
+          <h2 id="h-faq" class="h2">Perguntas <em>frequentes</em></h2>
+          <div class="faq-list">
+            <details>
+              <summary>Quanto custa formatar uma franquia?</summary>
+              <p>
+                Depende do escopo do projeto. No diagnóstico gratuito, a Wings avalia o seu caso e
+                apresenta a proposta.
+              </p>
+            </details>
+            <details>
+              <summary>Quanto tempo leva?</summary>
+              <p>
+                Depende do negócio e dos módulos do projeto. O diagnóstico gratuito estima o prazo
+                para o seu caso.
+              </p>
+            </details>
+            <details>
+              <summary>Meu negócio pode virar franquia?</summary>
+              <p>
+                Os sinais são uma operação lucrativa e estável, processos que se repetem, marca
+                registrada ou em registro no INPI e um modelo que outra pessoa consiga operar. O
+                diagnóstico confere cada um deles no seu negócio.
+              </p>
+            </details>
+            <details>
+              <summary>Preciso parar a operação?</summary>
+              <p>Não. A sua empresa continua funcionando durante todo o trabalho.</p>
+            </details>
+            <details>
+              <summary>A Wings também ajuda a vender as unidades?</summary>
+              <p>
+                Sim. A frente de Expansão e Governança cuida do crescimento da rede, com critérios
+                de seleção, acompanhamento das unidades e governança.
+              </p>
+            </details>
+          </div>
+        </div>
+      </section>
+
       <!-- 5. Chamada final: volta ao formulário ou WhatsApp -->
       <section
         id="final"
@@ -404,12 +501,12 @@
               Vamos conversar sobre o próximo passo da <em>sua expansão?</em>
             </h2>
             <p class="lead">
-              Preencha o formulário ou chame a Wings no WhatsApp. A leitura do seu negócio começa na
-              primeira conversa.
+              Peça o diagnóstico gratuito ou chame a Wings no WhatsApp. A leitura do seu negócio
+              começa na primeira conversa.
             </p>
             <div class="ctas">
               <a class="btn btn-primary magnetic" href="#formulario"
-                ><span>Preencher o formulário</span></a
+                ><span>Quero meu diagnóstico</span></a
               >
               <a class="btn btn-ghost magnetic" href="#" data-wa
                 ><span

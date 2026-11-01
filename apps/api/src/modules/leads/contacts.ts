@@ -1,4 +1,5 @@
 import {
+  brazilianPhoneVariants,
   companyKey,
   isValidCnpj,
   normalizeBrazilianPhone,
@@ -11,7 +12,7 @@ import {
   type LeadContactRef,
   type LeadPipeline,
 } from '@wings/shared';
-import { and, asc, desc, eq, isNull, ne, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, ne, or, sql, type SQL } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   clients,
@@ -21,6 +22,8 @@ import {
   leadContacts,
   leadEvents,
   leads,
+  waContacts,
+  waConversations,
 } from '../../db/schema/index.js';
 import { createClientRecord } from '../clients/create.js';
 import type { Executor } from './crm.js';
@@ -621,6 +624,27 @@ export async function contactOnForeignDeal(
 }
 
 /**
+ * A number Sofia or the team is attending with no deal yet (the "busy" of GET /whatsapp/targets).
+ * An owner-scoped caller may not open it as their own deal: the conversation, and what the person
+ * said in it, would move to that deal and skip the funnel's rotation (audit 2026-10-27, WA-03).
+ */
+export async function numberInAttendance(db: Executor, phone: string): Promise<boolean> {
+  const [busy] = await db
+    .select({ one: sql<number>`1` })
+    .from(waConversations)
+    .innerJoin(waContacts, eq(waContacts.id, waConversations.contactId))
+    .where(
+      and(
+        inArray(waContacts.phone, brazilianPhoneVariants(phone)),
+        isNull(waConversations.leadId),
+        sql`${waConversations.attendance} is distinct from 'closed'`,
+      ),
+    )
+    .limit(1);
+  return Boolean(busy);
+}
+
+/**
  * The person of an arriving lead, as a contact: found or made from the lead's
  * own name, e-mail and phone, tied as the lead's main contact when it has
  * none, and the lead's company tied to the contact when the contact has none.
@@ -907,9 +931,26 @@ export async function leadsOfContact(
   }));
 }
 
-export async function leadsOfCompany(
+export const leadsOfCompany = (db: Executor, companyId: string, ownerEmployeeId?: string) =>
+  relatedLeads(db, eq(leads.companyId, companyId), ownerEmployeeId);
+
+/** The deals of every CRM company linked to a client of the Formatação register. */
+export const leadsOfClient = (db: Executor, clientId: string, ownerEmployeeId?: string) =>
+  relatedLeads(
+    db,
+    inArray(
+      leads.companyId,
+      db
+        .select({ id: crmCompanies.id })
+        .from(crmCompanies)
+        .where(eq(crmCompanies.clientId, clientId)),
+    ),
+    ownerEmployeeId,
+  );
+
+async function relatedLeads(
   db: Executor,
-  companyId: string,
+  where: SQL,
   ownerEmployeeId?: string,
 ): Promise<CrmRelatedLead[]> {
   const rows = await db
@@ -926,12 +967,7 @@ export async function leadsOfCompany(
     })
     .from(leads)
     .leftJoin(employees, eq(employees.id, leads.ownerEmployeeId))
-    .where(
-      and(
-        eq(leads.companyId, companyId),
-        ownerEmployeeId ? eq(leads.ownerEmployeeId, ownerEmployeeId) : undefined,
-      ),
-    )
+    .where(and(where, ownerEmployeeId ? eq(leads.ownerEmployeeId, ownerEmployeeId) : undefined))
     .orderBy(desc(leads.createdAt))
     .limit(100);
   return rows.map((row) => ({

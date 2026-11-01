@@ -142,6 +142,38 @@ describe('e-mail to the lead from the deal page', () => {
     expect(JSON.stringify(entry?.metadata)).not.toContain('Carla');
   });
 
+  it('refuses with the reason when the lead asked not to be contacted by e-mail', async () => {
+    const { lead } = await arrive({
+      name: 'Pessoa Bloqueada',
+      email: 'bloqueada@exemplo.com',
+      owner: seller.employeeId,
+    });
+    const recorded = await app.inject({
+      method: 'POST',
+      url: `/leads/${lead.id}/contact-opt-outs`,
+      cookies: seller.cookies,
+      payload: { channels: ['email'], reason: 'Pediu para não receber e-mail' },
+    });
+    expect(recorded.statusCode).toBe(201);
+    const refused = await app.inject({
+      method: 'POST',
+      url: `/leads/${lead.id}/emails`,
+      cookies: seller.cookies,
+      payload: { templateId },
+    });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toEqual({
+      error: 'contact_blocked',
+      message: expect.stringContaining('Pediu para não ser contatado (e-mail'),
+    });
+    expect(await db.$count(crmEmailOutbox, eq(crmEmailOutbox.leadId, lead.id))).toBe(0);
+    const events = await db.select().from(leadEvents).where(eq(leadEvents.leadId, lead.id));
+    expect(events.find((e) => e.kind === 'lead.contact_blocked')?.detail).toMatchObject({
+      channel: 'email',
+      path: 'email_manual',
+    });
+  });
+
   it('refuses a lead without e-mail and a disabled or unknown template', async () => {
     const { lead: noMail } = await arrive({ name: 'Sem Email', owner: seller.employeeId });
     const none = await app.inject({

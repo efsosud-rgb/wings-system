@@ -49,8 +49,49 @@ Estados (`wa_conversations.attendance`): `sofia` Sofia atendendo · `waiting_sel
 - **Encerra sozinha só em três casos:** pediu para não ser contatado (SAIR/PARAR, regra fixa, sem IA; bloqueia
   mensagens ativas), spam, número errado. Uma negociação aberta sem dono da conversa vira perda com esse motivo;
   com dono, nunca é tocada.
+- **Depois do SAIR, a conversa fica bloqueada para ela** (Eric, 29/10, WA-12): a confirmação do SAIR é a última
+  palavra dela. Quem tem "não me contate" ativo e escreve de novo, **inclusive outro SAIR**, não recebe nada da
+  Sofia (nem a confirmação de novo, nem texto livre): a conversa cai em "Aguardando atendente" (`nao_me_contate`)
+  e o dono (ou, sem dono, gerência e diretoria) recebe aviso. Uma pessoa decide. A confirmação vai marcada
+  (`content.optOut`), e um SAIR anterior da pessoa também conta, por qualquer chave: o telefone com ou sem o 9º
+  dígito, o telefone da negociação e as outras conversas da negociação. Da checagem do "não me contate" só sai o
+  registro que o próprio SAIR do turno gravou (pela data do registro): um pedido mais antigo, mesmo um "não quero
+  mais" de antes da marca, segue bloqueando, e a confirmação não vai de novo. Figurinha ou arquivo depois do SAIR:
+  a conversa segue encerrada, sem resposta. Um "não me contate" gravado enquanto a IA lê a mensagem para o que
+  ela ia dizer (conferido de novo antes de cada envio).
+- **A equipe também não escreve** (Eric, 30/10 e 31/10): com "não me contate" ou SAIR, nada sai para a pessoa,
+  por nenhum número (oficial ou de coexistência): texto, arquivo, áudio, modelo e pedido de ligação são recusados
+  (409 `contact_blocked`), mesmo dentro das 24 h. Quem escreve de novo depois do SAIR cai em "Aguardando
+  atendente", mas o bloqueio continua até a gerência ou a diretoria revogá-lo na negociação, com motivo
+  (`docs/crm/nao-me-contate.md`).
 - **Limites:** não informa valores, não promete nada, mensagens curtas. Fora do horário (seg–sex 9h–18h, São
   Paulo) a transferência leva o texto de fora do horário.
+
+## O estado só avança quando a Meta aceitou (26/10)
+
+Caso real do staging (26/10, 15:20): a pergunta "qual é o seu nome?" foi recusada pela Meta (131030) e a pessoa
+escreveu "Teste", que virou o nome. Agora:
+
+- Uma pergunta que a Meta recusou (na hora ou depois, pelo aviso de status `failed`) ou que ficou sem resposta da
+  Meta (sem `wamid`) **não chegou**: o que a pessoa escreve depois não é lido como resposta a ela. A Sofia refaz a
+  pergunta (e se apresenta de novo se nem a primeira mensagem dela chegou), sem chamar a IA e sem contar como "não
+  entendeu".
+- Um envio ainda em andamento é esperado (o turno volta em 5 s); um que um reinício cortou conta como não chegou.
+- Recusada **duas vezes seguidas**: a conversa vai para uma pessoa (`envio_recusado`), sem mandar mais nada.
+- O "SAIR/PARAR" continua valendo antes disso.
+
+## Por conversa, pessoas no meio e o histórico (fase 2a)
+
+- **Pausar a Sofia nesta conversa** (Central): ela para e não volta a atender ali (nem quando a conversa é
+  resolvida e a pessoa escreve de novo) até alguém com `sofia.read` **ligar a Sofia** nela, ou "Devolver para a
+  Sofia" na tela da Sofia. Motivo na conversa: "Sofia pausada nesta conversa".
+- Uma pessoa que escreve na conversa a suspende antes de a mensagem sair, e a conversa passa a ser dela.
+- O turno da Sofia guarda a **versão** da conversa: se uma pessoa assumiu (mesmo que tenha devolvido) enquanto ela
+  lia ou chamava a IA, ela não grava nem envia nada.
+- Cada passagem para uma pessoa entra no histórico da conversa com o motivo, e, com o rodízio ligado
+  (`docs/whatsapp/central.md`, "Atendimento"), a conversa vai para a próxima pessoa do funil. O painel da Central
+  mostra o motivo e o que ela descobriu.
+- Ela continua **desligada por padrão**.
 
 ## A IA
 
@@ -60,8 +101,19 @@ Estados (`wa_conversations.attendance`): `sofia` Sofia atendendo · `waiting_sel
 - Sem IA: botões, listas, o nome, "sim/não" da marca e "não tenho" das perguntas opcionais.
 - **Nome, telefone e e-mail não vão para a IA:** a resposta do nome é lida por regra; o nome e o nome do perfil
   são trocados por "[nome]" no histórico enviado; números e e-mails são removidos.
-- A frase da IA só sai se for curta, sem pergunta, sem número, sem palavra de preço, sem promessa, sem link,
-  sem dizer que é pessoa e, em conversa de marca, sem citar a Wings. Senão, vai só a pergunta.
+- **A frase da IA só sai se estiver na lista aprovada** (Eric, 29/10, WA-04), e sai com o nosso texto, nunca com o
+  do modelo (maiúsculas, espaços e a pontuação final não importam). Antes da lista, continuam os bloqueios: curta,
+  sem pergunta, sem número, sem palavra de preço, sem promessa, sem link, sem dizer que é pessoa e, em conversa de
+  marca, sem citar a Wings. Fora da lista, vai só a pergunta; se a resposta não andou o roteiro, conta como "não
+  entendeu" (na segunda vez, uma pessoa assume). A lista está em `apps/api/src/modules/sofia/brain.ts`
+  (`SOFIA_ACKNOWLEDGEMENTS`) e no prompt (`sofia-2026-10-31.1`). **Lista proposta, valendo até o Eric aprovar ou
+  trocar:**
+  1. "Entendi."
+  2. "Certo, anotado."
+  3. "Perfeito, obrigada."
+  4. "Ótimo, obrigada."
+  5. "Obrigada pela resposta."
+  6. "Obrigada pelas informações."
 - **Teto:** `SOFIA_DAILY_USD` (padrão 1) por dia UTC. Cada chamada reserva US$ 0,01 sob trava antes de ser feita
   e fica com o custo real que o OpenRouter informa (`sofia_ai_runs`). Uma chamada fica bem abaixo de um
   centavo. Passou do teto, falhou ou demorou mais de 15 s: mensagem fixa e a conversa vai para uma pessoa.
@@ -93,16 +145,16 @@ Estados (`wa_conversations.attendance`): `sofia` Sofia atendendo · `waiting_sel
 
 ## Rotas (com sessão)
 
-| Rota | Permissão | O quê |
-| --- | --- | --- |
-| `GET /sofia/overview` | `leads.whatsapp` | ligada, IA configurada, gasto do dia, contagem por estado |
-| `GET /sofia/conversations?state=&segment=&q=` | `leads.whatsapp` | lista no escopo |
-| `GET /sofia/conversations/:id` | `leads.whatsapp` | conversa, o que ela descobriu, origem, negociação |
-| `POST /sofia/conversations/:id/attendance` | `leads.whatsapp` | `take` · `give_back` · `close` |
-| `GET /sofia/settings` · `PUT /sofia/settings` | `leads.whatsapp` · `sofia.manage` | textos e perguntas |
-| `GET /whatsapp/conversations?filter=&q=` | `leads.whatsapp` | WhatsApp Web: não lidas por pessoa, status |
-| `GET /whatsapp/conversations/:id` · `POST …/read` | `leads.whatsapp` | abrir qualquer conversa do escopo; marcar lida |
-| `GET /whatsapp/targets?q=` | `leads.whatsapp` | "Nova conversa": negociações e contatos do escopo |
+| Rota                                                  | Permissão                         | O quê                                                     |
+| ----------------------------------------------------- | --------------------------------- | --------------------------------------------------------- |
+| `GET /sofia/overview`                                 | `leads.whatsapp`                  | ligada, IA configurada, gasto do dia, contagem por estado |
+| `GET /sofia/conversations?state=&segment=&q=&before=` | `leads.whatsapp`                  | lista no escopo, 50 por vez (`next`)                      |
+| `GET /sofia/conversations/:id`                        | `leads.whatsapp`                  | conversa, o que ela descobriu, origem, negociação         |
+| `POST /sofia/conversations/:id/attendance`            | `leads.whatsapp`                  | `take` · `give_back` · `close` (com `version` opcional)   |
+| `GET /sofia/settings` · `PUT /sofia/settings`         | `leads.whatsapp` · `sofia.manage` | textos e perguntas                                        |
+| `GET /whatsapp/conversations?filter=&q=`              | `leads.whatsapp`                  | WhatsApp Web: não lidas por pessoa, status                |
+| `GET /whatsapp/conversations/:id` · `POST …/read`     | `leads.whatsapp`                  | abrir qualquer conversa do escopo; marcar lida            |
+| `GET /whatsapp/targets?q=`                            | `leads.whatsapp`                  | "Nova conversa": negociações e contatos do escopo         |
 
 ## Dados (migração 0080)
 

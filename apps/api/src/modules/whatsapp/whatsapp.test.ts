@@ -1,18 +1,24 @@
 import { createHmac } from 'node:crypto';
 import {
   SESSION_COOKIE,
+  WA_MESSAGES_PAGE,
   WINGS_CLIENT_ID,
+  siteLinkText,
   type DealWhatsApp,
+  type WaMessage,
   type RoleKey,
   type WaConversationItem,
 } from '@wings/shared';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
 import {
   auditLog,
+  contactOptOuts,
+  leadEvents,
+  leadNotes,
   leadTrackingLinks,
   leadTriageQueue,
   leads,
@@ -152,6 +158,21 @@ async function sessionFor(role: RoleKey) {
   return { id: employee.id, cookies: { [SESSION_COOKIE]: token } };
 }
 
+/** "Assumir" (attendance.ts): someone who sees a conversation another person holds takes it. */
+async function takeOver(cookies: Record<string, string>, employeeId: string, leadId: string) {
+  const [conversation] = await db
+    .select({ id: waConversations.id, version: waConversations.version })
+    .from(waConversations)
+    .where(eq(waConversations.leadId, leadId));
+  const res = await app.inject({
+    method: 'POST',
+    url: `/whatsapp/conversations/${conversation!.id}/assign`,
+    cookies,
+    payload: { version: conversation!.version, employeeId },
+  });
+  expect(res.statusCode).toBe(204);
+}
+
 async function deal(
   phone: string | null,
   ownerId: string | null,
@@ -187,11 +208,17 @@ const run = () =>
   processWhatsAppEvents({ db, phoneNumberId: PHONE_ID, log: () => {}, now: () => NOW });
 
 let seq = 0;
-/** Meta's published shape of an incoming text message. */
+/** Meta's published shape of an incoming text message; `fields` replaces its type and text. */
 function inbound(
   from: string,
   text: string,
-  opts: { id?: string; at?: Date; name?: string; phoneId?: string } = {},
+  opts: {
+    id?: string;
+    at?: Date;
+    name?: string;
+    phoneId?: string;
+    fields?: Record<string, unknown>;
+  } = {},
 ) {
   const id = opts.id ?? `wamid.IN${++seq}`;
   return {
@@ -216,8 +243,7 @@ function inbound(
                     from,
                     id,
                     timestamp: unix(opts.at ?? new Date(NOW.getTime() - 3_600_000)),
-                    type: 'text',
-                    text: { body: text },
+                    ...(opts.fields ?? { type: 'text', text: { body: text } }),
                   },
                 ],
               },
@@ -421,6 +447,25 @@ describe('incoming messages', () => {
       .where(eq(waConversations.id, row!.conversationId));
     expect(conversation?.originCode).toBe(code);
   });
+
+  it("makes the lead from the Wings site's sentence, the code at the end", async () => {
+    const code = 'SYTE23';
+    await db
+      .insert(leadTrackingLinks)
+      .values({ clientId: WINGS_CLIENT_ID, channel: 'site', code, phone: '5521999470288' });
+    const message = inbound('5541988886666', siteLinkText(code));
+    await deliver(message.body);
+    await run();
+    const [lead] = await db.select().from(leads).where(eq(leads.phone, '5541988886666'));
+    expect(lead).toMatchObject({ source: 'whatsapp_link' });
+    const [row] = await db.select().from(waMessages).where(eq(waMessages.wamid, message.id));
+    expect(row?.leadId).toBe(lead!.id);
+    const [conversation] = await db
+      .select()
+      .from(waConversations)
+      .where(eq(waConversations.id, row!.conversationId));
+    expect(conversation?.originCode).toBe(code);
+  });
 });
 
 describe('sending', () => {
@@ -548,6 +593,7 @@ describe('sending', () => {
         body: 'Olá {{1}}, aqui é {{2}} da Wings. Podemos continuar?',
         paramCount: 2,
         artVersion: false,
+        unsupported: null,
       },
     ]);
     const wrong = await app.inject({
@@ -595,7 +641,7 @@ describe('sending', () => {
     });
   });
 
-  it('blocks templates to a person who asked to stop, until they write again', async () => {
+  it('blocks templates to a person who asked to stop, also after they write again', async () => {
     const owner = await sessionFor('vendedor_formatacao');
     const leadId = await deal('5521912120000', owner.id);
     await deliver(inbound('5521912120000', 'SAIR').body);
@@ -607,7 +653,13 @@ describe('sending', () => {
       payload: { name: 'retomar_conversa', language: 'pt_BR', params: ['a', 'b'] },
     });
     expect(blocked.statusCode).toBe(409);
-    expect(blocked.json().error).toBe('opted_out');
+    expect(blocked.json().error).toBe('contact_blocked');
+    // The word also goes to the one register, by phone, even with Sofia off.
+    const [registered] = await db
+      .select()
+      .from(contactOptOuts)
+      .where(eq(contactOptOuts.keyValue, '5521912120000'));
+    expect(registered).toMatchObject({ channel: 'whatsapp', origin: 'whatsapp_palavra' });
     await deliver(inbound('5521912120000', 'Pensei melhor, me liga').body);
     await run();
     const thread = await app.inject({
@@ -616,6 +668,91 @@ describe('sending', () => {
       cookies: owner.cookies,
     });
     expect(thread.json<DealWhatsApp>().optedOut).toBe(false);
+    // Writing again lifts the SAIR of the contact, not the register: still nothing goes (Eric, 31/10).
+    expect(thread.json<DealWhatsApp>().contactBlock.blocked).toBe(true);
+    const again = await app.inject({
+      method: 'POST',
+      url: `/leads/${leadId}/whatsapp/template`,
+      cookies: owner.cookies,
+      payload: { name: 'retomar_conversa', language: 'pt_BR', params: ['a', 'b'] },
+    });
+    expect([again.statusCode, again.json().error]).toEqual([409, 'contact_blocked']);
+  });
+
+  it('a "não me contate" stops the template, the call request and a typed reply inside the window', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521912130000', owner.id);
+    await deliver(inbound('5521912130000', 'Oi').body);
+    await run();
+    const recorded = await app.inject({
+      method: 'POST',
+      url: `/leads/${leadId}/contact-opt-outs`,
+      cookies: owner.cookies,
+      payload: { channels: ['whatsapp'], reason: 'Pediu por telefone' },
+    });
+    expect(recorded.statusCode).toBe(201);
+    expect(recorded.json().blocks.whatsapp.blocked).toBe(true);
+    const before = sends.length;
+    for (const [url, payload] of [
+      [
+        `/leads/${leadId}/whatsapp/template`,
+        { name: 'retomar_conversa', language: 'pt_BR', params: ['a', 'b'] },
+      ],
+      [`/leads/${leadId}/whatsapp/call-permission`, {}],
+      // The person wrote first: a reply inside the window does not go either (Eric, 30/10).
+      [`/leads/${leadId}/whatsapp/text`, { text: 'Certo, anotado.' }],
+    ] as const) {
+      const blocked = await app.inject({ method: 'POST', url, cookies: owner.cookies, payload });
+      expect(blocked.statusCode, url).toBe(409);
+      expect(blocked.json(), url).toEqual({
+        error: 'contact_blocked',
+        message: expect.stringContaining('Pediu para não ser contatado'),
+      });
+    }
+    expect(sends.length).toBe(before);
+    const events = await db
+      .select()
+      .from(leadEvents)
+      .where(and(eq(leadEvents.leadId, leadId), eq(leadEvents.kind, 'lead.contact_blocked')));
+    expect(events.map((e) => (e.detail as { path: string }).path).sort()).toEqual([
+      'modelo',
+      'pedido_ligacao',
+      'texto',
+    ]);
+  });
+
+  it('only a manager or the board revokes a "não me contate", with a note on the timeline', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const manager = await sessionFor('gerente_comercial');
+    const leadId = await deal('5521912140000', owner.id);
+    const record = () =>
+      app.inject({
+        method: 'POST',
+        url: `/leads/${leadId}/contact-opt-outs`,
+        cookies: owner.cookies,
+        payload: { channels: ['all'], reason: 'Pediu para não ligar' },
+      });
+    expect((await record()).statusCode).toBe(201);
+    expect((await record()).json().entries).toHaveLength(1); // idempotent
+    const revoke = (cookies: Record<string, string>) =>
+      app.inject({
+        method: 'POST',
+        url: `/leads/${leadId}/contact-opt-outs/revoke`,
+        cookies,
+        payload: { channel: 'all', reason: 'Voltou a pedir contato' },
+      });
+    expect((await revoke(owner.cookies)).statusCode).toBe(403);
+    const done = await revoke(manager.cookies);
+    expect(done.statusCode).toBe(200);
+    expect(done.json().blocks.whatsapp.blocked).toBe(false);
+    expect((await revoke(manager.cookies)).statusCode).toBe(409);
+    const [audit] = await db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, 'lead.contact_opt_out_revoked'));
+    expect(audit).toMatchObject({ actorEmployeeId: manager.id, entityId: leadId });
+    const [note] = await db.select().from(leadNotes).where(eq(leadNotes.leadId, leadId));
+    expect(note!.body).toContain('Voltou a pedir contato');
   });
 });
 
@@ -663,6 +800,240 @@ describe('statuses', () => {
   });
 });
 
+describe('what the balloon shows: the reply, the reaction, the contact card, the place', () => {
+  const threadOf = async (leadId: string, cookies: Record<string, string>) =>
+    (
+      await app.inject({ method: 'GET', url: `/leads/${leadId}/whatsapp`, cookies })
+    ).json<DealWhatsApp>();
+  const idOf = async (wamid: string) =>
+    (await db.select({ id: waMessages.id }).from(waMessages).where(eq(waMessages.wamid, wamid)))[0]!
+      .id;
+
+  it('a reply shows the message it quotes, found only in the same deal', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977770001', owner.id);
+    await deal('5521977770002', owner.id);
+    const first = inbound('5521977770001', 'Qual o valor da franquia?');
+    const elsewhere = inbound('5521977770002', 'Texto de outra negociação');
+    await deliver(first.body);
+    await deliver(elsewhere.body);
+    const reply = (body: string, to: string) =>
+      inbound('5521977770001', '', {
+        fields: { type: 'text', text: { body }, context: { from: '5521977770001', id: to } },
+      }).body;
+    await deliver(reply('Resposta 1', first.id));
+    await deliver(reply('Resposta 2', elsewhere.id));
+    await deliver(reply('Resposta 3', 'wamid.NEVER-STORED'));
+    await run();
+
+    const byText = new Map(
+      (await threadOf(leadId, owner.cookies)).messages.map((m) => [m.text, m]),
+    );
+    expect(byText.get('Qual o valor da franquia?')?.replyTo).toBeNull();
+    expect(byText.get('Resposta 1')?.replyTo).toEqual({
+      found: true,
+      id: await idOf(first.id),
+      direction: 'in',
+      kind: 'text',
+      text: 'Qual o valor da franquia?',
+    });
+    // Another deal's message is never quoted, even by its wamid.
+    expect(byText.get('Resposta 2')?.replyTo).toEqual({ found: false });
+    expect(byText.get('Resposta 3')?.replyTo).toEqual({ found: false });
+    expect(JSON.stringify([...byText.values()])).not.toContain('outra negociação');
+  });
+
+  it('a reaction shows on its message, the last one of each side, and a taken-back one goes', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977770003', owner.id);
+    const otherLead = await deal('5521977770004', owner.id);
+    const first = inbound('5521977770003', 'Mandei o contrato');
+    const elsewhere = inbound('5521977770004', 'Outra conversa');
+    await deliver(first.body);
+    await deliver(elsewhere.body);
+    const react = (to: string, emoji: string, minutes: number) =>
+      inbound('5521977770003', '', {
+        at: new Date(NOW.getTime() - 3_600_000 + minutes * 60_000),
+        fields: { type: 'reaction', reaction: { message_id: to, emoji } },
+      }).body;
+    await deliver(react(first.id, '👍', 1));
+    await deliver(react(first.id, '❤️', 2));
+    // From this deal's number to another deal's message, and to one never stored.
+    await deliver(react(elsewhere.id, '😮', 3));
+    await deliver(react('wamid.NEVER-STORED', '🙏', 4));
+    await run();
+
+    const data = await threadOf(leadId, owner.cookies);
+    const quoted = {
+      found: true,
+      id: await idOf(first.id),
+      direction: 'in',
+      kind: 'text',
+      text: 'Mandei o contrato',
+    };
+    expect(data.messages.find((m) => m.text === 'Mandei o contrato')?.reactions).toEqual([
+      { emoji: '❤️', direction: 'in' },
+    ]);
+    expect(
+      data.messages.filter((m) => m.kind === 'reaction').map((m) => [m.text, m.reactionTo]),
+    ).toEqual([
+      ['👍', quoted],
+      ['❤️', quoted],
+      ['😮', { found: false }],
+      ['🙏', { found: false }],
+    ]);
+    // The other deal's message carries nothing from this one.
+    const other = await threadOf(otherLead, owner.cookies);
+    expect(other.messages.find((m) => m.text === 'Outra conversa')?.reactions).toEqual([]);
+
+    // Taken back: Meta sends the reaction with no emoji.
+    await deliver(react(first.id, '', 5));
+    await run();
+    const after = await threadOf(leadId, owner.cookies);
+    expect(after.messages.find((m) => m.text === 'Mandei o contrato')?.reactions).toEqual([]);
+    expect(after.messages.at(-1)).toMatchObject({
+      kind: 'reaction',
+      text: null,
+      reactionTo: quoted,
+    });
+  });
+
+  it('a contact card keeps each name and number; a card stored before holds none', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977770005', owner.id);
+    await deliver(
+      inbound('5521977770005', '', {
+        fields: {
+          type: 'contacts',
+          contacts: [
+            {
+              name: { formatted_name: 'Contador Fictício', first_name: 'Contador' },
+              phones: [
+                { phone: '+55 21 98888-0001', wa_id: '5521988880001', type: 'CELL' },
+                { wa_id: '5521988880002' },
+              ],
+            },
+            { name: { first_name: 'Sócio' }, phones: [] },
+          ],
+        },
+      }).body,
+    );
+    await run();
+    // As this branch found it: only the count of cards was kept.
+    const [conversation] = await db
+      .select()
+      .from(waConversations)
+      .where(eq(waConversations.leadId, leadId));
+    await db.insert(waMessages).values({
+      conversationId: conversation!.id,
+      contactId: conversation!.contactId,
+      leadId,
+      direction: 'in',
+      author: 'contact',
+      kind: 'contacts',
+      text: 'Cartão antigo',
+      content: { contacts: 1 },
+    });
+
+    const data = await threadOf(leadId, owner.cookies);
+    expect(data.messages.map((m) => [m.kind, m.text, m.contacts])).toEqual([
+      [
+        'contacts',
+        'Contador Fictício',
+        [
+          { name: 'Contador Fictício', phones: ['+55 21 98888-0001', '5521988880002'] },
+          { name: 'Sócio', phones: [] },
+        ],
+      ],
+      ['contacts', 'Cartão antigo', null],
+    ]);
+  });
+
+  it('an older page ("Mostrar anteriores") quotes and attaches reactions of the same deal only', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977770007', owner.id);
+    const otherLead = await deal('5521977770008', owner.id);
+    const elsewhere = inbound('5521977770008', 'Texto de outra negociação');
+    await deliver(elsewhere.body);
+    await deliver(inbound('5521977770007', 'Oi').body);
+    await run();
+    const conversationOf = async (lead: string) =>
+      (await db.select().from(waConversations).where(eq(waConversations.leadId, lead)))[0]!;
+    const here = await conversationOf(leadId);
+    const there = await conversationOf(otherLead);
+    const row = (conversation: typeof here, fields: Partial<typeof waMessages.$inferInsert>) => ({
+      conversationId: conversation.id,
+      contactId: conversation.contactId,
+      leadId: conversation.leadId,
+      direction: 'in',
+      author: 'contact',
+      kind: 'text',
+      ...fields,
+    });
+    const start = Date.parse('2026-10-01T10:00:00.000Z');
+    // The oldest message replies to the other deal's one; a full page comes after it.
+    await db.insert(waMessages).values([
+      row(here, {
+        wamid: 'wamid.OLDEST',
+        text: 'Mais antiga',
+        content: { replyTo: elsewhere.id },
+        createdAt: new Date(start),
+      }),
+      ...Array.from({ length: WA_MESSAGES_PAGE }, (_, i) =>
+        row(here, { text: `Depois ${i}`, createdAt: new Date(start + (i + 1) * 60_000) }),
+      ),
+      row(here, { kind: 'reaction', text: '👍', content: { reactionTo: 'wamid.OLDEST' } }),
+      // The other deal's number reacting to this deal's message by its wamid.
+      row(there, { kind: 'reaction', text: '😮', content: { reactionTo: 'wamid.OLDEST' } }),
+    ]);
+
+    const first = await threadOf(leadId, owner.cookies);
+    const older = await app.inject({
+      method: 'GET',
+      url: `/leads/${leadId}/whatsapp/messages?before=${first.messages[0]!.id}`,
+      cookies: owner.cookies,
+    });
+    expect(older.statusCode).toBe(200);
+    const oldest = older.json<{ messages: WaMessage[] }>().messages[0];
+    expect(oldest).toMatchObject({
+      text: 'Mais antiga',
+      replyTo: { found: false },
+      reactions: [{ emoji: '👍', direction: 'in' }],
+    });
+  });
+
+  it('a location keeps its point, name and address; one with no point says so', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977770006', owner.id);
+    const place = (location: Record<string, unknown>) =>
+      inbound('5521977770006', '', { fields: { type: 'location', location } }).body;
+    await deliver(
+      place({
+        latitude: -22.9068,
+        longitude: -43.1729,
+        name: 'Loja Fictícia',
+        address: 'Rua Exemplo, 100',
+      }),
+    );
+    await deliver(place({ address: 'Sem ponto' }));
+    await run();
+
+    const data = await threadOf(leadId, owner.cookies);
+    expect(data.messages.map((m) => [m.text, m.location])).toEqual([
+      [
+        'Loja Fictícia',
+        {
+          latitude: -22.9068,
+          longitude: -43.1729,
+          name: 'Loja Fictícia',
+          address: 'Rua Exemplo, 100',
+        },
+      ],
+      ['Sem ponto', { latitude: null, longitude: null, name: null, address: 'Sem ponto' }],
+    ]);
+  });
+});
+
 describe('who may see, send and open files', () => {
   it('a seller only on their own leads; Diretoria on any lead, sending too', async () => {
     const owner = await sessionFor('vendedor_formatacao');
@@ -707,13 +1078,19 @@ describe('who may see, send and open files', () => {
         .conversations.some((c) => c.leadId === leadId),
     ).toBe(false);
     nextSend = () => accepted('wamid.DIR1');
-    const dirSend = await app.inject({
-      method: 'POST',
-      url: `/leads/${leadId}/whatsapp/text`,
-      cookies: diretoria.cookies,
-      payload: { text: 'Aqui é da diretoria.' },
-    });
-    expect(dirSend.statusCode).toBe(201);
+    const dirSend = () =>
+      app.inject({
+        method: 'POST',
+        url: `/leads/${leadId}/whatsapp/text`,
+        cookies: diretoria.cookies,
+        payload: { text: 'Aqui é da diretoria.' },
+      });
+    // The seller holds the conversation: Diretoria takes it first (the seller is told), then writes.
+    const held = await dirSend();
+    expect(held.statusCode).toBe(409);
+    expect(held.json()).toMatchObject({ error: 'not_holder' });
+    await takeOver(diretoria.cookies, diretoria.id, leadId);
+    expect((await dirSend()).statusCode).toBe(201);
     const marketing = await sessionFor('marketing');
     expect(
       (
@@ -993,6 +1370,7 @@ describe('the seller lock until the official number is live (Eric, 19/10)', () =
     for (const role of ['admin_master', 'diretoria', 'gerente_comercial'] as const) {
       const person = await sessionFor(role);
       sends.length = 0;
+      await takeOver(person.cookies, person.id, leadId);
       const byDeal = await post(person.cookies, `/leads/${leadId}/whatsapp/text`, {
         text: `Aqui é ${role}.`,
       });

@@ -139,6 +139,13 @@ const schema = z.object({
     'must be a 5-field cron expression (digits, *, ranges, steps, lists)',
   ),
   /**
+   * Google Places API (New), for CRM Vendas → Prospecção (docs/crm/prospeccao.md).
+   * The key stays on the server: never in the web, an answer or a log (it goes
+   * in a header, never in a URL). Without it every route that calls Google
+   * answers 503 and the screen says the key is not configured.
+   */
+  GOOGLE_PLACES_API_KEY: optionalString,
+  /**
    * Google Analytics 4, read through the Data API. The property id is the
    * number in GA4 → Admin → Detalhes da propriedade (not the G-… measurement
    * id). Without it and GA4_REFRESH_TOKEN the site section says "não
@@ -239,6 +246,15 @@ const schema = z.object({
    * reaches people the owner's e-mail does not; turn it on only with Eric's OK (docs/crm/avisos-por-email.md).
    */
   CRM_ESCALATION_EMAIL_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
+  /**
+   * Reading the leads' e-mail replies from each seller's Gmail (t083, docs/crm/automacoes.md
+   * "E-mail recebido"): every 5 minutes, only the mailboxes whose consent includes
+   * `gmail.readonly`. Off unless "true": reading the sellers' mailboxes is Eric's switch.
+   */
+  CRM_EMAIL_REPLIES_ENABLED: optionalString.refine(
     (value) => value === undefined || value === 'true' || value === 'false',
     'must be "true" or "false"',
   ),
@@ -427,6 +443,27 @@ const schema = z.object({
     .default(DEFAULT_INSIGHTS_DAILY_USD)
     .or(z.literal('').transform(() => DEFAULT_INSIGHTS_DAILY_USD)),
   /**
+   * Prospecção Instagram, parte 2 (docs/prospeccao/instagram.md): pasting the comments of a
+   * competitor's post. Off unless "true": approaching real people waits for Jurídico (t066) and
+   * the privacy policy (t063). Off, every paste route but the status answers 503.
+   */
+  PROSPECT_AI_INSTAGRAM_PASTE_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
+  /** The buying-signal model (same OpenRouter key). Off unless "true": the rules still run. */
+  PROSPECT_AI_CLASSIFIER_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
+  /** The classifier's ceiling, US dollars a day for the whole company (São Paulo day). */
+  PROSPECT_AI_DAILY_USD: z.coerce
+    .number()
+    .positive()
+    .max(100)
+    .default(1)
+    .or(z.literal('').transform(() => 1)),
+  /**
    * The cron expression (5 fields, America/Sao_Paulo) the Coolify scheduled
    * task runs ingest-cli with. The API only reads it, to tell the screen when
    * the next ingestion is due and when one is overdue; it schedules nothing.
@@ -537,6 +574,14 @@ const schema = z.object({
   WHATSAPP_APP_SECRET: optionalString,
   /** The system user's permanent token (whatsapp_business_messaging + whatsapp_business_management). Secret. */
   WHATSAPP_ACCESS_TOKEN: optionalString,
+  /**
+   * The Embedded Signup configuration of "Wings CRM Vendas" (Facebook Login for Business), for
+   * connecting the sellers' numbers (docs/whatsapp/conectar-numero.md). Not secret.
+   */
+  WHATSAPP_ES_CONFIG_ID: optionalString.refine(
+    (value) => value === undefined || /^\d+$/.test(value),
+    'must be digits',
+  ),
   /** Reads Lead Ads form answers (leads_retrieval). Falls back to META_WRITE_TOKEN, read-only use. */
   META_LEADS_ACCESS_TOKEN: optionalString,
   /** "false" turns off reading the forms every 5 minutes (the webhook, if set, still works). */
@@ -590,6 +635,14 @@ const schema = z.object({
   ),
   /** Token that may read Business Discovery through that account (secret). */
   INSTAGRAM_DISCOVERY_TOKEN: optionalString,
+  /**
+   * Prospecção → busca do Google: the company's Instagram numbers from Business Discovery in the
+   * 0-100 score (docs/prospeccao/instagram.md §6). Off unless "true" AND the two above are set.
+   */
+  INSTAGRAM_BUSINESS_DISCOVERY_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
   /** Arrival checks that leave the server (site, Instagram, CNPJ); on unless "false". */
   LEAD_CHECKS_ENABLED: optionalString.refine(
     (value) => value === undefined || value === 'true' || value === 'false',

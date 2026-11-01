@@ -1,7 +1,9 @@
 import './style.css';
+import { afterFirstPaint } from '../../lib/after-paint.js';
 import { loadSiteForm, type SiteFormInfo } from '../../lib/api.js';
+import { browserBeacon, eventSender, visitIdOf } from '../../lib/events.js';
 import { primeInlineFonts } from '../../lib/fonts.js';
-import { installGtm, pushEvent } from '../../lib/gtm.js';
+import { deferGtm } from '../../lib/gtm.js';
 import { readRuntimeConfig } from '../../lib/runtime-config.js';
 import { captureOrigin, dataLayerOriginOf, trackingPayloadOf } from '../../lib/tracking.js';
 import { applyWhatsappUrl } from '../../lib/whatsapp.js';
@@ -21,7 +23,9 @@ export const SLUG = 'fale-com-a-wings';
 primeInlineFonts(['Limelight', 'Nunito']);
 
 const config = readRuntimeConfig(document, import.meta.env.VITE_LANDING_API_BASE || '/api');
-installGtm(config.gtmId);
+// GTM waits for the first touch (or 4 s after the load) so it does not compete with the first paint;
+// the dataLayer queues what the page pushes until then. The conversion events wait for it (`gtm`).
+const gtm = deferGtm(config.gtmId);
 
 const doc = document.documentElement;
 doc.classList.add('js');
@@ -60,6 +64,23 @@ const storage = (() => {
   }
 })();
 const origin = captureOrigin(location.search, document.referrer || '', storage);
+
+/* ---------- what the visitor does, counted on the server (nothing personal) ---------- */
+const session = (() => {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+})();
+const sendEvent = eventSender({
+  apiBase: config.apiBase,
+  slug: SLUG,
+  visit: visitIdOf(session),
+  origin: () => dataLayerOriginOf(origin),
+  beacon: browserBeacon(),
+});
+sendEvent('page_view');
 
 /* ---------- texts revealed word by word ---------- */
 function splitWords(el: Element) {
@@ -132,7 +153,11 @@ function setWhatsappUrl(url: string | null) {
 waButtons.forEach((a) =>
   a.addEventListener('click', (e) => {
     if (a.target === '_blank' && a.href.startsWith('https://')) {
-      pushEvent({ event: 'whatsapp_click', origem: dataLayerOriginOf(origin) });
+      gtm.pushWhenLoaded({ event: 'whatsapp_click', origem: dataLayerOriginOf(origin) });
+      sendEvent(
+        'whatsapp_click',
+        a.closest('#thanks') ? 'thanks' : a.closest('header') ? 'header' : 'final',
+      );
       return;
     }
     e.preventDefault();
@@ -275,15 +300,45 @@ const form = setupForm({
   reduce,
   tracking: () => trackingPayloadOf(origin),
   whatsappUrl: () => whatsappUrl,
+  // the lead is already with the API; the event waits for GTM, never the other way round
   onSent: (answer) =>
-    pushEvent({ event: 'lead_submit', interesse: answer, origem: dataLayerOriginOf(origin) }),
+    gtm.pushWhenLoaded({
+      event: 'lead_submit',
+      interesse: answer,
+      origem: dataLayerOriginOf(origin),
+    }),
+  onEvent: sendEvent,
 });
+// the form seen once (a third of it on screen), wherever the visitor stopped before
+const leadForm = $('#lead-form');
+if (leadForm && 'IntersectionObserver' in window) {
+  const seen = new IntersectionObserver(
+    (entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      seen.disconnect();
+      sendEvent('form_view');
+    },
+    { threshold: 0.3 },
+  );
+  seen.observe(leadForm);
+}
 
-void loadSiteForm(config.apiBase, SLUG).then((result) => {
+const siteForm = loadSiteForm(config.apiBase, SLUG);
+void siteForm.then((result) => {
   const info: SiteFormInfo | null = result.kind === 'ok' ? result.info : null;
   setWhatsappUrl(info?.whatsappUrl ?? null);
-  form.configure(result);
 });
+// The robot check (Turnstile) is the heaviest third party on the page: it starts after the first
+// paint, or at once when the visitor touches the form before that. The button stays off until it ends.
+let robotCheckStarted = false;
+const startRobotCheck = () => {
+  if (robotCheckStarted) return;
+  robotCheckStarted = true;
+  void siteForm.then((result) => form.configure(result));
+};
+afterFirstPaint(startRobotCheck);
+leadForm?.addEventListener('focusin', startRobotCheck, { once: true });
+leadForm?.addEventListener('focusin', gtm.load, { once: true });
 
 /* ---------- native scroll: header, ghost words, bridge and timeline ---------- */
 const ghosts = $$('.ghost'),
@@ -342,7 +397,7 @@ function startScene() {
     })
     .catch(() => doc.classList.add('no-gl'));
 }
-requestAnimationFrame(() => setTimeout(startScene, 0));
+afterFirstPaint(startScene);
 
 /* ---------- one scroll loop ---------- */
 let sRaf = 0;

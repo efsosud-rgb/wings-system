@@ -35,10 +35,14 @@ export interface WaTemplateUpdate {
   name: string;
   language: string | null;
   status: string;
+  /** Meta's reason for a refusal; NONE otherwise. */
+  reason: string | null;
 }
 
 export interface WaChange {
   field: string;
+  /** The WABA the change is about (the entry's id). */
+  wabaId: string | null;
   phoneNumberId: string | null;
   messages: WaInboundMessage[];
   statuses: WaStatusUpdate[];
@@ -46,6 +50,21 @@ export interface WaChange {
   /** The `calls` field: a call starting or ending, and the statuses of our calls. */
   calls: WaCallEvent[];
   callStatuses: WaCallStatusUpdate[];
+  /** `account_update`: Meta's event, with the disconnection's reason when it gives one. */
+  account: { event: string; reason: string | null } | null;
+  /** `history`: the highest progress (0–100) in the body. */
+  historyProgress: number | null;
+  /** `history` with Meta's 2593109: the owner turned the history off on the phone. */
+  historyDeclined: boolean;
+  /**
+   * A work number's own traffic (coexistence; NOT verified live, shapes from Meta's reference):
+   * `smb_message_echoes` (what the owner sent from the phone) and the `history` threads. `from`
+   * is always the person; `out` says the business sent it.
+   */
+  echoes: WaInboundMessage[];
+  history: (WaInboundMessage & { out: boolean; status: WaMessageStatus | null })[];
+  /** `smb_app_state_sync`: the phone's contacts (the name the owner saved), added or removed. */
+  appContacts: { phone: string; name: string | null; removed: boolean }[];
 }
 
 type Obj = Record<string, unknown>;
@@ -107,9 +126,19 @@ function messageOf(raw: Obj, names: Map<string, string>): WaInboundMessage | nul
     };
   } else if (type === 'contacts') {
     kind = 'contacts';
-    const first = obj(arr(raw.contacts)[0]);
-    text = str(obj(first.name).formatted_name);
-    content.contacts = arr(raw.contacts).length;
+    // Each card's name and numbers: the number as the sender saved it, else its WhatsApp id.
+    const cards = arr(raw.contacts).map((card) => {
+      const name = obj(obj(card).name);
+      return {
+        name: str(name.formatted_name) ?? str(name.first_name),
+        phones: arr(obj(card).phones).flatMap((phone) => {
+          const number = str(obj(phone).phone) ?? str(obj(phone).wa_id);
+          return number ? [number] : [];
+        }),
+      };
+    });
+    text = cards[0]?.name ?? null;
+    content.contacts = cards;
   } else if (type === 'interactive') {
     kind = 'interactive';
     const interactive = obj(raw.interactive);
@@ -246,6 +275,7 @@ export function whatsappChangesOf(body: unknown): WaChange[] {
   if (root.object !== 'whatsapp_business_account') return [];
   const out: WaChange[] = [];
   for (const entry of arr(root.entry)) {
+    const wabaId = str(obj(entry).id);
     for (const change of arr(obj(entry).changes)) {
       const field = str(obj(change).field) ?? 'unknown';
       const value = obj(obj(change).value);
@@ -257,12 +287,19 @@ export function whatsappChangesOf(body: unknown): WaChange[] {
       }
       const parsed: WaChange = {
         field,
+        wabaId,
         phoneNumberId: str(obj(value.metadata).phone_number_id),
         messages: [],
         statuses: [],
         templates: [],
         calls: [],
         callStatuses: [],
+        account: null,
+        historyProgress: null,
+        historyDeclined: false,
+        echoes: [],
+        history: [],
+        appContacts: [],
       };
       if (field === 'messages') {
         for (const message of arr(value.messages)) {
@@ -283,7 +320,55 @@ export function whatsappChangesOf(body: unknown): WaChange[] {
             name,
             language: str(value.message_template_language),
             status: event,
+            reason: str(value.reason),
           });
+      } else if (field === 'account_update') {
+        const event = str(value.event);
+        if (event)
+          parsed.account = {
+            event: event.slice(0, 60),
+            reason: str(obj(value.disconnection_info).reason)?.slice(0, 60) ?? null,
+          };
+      } else if (field === 'history') {
+        parsed.historyDeclined = arr(value.errors).some((e) => num(obj(e).code) === 2593109);
+        for (const chunk of arr(value.history)) {
+          const progress = num(obj(obj(chunk).metadata).progress);
+          if (progress !== null && progress >= 0 && progress <= 100)
+            parsed.historyProgress = Math.max(parsed.historyProgress ?? 0, Math.round(progress));
+          for (const thread of arr(obj(chunk).threads)) {
+            // The thread's id is the person; a message `from` anyone else is the business's.
+            const person = str(obj(thread).id);
+            if (!person) continue;
+            for (const raw of arr(obj(thread).messages)) {
+              const out = str(obj(raw).from) !== person;
+              const read = messageOf({ ...obj(raw), from: person }, names);
+              const said = str(obj(obj(raw).history_context).status)?.toLowerCase() ?? '';
+              if (read)
+                parsed.history.push({
+                  ...read,
+                  out,
+                  status: out ? (STATUSES[said] ?? null) : null,
+                });
+            }
+          }
+        }
+      } else if (field === 'smb_message_echoes') {
+        // An echo goes from the business (`from`) to the person (`to`).
+        for (const raw of arr(value.message_echoes)) {
+          const read = messageOf({ ...obj(raw), from: str(obj(raw).to) }, names);
+          if (read) parsed.echoes.push(read);
+        }
+      } else if (field === 'smb_app_state_sync') {
+        for (const item of arr(value.state_sync)) {
+          const contact = obj(obj(item).contact);
+          const phone = str(contact.phone_number)?.replace(/\D/g, '');
+          if (str(obj(item).type) !== 'contact' || !phone) continue;
+          parsed.appContacts.push({
+            phone,
+            name: (str(contact.full_name) ?? str(contact.first_name))?.slice(0, 200) ?? null,
+            removed: str(obj(item).action) === 'remove',
+          });
+        }
       } else if (field === 'calls') {
         const error = obj(arr(value.errors)[0]);
         for (const call of arr(value.calls)) {

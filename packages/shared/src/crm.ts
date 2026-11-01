@@ -910,6 +910,8 @@ export const LEAD_SOURCE_BADGES: Record<LeadSource, { label: string; tone: strin
   whatsapp: { label: 'WhatsApp', tone: 'whatsapp' },
   manual: { label: 'Manual', tone: 'manual' },
   csv_import: { label: 'Planilha', tone: 'manual' },
+  google_places: { label: 'Prospecção', tone: 'manual' },
+  instagram_colagem: { label: 'Instagram', tone: 'manual' },
 };
 
 /** Google shows when the attribution says so, whatever the door was. */
@@ -942,4 +944,16 @@ export interface NewLeadPopup {
 export interface NewLeadPopups {
   leads: NewLeadPopup[];
   earlierCount: number;
+  /** The leads that answered by e-mail (t083): the same pop-up, one per unread `lead_email` notice. */
+  emailReplies: EmailReplyPopup[];
+}
+
+/** A lead's e-mail reply, for the pop-up: the first name and when; never the text or the address. */
+export interface EmailReplyPopup {
+  noticeId: string;
+  leadId: string;
+  firstName: string;
+  createdAt: string;
+  /** The deal's "não me contate" by e-mail, when it has one: the reply was read, but it shows the lock. */
+  blocked: string | null;
 }

@@ -39,6 +39,7 @@ const PUBLIC_ROUTES = [
   'POST /integrations/whatsapp/webhook',
   'GET /public/site-forms/:slug',
   'POST /public/site-forms/:slug',
+  'POST /public/site-forms/:slug/events',
 ];
 
 /** Routes any login may call: the person's own session and Google connection. */
@@ -145,6 +146,10 @@ const PROBES = {
   roadmap: '/roadmap/modules',
   // Every level opens the Agenda (calendar.use, scope own; Eric, 14/10).
   agenda: '/agenda',
+  // Prospecção: the Formatação seller and the managers (prospecting.use).
+  prospecting: '/prospecting/usage',
+  // Prospecção Instagram, parte 2 (prospecting.instagram_paste): the same levels.
+  instagramProspecting: '/prospect-ai/instagram/status',
 } as const;
 type Probe = keyof typeof PROBES;
 
@@ -159,7 +164,7 @@ const LEVELS: { role: RoleKey; sector: SectorSlug; opens: Probe[] }[] = [
   {
     role: 'vendedor_formatacao',
     sector: 'comercial',
-    opens: ['leads', 'campaignLeads', 'projects', 'agenda'],
+    opens: ['leads', 'campaignLeads', 'projects', 'agenda', 'prospecting', 'instagramProspecting'],
   },
   {
     role: 'gerente_comercial',
@@ -176,6 +181,8 @@ const LEVELS: { role: RoleKey; sector: SectorSlug; opens: Probe[] }[] = [
       'drive',
       'crmSettings',
       'agenda',
+      'prospecting',
+      'instagramProspecting',
     ],
   },
   {
@@ -193,6 +200,8 @@ const LEVELS: { role: RoleKey; sector: SectorSlug; opens: Probe[] }[] = [
       'projects',
       'drive',
       'agenda',
+      'prospecting',
+      'instagramProspecting',
     ],
   },
   { role: 'marketing', sector: 'marketing', opens: ['ads', 'projects', 'drive', 'agenda'] },

@@ -40,6 +40,18 @@ export const googleWorkspaceConnections = pgTable(
     /** A code, never a provider message that could quote a credential. */
     lastError: text('last_error'),
     connectedAt: timestamp('connected_at', { withTimezone: true }),
+    /** Where the reading of the leads' replies stopped in this mailbox (Gmail's historyId); null before the first read. */
+    gmailHistoryId: text('gmail_history_id'),
+    /**
+     * Messages after `gmail_history_id` that a pass already settled (kept, or not the deals'), when
+     * it stopped inside a record or held one back: the next pass skips them, so the point never
+     * jumps a message and never pays for one twice. Empty once the point passes them.
+     */
+    gmailHistorySeen: text('gmail_history_seen').array().notNull().default([]),
+    /** When a pass last read the history to its end: the search by sender looks back from here. */
+    gmailReadAt: timestamp('gmail_read_at', { withTimezone: true }),
+    /** The last read's failure as a code (history_expired, gmail_403…), never Google's text. */
+    gmailReadError: text('gmail_read_error'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

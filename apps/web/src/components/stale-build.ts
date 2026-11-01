@@ -6,6 +6,10 @@
  */
 const LOCK = 'wings:reloaded-for-new-build';
 
+/** What a screen says when it could not load a file of the previous build. */
+export const STALE_BUILD_NOTICE =
+  'Esta tela foi atualizada. Recarregue a página (F5) para abrir a versão mais nova; o que você já salvou continua salvo.';
+
 export function isStaleChunkError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error ?? '');
   return (
@@ -37,12 +41,23 @@ export function clearReloadLock(): void {
   }
 }
 
-export function listenForStaleBuild(): void {
-  window.addEventListener('vite:preloadError', (event) => {
-    event.preventDefault();
-    console.error('Chunk from a previous build failed to load; reloading once.', event);
-    reloadOnceForNewBuild();
-  });
+/**
+ * Vite's preload helper dispatches `vite:preloadError` when a chunk is gone and rejects with the
+ * original error unless a listener called `preventDefault()`; with it, the helper resolves
+ * `undefined` instead. So the event is swallowed only when the page is really reloading; on the
+ * second time (lock set) the error must reach the screen's own handling.
+ */
+export function handleStalePreloadError(event: Event): void {
+  console.error('Chunk from a previous build failed to load.', event);
+  if (reloadOnceForNewBuild()) event.preventDefault();
+}
+
+export function listenForStaleBuild(): () => void {
+  window.addEventListener('vite:preloadError', handleStalePreloadError);
   // Loaded without a chunk error: arm the lock again after a short while.
-  window.setTimeout(clearReloadLock, 10_000);
+  const timer = window.setTimeout(clearReloadLock, 10_000);
+  return () => {
+    window.removeEventListener('vite:preloadError', handleStalePreloadError);
+    window.clearTimeout(timer);
+  };
 }

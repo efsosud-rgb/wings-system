@@ -6,7 +6,7 @@ Wings System — the internal system of Wings Company (CRM, RH/DP, marketing aut
 
 The first module under construction is **Cadastro de Funcionários** (employee registration) with role-based access control.
 
-Three sections: [1. Folder structure](#1-folder-structure) · [2. Code standard](#2-code-standard) · [3. What never to do](#3-what-never-to-do).
+Four sections: [1. Folder structure](#1-folder-structure) · [2. Code standard](#2-code-standard) · [3. What never to do](#3-what-never-to-do) · [4. Ponytail: escrever o mínimo de código](#4-ponytail-escrever-o-mínimo-de-código).
 
 ## 1. Folder structure
 
@@ -98,12 +98,12 @@ A push does not deploy: the repository has no webhook. Deploys are started throu
 - API integration tests create a **throwaway database per run** from `DATABASE_URL` (`src/test/db.ts`), so append-only rows never pollute a shared database.
 - Fixtures use made-up data (`src/test/factories.ts`), never a real person's.
 - In a fresh worktree build the studio before the web tests: `pnpm --filter @wings/studio build`.
-- CI (`.github/workflows/ci.yml`) runs build, typecheck, lint, format check, migrate, seed twice, then the tests.
+- CI (`.github/workflows/ci.yml`) runs build, typecheck, lint, migrate, seed twice, the tests, the escalation tests by name, `pnpm e2e` (`apps/api/e2e/`), the new-file size check (600 lines) and the format check. See `docs/invariantes.md`.
 
 ### Migrations
 
 - The API container runs `db:migrate` then `db:seed` before serving, so both must stay safe to re-run. A hand-written migration goes in via `drizzle-kit generate --custom` so the journal stays consistent; never edit an applied migration. Drizzle tracks applied migrations in the separate `drizzle` schema — dropping only `public` leaves it thinking everything is applied.
-- A schema change is a generated migration (`db:generate`) committed with the code that needs it. Two branches can pick the same number: the one that merges second renumbers before it merges.
+- A schema change is a generated migration (`db:generate`) committed with the code that needs it. Two branches can pick the same number: the one that merges second **regenerates** its migration (`db:generate`, new number and new `when`) before it merges, never just renames it — drizzle skips a migration whose `when` is older than the last applied one (decision of 27/10, `docs/decisoes.md`).
 - A table that the read-only role `wings_ro` must see gets its `GRANT` in a migration (see `0075_grant_wings_ro_ad_lead_forms.sql`); until then it cannot be read through `wings-staging-sql`.
 
 ### Authentication and sessions
@@ -150,11 +150,46 @@ A push does not deploy: the repository has no webhook. Deploys are started throu
 ### Access, files and records
 
 - **Diretoria is fully blocked from TI sector employee records** — a deny rule evaluated before any allow rule.
-- **Privilege escalation guards:** a sector manager (`is_sector_manager` flag on the employee) may only create or edit employees inside their own sector, may only assign roles below their own rank, may only change the level of someone ranked below them, and may never assign Admin Master or Diretoria.
+- **Privilege escalation guards:** a sector manager (`is_sector_manager` flag on the employee) may only create or edit employees inside their own sector, may only assign roles below their own rank whose permissions they already hold at least as wide (audit of 2026-10-27: a lower rank can carry powers the manager lacks), may only change the level of someone ranked below them, and may never assign Admin Master or Diretoria.
 - **Access levels have one rule, `roleChangeDenial` in `packages/shared`, used by the form and re-checked by the API.** Holders of `employees.assign_roles` (Admin Master, Diretoria, RH/DP) may set any level for anyone but themselves; only an Admin Master grants or removes Admin Master, or edits an Admin Master's record at all; Diretoria is granted or removed only by Diretoria or an Admin Master (not RH/DP); an Admin Master may change their own level, but the last Admin Master who can log in can never be demoted or deactivated (re-counted under a row lock). Every level change writes an `employee.role_changed` audit entry with the previous and new level.
-- **The login e-mail follows the level, `loginEmailChangeDenial` in `packages/shared`:** only someone who could change a person's level may change their login e-mail (whoever holds the address can reset the password), and on a sector manager only someone who already holds every power the flag gives. A change ends every session of that person, cancels their pending invite and reset links, and warns the old address. Switching someone to or from inactive needs `employees.deactivate` (`statusChangeDenial`), not just `employees.update`. See `docs/auth.md`.
+- **The login e-mail follows the level, `loginEmailChangeDenial` in `packages/shared`:** only someone who could change a person's level may change their login e-mail (whoever holds the address can reset the password), and on a sector manager only someone who already holds every power the flag gives. A change ends every session of that person, cancels their pending invite and reset links, and warns the old address. Switching someone to or from inactive needs `employees.deactivate` (`statusChangeDenial`), not just `employees.update`, and without `employees.assign_roles` never on someone ranked above the actor, Admin Master or Diretoria. See `docs/auth.md`.
 - **The Drive never shows where a file is kept, and decides access on the server.** No storage key or volume path is part of any answer: a file is named by its id and opened through a pre-signed address that lasts minutes (5 to view or download, 15 to upload or for Kairogen, 60 for the Studio's editor). Browsers send files straight to storage (R2) with an address signed for one type and one exact size; a file exists only after the server confirms it arrived. Every folder has a department, and every request is checked against the departments of the person's role (`driveAccessOf`): another department's folder or file answers 404 everywhere. Every operation writes an audit entry by id, never by file name. The media library is a view over the Drive's "Mídia" folders. See `docs/drive.md`.
 - **`packages/studio` is a fork under PolyForm Shield 1.0.0, for Wings' internal use only.** Keep `LICENSE`, its required notice and `NOTICE.md`; never offer the Studio to third parties as a product without Jurídico reading the licence first. A Studio project cites Drive files only as `wings-drive://<id>`; the API refuses a project with an address in it, and no key or link is ever saved in one. See `docs/studio/README.md`.
 - **Time entries are append-only.** Corrections are new adjustment rows with a reason and an approver; nothing is ever updated in place.
 
 > ⚠️ Portaria MTP 671/2021 compliance for the time clock is **not yet legally confirmed**. Keep the model compliance-ready (append-only, sourced entries, exportable) and keep this warning visible until Jurídico signs off.
+
+## 4. Ponytail: escrever o mínimo de código
+
+Regras do [Ponytail](https://github.com/DietrichGebert/ponytail) (DietrichGebert, licença MIT, commit `09c434ab73ca`), em português e para todas as IAs do repositório: Claude Code, Codex, Jules e as demais. O texto original está em `.claude/skills/ponytail/SKILL.md`. É só texto: nenhum plugin, hook ou script foi instalado com ele. Nível: o padrão do Ponytail (`full`).
+
+**As regras do Wings System vêm antes.** O Ponytail diz como escrever menos código, nunca o que pode ficar de fora. Não se corta, nem para o diff ficar menor: segurança, RBAC (a decisão é da API, com o escopo próprio / setor / todos), tenant (`tenant_id`, `client_id`), LGPD e dados pessoais, testes, auditoria, e tudo o que o Eric pediu de forma explícita (por exemplo, a modelagem 5D). Onde uma regra abaixo bater com as seções 1 a 3, vale a das seções 1 a 3. Dois casos que já aparecem: "mudança trivial dispensa teste" não vale aqui, porque comportamento novo traz teste na mesma mudança (seção 2, Tests); e "não crie camada" não autoriza pôr consulta dentro do handler (seção 2, Where logic lives).
+
+Você é um desenvolvedor sênior preguiçoso. O melhor código é o que nunca foi escrito. Resolva o problema inteiro com o mínimo de código novo. Termine a resposta com uma ou duas linhas: o que você deixou de fora ou não conferiu, e qualquer risco que o Eric precise saber.
+
+### Antes de escrever
+
+Leia a tarefa e o código que ela toca. Liste todo lugar que a mudança precisa alcançar: quem chama, testes, fixtures, configuração, exports. Veja o que a mudança pode quebrar para quem usa: dado que ela destruiria ou exporia, chamadores que deixam de funcionar. Isso é escopo. Funcionalidade extra não é.
+
+### A menor mudança completa
+
+Fique com a primeira opção que resolve de verdade:
+
+1. Precisa existir? Pule funcionalidade, opção e flexibilidade que ninguém pediu, e diga o que pulou em uma linha. Um pedido vago ("faça um X") recebe a menor versão que faz o trabalho principal.
+2. Já existe neste código (um helper, componente, serviço, padrão)? Use do jeito que o código ao redor usa.
+3. Biblioteca padrão ou recurso da plataforma? Use, a menos que o projeto tenha o seu. Um componente da casa vence o elemento nativo.
+4. Uma dependência já instalada? Use. Nunca adicione dependência para poucas linhas.
+5. Cabe em uma linha que o leitor entende de relance? Uma linha.
+6. Senão: o mínimo de código que funciona.
+
+- Seja preguiçoso na solução, nunca na mudança em si: termine toda parte que a tarefa exige, inclusive os chamadores, testes e fixtures que a sua mudança quebra.
+- Nada de abstração, wrapper, conversão de tipo, opção, configuração, boilerplate ou código "para depois" que ninguém pediu. Mantenha os valores na forma que a plataforma já entrega. Apagar vence acrescentar. Mantenha a estrutura que o código já tem: camadas, interfaces e convenções.
+- O menor diff que funciona vence, depois que você sabe tudo o que ele precisa tocar. Uma linha que precisa ser decifrada não é curta.
+- Comente só o porquê que o código não mostra, em uma linha. Na densidade do código ao redor (seção 2).
+- Correção de bug: antes de editar, procure todo chamador da função que você vai tocar e corrija a causa uma vez só, no código compartilhado.
+- Código que você move ou junta mantém o tratamento de erro e a validação que tinha.
+- Entre opções do mesmo tamanho, fique com a que está certa nos casos de borda.
+- Código preguiçoso sem a sua checagem está inacabado: lógica nova não trivial (um desvio, um laço, um parser, dinheiro ou segurança, ou um script ou app novo inteiro) deixa um teste pequeno ou uma checagem com `assert`. Aqui, comportamento novo sempre leva teste (seção 2).
+- Um atalho com limite conhecido ganha um comentário neste formato, em inglês como o resto do código: `shortcut: <the limit>, <when to upgrade>`.
+
+Nunca corte: validação nas fronteiras de confiança (os schemas Zod de `packages/shared`), tratamento de erro que evita perda de dado, segurança, acessibilidade, a calibração que o hardware real exige, e tudo o que o Eric pediu.

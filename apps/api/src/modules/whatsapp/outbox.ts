@@ -2,12 +2,15 @@ import type { WaMessageKind } from '@wings/shared';
 import { eq } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { waContacts, waConversations, waMessages } from '../../db/schema/index.js';
+import type { Executor } from '../leads/crm.js';
+import { lockCallRequests } from './call-request-limit.js';
 import {
   sendWhatsAppMessage,
   UNKNOWN_OUTCOME,
   type OutgoingPayload,
   type WhatsAppConfig,
 } from './graph.js';
+import { notifyInboxChanged } from './inbox-signal.js';
 
 /**
  * The one way a message leaves: written first (`pending`), sent to Meta once
@@ -17,20 +20,25 @@ import {
  */
 
 export type Contact = typeof waContacts.$inferSelect;
+
+/** Meta's id inside a work number: two of our numbers talking would otherwise share one wamid. */
+export const numberWamid = (numberId: string, wamid: string) => `${numberId}:${wamid}`;
 export type MessageRow = typeof waMessages.$inferSelect;
 
 export interface Delivery {
   contact: Contact;
   conversationId: string;
   leadId: string | null;
-  author: 'employee' | 'sofia';
+  author: 'employee' | 'sofia' | 'system';
   employeeId: string | null;
   kind: WaMessageKind;
-  /** What the screen shows (the body, a filled template). */
-  shown: string;
+  /** What the screen shows (the body, a filled template, a file's caption or none). */
+  shown: string | null;
   content: Record<string, unknown>;
   payload: OutgoingPayload;
   at: Date;
+  /** Sent through a work number: Meta's id is kept under it (`numberWamid`). */
+  numberId?: string | null;
 }
 
 export interface Delivered {
@@ -46,21 +54,30 @@ export async function deliverWhatsApp(
   delivery: Delivery,
 ): Promise<Delivered> {
   const { contact, at } = delivery;
-  const [row] = await db
-    .insert(waMessages)
-    .values({
-      conversationId: delivery.conversationId,
-      contactId: contact.id,
-      leadId: delivery.leadId,
-      direction: 'out',
-      author: delivery.author,
-      employeeId: delivery.employeeId,
-      kind: delivery.kind,
-      text: delivery.shown,
-      content: delivery.content,
-      status: 'pending',
-    })
-    .returning();
+  const write = (ex: Executor) =>
+    ex
+      .insert(waMessages)
+      .values({
+        conversationId: delivery.conversationId,
+        contactId: contact.id,
+        leadId: delivery.leadId,
+        direction: 'out',
+        author: delivery.author,
+        employeeId: delivery.employeeId,
+        kind: delivery.kind,
+        text: delivery.shown,
+        content: delivery.content,
+        status: 'pending',
+      })
+      .returning();
+  // A call-permission request is counted and written under the person's lock (Meta's limit).
+  const [row] =
+    delivery.content.callPermissionRequest === true
+      ? await db.transaction(async (tx) => {
+          await lockCallRequests(tx, contact.id);
+          return write(tx);
+        })
+      : await write(db);
 
   const result = await sendWhatsAppMessage(
     fetchImpl,
@@ -72,7 +89,14 @@ export async function deliverWhatsApp(
     .update(waMessages)
     .set(
       result.ok
-        ? { wamid: result.data.wamid, status: 'sent', sentAt: at, waTimestamp: at }
+        ? {
+            wamid: delivery.numberId
+              ? numberWamid(delivery.numberId, result.data.wamid)
+              : result.data.wamid,
+            status: 'sent',
+            sentAt: at,
+            waTimestamp: at,
+          }
         : result.unknown
           ? { errorTitle: UNKNOWN_OUTCOME, waTimestamp: at }
           : {
@@ -94,6 +118,7 @@ export async function deliverWhatsApp(
     .update(waConversations)
     .set({ lastMessageAt: at })
     .where(eq(waConversations.id, delivery.conversationId));
+  notifyInboxChanged();
   return {
     row: saved!,
     outcome: result.ok ? 'sent' : result.unknown ? 'unknown' : 'failed',

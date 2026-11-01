@@ -1,4 +1,5 @@
 import {
+  brazilianPhoneVariants,
   nextBusinessInstant,
   SOFIA_BRAND_BUTTONS,
   SOFIA_BUTTONS,
@@ -20,7 +21,20 @@ import {
   type SofiaSettings,
   type WaMessageKind,
 } from '@wings/shared';
-import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNull,
+  lt,
+  lte,
+  notInArray,
+  or,
+  sql,
+} from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   clients,
@@ -34,11 +48,14 @@ import {
 import { writeAudit } from '../../lib/audit.js';
 import type { AgentLlm, LlmUsage } from '../agent/llm.js';
 import { managersAndBoard } from '../leads/crm-alerts.js';
+import { contactBlock, recordContactOptOut, type OwnOptOut } from '../leads/contact-block.js';
 import { changeLead } from '../leads/crm.js';
+import { distribute, recordEvent } from '../whatsapp/attendance.js';
 import {
   buttonsPayload,
   listPayload,
   textPayload,
+  UNKNOWN_OUTCOME,
   type OutgoingPayload,
   type WhatsAppConfig,
 } from '../whatsapp/graph.js';
@@ -74,6 +91,8 @@ export interface SofiaDeps {
 
 /** A claim older than this was cut short by a restart. */
 const STALE_CLAIM_MS = 2 * 60_000;
+/** The SAIR's register row is written just before its message is stored (intake.ts). */
+const OWN_OPT_OUT_SLACK_MS = 60_000;
 /** The most one AI call may cost, reserved before it is made (a turn costs well under a cent). */
 export const SOFIA_RESERVE_MICRO_USD = 10_000;
 /** Lines of the conversation the AI reads. */
@@ -204,12 +223,16 @@ const INTERACTIVE_BODY_MAX = 1_000;
 
 class Turn {
   private facts: SofiaFacts;
+  /** The conversation's version when she took the turn: a person's change of hands moves it. */
+  private readonly version: number;
   private segment: SofiaSegment | null;
   private brandClientId: string | null;
   private misses: number;
   private settings!: SofiaSettings;
   private contact!: Contact;
   private newIds: string[] = [];
+  /** This turn's own SAIR, left out of the "não me contate" check so it gets its confirmation. */
+  private ownOptOut: OwnOptOut | undefined;
   private parts: string[] = [];
 
   constructor(
@@ -218,6 +241,7 @@ class Turn {
     private readonly now: Date,
   ) {
     this.facts = factsOf(conversation);
+    this.version = conversation.version;
     this.segment = (conversation.segment as SofiaSegment | null) ?? null;
     this.brandClientId = conversation.brandClientId;
     this.misses = conversation.sofiaMisses;
@@ -277,8 +301,36 @@ class Turn {
       contact.lastInboundAt.getTime() + WA_WINDOW_HOURS * 3_600_000 > this.now.getTime();
     if (!windowOpen || !this.deps.config) return this.toHuman('ia_indisponivel', false);
 
-    // SAIR / PARAR: a fixed rule, no AI, no conversation.
-    if (fresh.some((m) => isOptOut(m.text))) return this.close('nao_contatar', true);
+    // SAIR / PARAR: a fixed rule, no AI, no conversation, and its confirmation is her last word.
+    // Who asked not to be contacted and writes again, a second SAIR included, is answered by a
+    // person, never by Sofia alone (Eric, 29/10; WA-12): the register, a SAIR or the Prospecção
+    // opt-in rule, as `contactBlock` reads.
+    const stop = fresh.find((m) => isOptOut(m.text));
+    // This turn's own SAIR is in the register already; alone, it still gets its confirmation. Only
+    // that SAIR is left out: an older one by any key of the person (another phone of the deal, a
+    // "não quero mais" from before its mark) still blocks. Both times are the database's clock.
+    if (stop && !(await this.askedToStopBefore()))
+      this.ownOptOut = {
+        origin: 'whatsapp_palavra',
+        since: new Date(stop.createdAt.getTime() - OWN_OPT_OUT_SLACK_MS),
+      };
+    if ((await this.contactBlocked()).blocked) return this.toOwnerOptedOut();
+    if (stop) return this.close('nao_contatar', true);
+
+    // Her state moves only once Meta took the message (staging, 26/10: "qual é o seu nome?" was
+    // refused with 131030 and the next "Teste" became the name). A question that never reached
+    // the person is not answered by what they write next: she asks it again, and after a second
+    // refusal in a row a person takes over.
+    const asked = await this.lastQuestion();
+    if (asked === 'in_flight') return this.later();
+    if (asked === 'lost') {
+      this.facts.lostAsks = (this.facts.lostAsks ?? 0) + 1;
+      if (this.facts.lostAsks >= 2) return this.toHuman('envio_recusado', false);
+      // Not even her greeting arrived: she introduces herself again.
+      if (!(await this.anyReached())) this.facts.greeted = false;
+      return this.next(null, false);
+    }
+    if (this.facts.lostAsks) this.facts.lostAsks = 0;
 
     // --- what the person said ---------------------------------------------------------
     let progress = false;
@@ -343,8 +395,11 @@ class Turn {
       if (this.misses >= 2) return this.toHuman('nao_entendeu', true);
       this.parts.push(this.settings.texts.notUnderstood);
     } else if (progress) this.misses = 0;
+    return this.next(reading, missed);
+  }
 
-    // --- what comes next -------------------------------------------------------------
+  /** What comes next: the next question (or the same one again), or the handover. */
+  private async next(reading: SofiaReading | null, missed: boolean) {
     await this.decideVoice();
     if (!this.facts.greeted)
       this.parts.unshift(
@@ -363,6 +418,65 @@ class Turn {
     const outgoing = this.ask(step);
     if (!(await this.save({}))) return;
     await this.send(outgoing);
+  }
+
+  /**
+   * Whether her last question reached the person: Meta took it (a wamid) and did not fail it later
+   * (the status webhook). Refused, or with no answer from Meta (`unknown_outcome`, or a send a
+   * restart cut short), it is lost; a send still going is waited for.
+   */
+  private async lastQuestion(): Promise<'reached' | 'lost' | 'in_flight'> {
+    if (!this.facts.step) return 'reached';
+    const [last] = await this.db
+      .select({
+        status: waMessages.status,
+        wamid: waMessages.wamid,
+        errorTitle: waMessages.errorTitle,
+        content: waMessages.content,
+        createdAt: waMessages.createdAt,
+      })
+      .from(waMessages)
+      .where(
+        and(eq(waMessages.conversationId, this.conversation.id), eq(waMessages.author, 'sofia')),
+      )
+      .orderBy(desc(waMessages.createdAt))
+      .limit(1);
+    const step = (last?.content as { sofia?: { step?: unknown } } | undefined)?.sofia?.step;
+    if (!last || step !== this.facts.step) return 'reached';
+    if (last.status === 'failed') return 'lost';
+    if (last.wamid) return 'reached';
+    if (last.errorTitle === UNKNOWN_OUTCOME) return 'lost';
+    return this.now.getTime() - last.createdAt.getTime() < STALE_CLAIM_MS ? 'in_flight' : 'lost';
+  }
+
+  /** Whether any message of hers ever reached the person. */
+  private async anyReached(): Promise<boolean> {
+    const [one] = await this.db
+      .select({ id: waMessages.id })
+      .from(waMessages)
+      .where(
+        and(
+          eq(waMessages.conversationId, this.conversation.id),
+          eq(waMessages.author, 'sofia'),
+          sql`${waMessages.wamid} is not null`,
+          sql`coalesce(${waMessages.status}, '') <> 'failed'`,
+        ),
+      )
+      .limit(1);
+    return Boolean(one);
+  }
+
+  /** Her previous message is still on its way: this turn comes back in a few seconds. */
+  private async later() {
+    await this.db
+      .update(waConversations)
+      .set({ sofiaClaimedAt: null, sofiaDueAt: new Date(this.now.getTime() + 5_000) })
+      .where(
+        and(
+          eq(waConversations.id, this.conversation.id),
+          eq(waConversations.sofiaClaimedAt, this.now),
+        ),
+      );
   }
 
   // --- reading ---------------------------------------------------------------------------
@@ -688,6 +802,7 @@ class Turn {
         and(
           eq(waConversations.contactId, this.contact.id),
           eq(waConversations.leadId, deal.leadId),
+          isNull(waConversations.numberId),
         ),
       )
       .limit(1);
@@ -715,6 +830,7 @@ class Turn {
     this.stillHers = true;
     await this.notifyTeam(reason);
     if (text) await this.send(this.text(text));
+    await distribute(this.db, this.conversation.id, this.now);
   }
 
   private async aiDown(reason: 'ia_indisponivel' | 'teto_diario') {
@@ -725,6 +841,7 @@ class Turn {
     this.stillHers = true;
     await this.notifyTeam(reason);
     await this.send(this.text(text));
+    await distribute(this.db, this.conversation.id, this.now);
   }
 
   /**
@@ -740,6 +857,14 @@ class Turn {
         .update(waContacts)
         .set({ optOutAt: this.now, updatedAt: this.now })
         .where(and(eq(waContacts.id, this.contact.id), isNull(waContacts.optOutAt)));
+    if (reason === 'nao_contatar')
+      await recordContactOptOut(this.db, {
+        phone: this.contact.phone,
+        channels: ['whatsapp'],
+        origin: 'whatsapp_palavra',
+        reason: 'Pediu para não receber mensagens pelo WhatsApp',
+        createdBy: null,
+      });
     if (this.conversation.leadId) {
       const [lead] = await this.db
         .select({ owner: leads.ownerEmployeeId, won: leads.won })
@@ -762,7 +887,97 @@ class Turn {
       entityId: this.conversation.id,
       metadata: { reason, label: SOFIA_CLOSE_LABELS[reason] },
     });
-    if (confirm) await this.send(this.text(this.settings.texts.optOut));
+    if (!confirm) return;
+    const words = this.text(this.settings.texts.optOut);
+    // Marked: a later SAIR knows she already confirmed one (`askedToStopBefore`).
+    await this.send({ ...words, content: { ...words.content, optOut: true } });
+  }
+
+  /** "Não me contate" by every key of the person and the deal, but this turn's own SAIR. */
+  private contactBlocked() {
+    return contactBlock(
+      this.db,
+      'whatsapp',
+      { leadId: this.conversation.leadId, phone: this.contact.phone },
+      this.ownOptOut,
+    );
+  }
+
+  /**
+   * The person had asked to stop before this turn: an earlier SAIR, or her confirmation of one,
+   * from this phone (with or without the 9th digit), the deal's phone or any chat of the deal.
+   */
+  private async askedToStopBefore() {
+    const [lead] = this.conversation.leadId
+      ? await this.db
+          .select({ phone: leads.phone })
+          .from(leads)
+          .where(eq(leads.id, this.conversation.leadId))
+      : [];
+    const phones = [this.contact.phone, lead?.phone]
+      .filter((phone): phone is string => !!phone)
+      .flatMap((phone) => brazilianPhoneVariants(phone));
+    const earlier = await this.db
+      .select({ direction: waMessages.direction, text: waMessages.text })
+      .from(waMessages)
+      .where(
+        and(
+          // By the person's conversations: wa_messages has no index of its own on the contact.
+          inArray(
+            waMessages.conversationId,
+            this.db
+              .select({ id: waConversations.id })
+              .from(waConversations)
+              .where(
+                or(
+                  inArray(
+                    waConversations.contactId,
+                    this.db
+                      .select({ id: waContacts.id })
+                      .from(waContacts)
+                      .where(inArray(waContacts.phone, phones)),
+                  ),
+                  this.conversation.leadId
+                    ? eq(waConversations.leadId, this.conversation.leadId)
+                    : undefined,
+                ),
+              ),
+          ),
+          notInArray(waMessages.id, this.newIds),
+          or(
+            and(eq(waMessages.direction, 'in'), sql`length(${waMessages.text}) <= 40`),
+            sql`${waMessages.content} ->> 'optOut' = 'true'`,
+          ),
+        ),
+      );
+    return earlier.some((m) => m.direction === 'out' || isOptOut(m.text));
+  }
+
+  /** Nothing is sent: the deal's owner (or, with no owner, the managers) decides. */
+  private async toOwnerOptedOut() {
+    if (!(await this.isHers())) return;
+    if (!(await this.save({ attendance: 'waiting_human', reason: 'nao_me_contate' }))) return;
+    const [lead] = this.conversation.leadId
+      ? await this.db
+          .select({ owner: leads.ownerEmployeeId })
+          .from(leads)
+          .where(eq(leads.id, this.conversation.leadId))
+      : [];
+    const people = lead?.owner ? [lead.owner] : await managersAndBoard(this.db);
+    if (people.length === 0) return;
+    await this.db
+      .insert(crmNotifications)
+      .values(
+        people.map((person) => ({
+          recipientEmployeeId: person,
+          leadId: this.conversation.leadId,
+          kind: 'contact_opt_out_wrote',
+          message:
+            'Pediu para não ser contatado e escreveu de novo no WhatsApp. A Sofia não respondeu: veja a conversa e decida.',
+          dedupeKey: `contact_opt_out_wrote:${this.conversation.id}:${this.now.toISOString()}:${person}`,
+        })),
+      )
+      .onConflictDoNothing();
   }
 
   private async notifyTeam(reason: SofiaHandoffReason) {
@@ -824,36 +1039,68 @@ class Turn {
               attendance: change.attendance,
               reason: change.reason ?? null,
               stateChangedAt: this.now,
+              version: sql`${waConversations.version} + 1`,
             }
           : {}),
       })
       .where(
         and(
           eq(waConversations.id, this.conversation.id),
-          // A person took the conversation while she thought: it is theirs, and she stays quiet.
+          // A person took the conversation while she thought (or took it and gave it back: the
+          // version moved): it is theirs, and she stays quiet.
           ...(options.anyHolder
             ? []
             : [
                 eq(waConversations.attendance, 'sofia'),
                 eq(waConversations.sofiaClaimedAt, this.now),
+                eq(waConversations.version, this.version),
               ]),
         ),
       )
-      .returning({ id: waConversations.id });
+      .returning({ id: waConversations.id, version: waConversations.version });
     this.stillHers = saved.length > 0;
+    this.savedVersion = saved[0]?.version ?? null;
+    // Refused because a person changed hands: her claim goes, so the next turn need not wait for it.
+    if (!this.stillHers && !options.anyHolder)
+      await this.db
+        .update(waConversations)
+        .set({ sofiaClaimedAt: null })
+        .where(
+          and(
+            eq(waConversations.id, this.conversation.id),
+            eq(waConversations.sofiaClaimedAt, this.now),
+          ),
+        );
+    if (this.stillHers && change.attendance && change.attendance !== 'sofia')
+      await recordEvent(this.db, {
+        conversationId: this.conversation.id,
+        kind: change.attendance === 'closed' ? 'resolved' : 'sofia_handoff',
+        actorId: null,
+        reason: change.reason ?? null,
+        at: this.now,
+      });
     return this.stillHers;
   }
 
   /** False once a save found the conversation taken by a person: nothing more is sent. */
   private stillHers = true;
+  /** The version her save left: a person who takes it afterwards moves it, and nothing more goes. */
+  private savedVersion: number | null = null;
 
   /** Whether the conversation is still hers in this turn (checked before a side effect). */
   private async isHers(): Promise<boolean> {
     const [row] = await this.db
-      .select({ attendance: waConversations.attendance, claimed: waConversations.sofiaClaimedAt })
+      .select({
+        attendance: waConversations.attendance,
+        claimed: waConversations.sofiaClaimedAt,
+        version: waConversations.version,
+      })
       .from(waConversations)
       .where(eq(waConversations.id, this.conversation.id));
-    this.stillHers = row?.attendance === 'sofia' && row.claimed?.getTime() === this.now.getTime();
+    this.stillHers =
+      row?.attendance === 'sofia' &&
+      row.claimed?.getTime() === this.now.getTime() &&
+      row.version === this.version;
     return this.stillHers;
   }
 
@@ -869,6 +1116,22 @@ class Turn {
       const { preface, ...rest } = outgoing;
       await this.send(this.text(preface), leadId);
       return this.send(rest, leadId);
+    }
+    // A person may have taken it since her save (or since her previous message of this turn):
+    // then nothing more goes. Only the Meta call itself is left as a window.
+    const [now] = await this.db
+      .select({ version: waConversations.version })
+      .from(waConversations)
+      .where(eq(waConversations.id, this.conversation.id));
+    if (now?.version !== this.savedVersion) {
+      this.stillHers = false;
+      return;
+    }
+    // A "não me contate" recorded while she read (the AI takes seconds) stops what is left to say.
+    // Her confirmation of an opt-out is the one word that still goes.
+    if (outgoing.content.optOut !== true && (await this.contactBlocked()).blocked) {
+      this.stillHers = false;
+      return;
     }
     const delivered = await deliverWhatsApp(this.db, this.deps.fetchImpl, config, {
       contact: this.contact,

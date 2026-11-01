@@ -91,3 +91,17 @@ and `.github/agents|hooks|skills/**` are now skipped for the same reason
 `.claude/**` already was — vendored skill payloads, not ours to lint.
 `.github/workflows/` is untouched and still linted as before (it never held
 JS/TS).
+
+## Installed 2026-10-26: `ponytail`
+
+| Skill | Source | Commit | Licence | When to use |
+| --- | --- | --- | --- | --- |
+| `ponytail` | DietrichGebert/ponytail (`skills/ponytail/SKILL.md`, `main`) | `09c434ab73ca` | MIT | Every coding task: the smallest change that fully solves it |
+
+Eric's order, 2026-10-26: use Ponytail for coding, as text only. `SKILL.md` was
+copied verbatim (an origin comment was added after the frontmatter) and the
+repository's `LICENSE` was added to the folder. The source's `AGENTS.md` became
+section 4 of this repository's `AGENTS.md`, in Portuguese, with the Wings
+System rules ahead of it. Both source files were checked first: plain text, no
+script, no install command, no URL fetched. No plugin, hook, statusline or
+Node package was installed, and nothing else from the repository was copied.

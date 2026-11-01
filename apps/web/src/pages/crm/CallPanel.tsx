@@ -10,10 +10,11 @@ import { useWhatsAppCallCenter, WhatsAppCallSection } from './WhatsAppCalls.js';
 
 /**
  * The call panel (Eric, 07/10/2026): "Ligar" opens this inside the system
- * instead of the browser's tel: link, whose "open the app?" prompt led
- * nowhere. Three things: call through WhatsApp (Calling API, `WhatsAppCalls.tsx`:
- * on once calling is on for the number and the person allows calls), copy the
- * number to dial from a phone, and register a call made outside the system (a
+ * instead of going straight to the browser's tel: link, whose "open the app?"
+ * prompt led nowhere on a desktop. Four things: call through WhatsApp (Calling API, `WhatsAppCalls.tsx`:
+ * on once calling is on for the number and the person allows calls), call from
+ * the seller's own phone (a tel: link, Eric 26/10), copy the number, and
+ * register a call made outside the system (a
  * WhatsApp call registers itself). Drawn in a portal and stopping its events, so that a click in it
  * never reaches a kanban card underneath (which opens the deal).
  */
@@ -31,12 +32,15 @@ export function CallPanel({
   name,
   phone,
   canWrite,
+  noWhatsApp = null,
   onClose,
 }: {
   leadId: string;
   name: string | null;
   phone: string | null;
   canWrite: boolean;
+  /** Why WhatsApp is off for this lead (a prospecting lead without the opt-in). */
+  noWhatsApp?: string | null;
   onClose: () => void;
 }) {
   const center = useWhatsAppCallCenter();
@@ -67,7 +71,14 @@ export function CallPanel({
             <div className="crm-call-number">{phone ? formatPhone(phone) : 'Sem telefone'}</div>
           </div>
         </div>
-        {soon ? (
+        {noWhatsApp ? (
+          <>
+            <button type="button" className="crm-btn is-primary" disabled title={noWhatsApp}>
+              <Icon name="message" size={15} /> Ligar pelo WhatsApp
+            </button>
+            <p className="crm-sub">{noWhatsApp}</p>
+          </>
+        ) : soon ? (
           <>
             <button
               type="button"
@@ -97,16 +108,30 @@ export function CallPanel({
         )}
         {phone && (
           <div className="crm-call-ways">
-            <a className="crm-btn" href={waMeUrl(phone)} target="_blank" rel="noopener noreferrer">
-              Abrir no WhatsApp do vendedor
+            {noWhatsApp ? (
+              <button type="button" className="crm-btn" disabled title={noWhatsApp}>
+                Abrir no WhatsApp do vendedor
+              </button>
+            ) : (
+              <a
+                className="crm-btn"
+                href={waMeUrl(phone)}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Abrir no WhatsApp do vendedor
+              </a>
+            )}
+            <a className="crm-btn" href={`tel:+${phone}`}>
+              Ligar pelo celular
             </a>
             <CopyNumber phone={phone} />
           </div>
         )}
         {phone && (
           <p className="crm-sub">
-            Para ligar pelo seu WhatsApp ou do seu telefone, abra a conversa ou copie o número, e
-            registre a ligação aqui.
+            Para ligar pelo seu WhatsApp ou do seu celular, abra a conversa, toque em "Ligar pelo
+            celular" ou copie o número, e registre a ligação aqui.
           </p>
         )}
         {canWrite && <RegisterCall leadId={leadId} />}

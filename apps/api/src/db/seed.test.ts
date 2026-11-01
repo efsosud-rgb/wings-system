@@ -50,12 +50,12 @@ describe('seed: "Fale com a Wings"', () => {
       url: 'https://fale.wingscompany.com.br',
     });
     const spec = siteFormSpecSchema.parse(rules[0]?.siteFormSpec);
-    expect(spec.requiredFields).toEqual(['email', 'companyName', 'instagram', 'qualifierAnswer']);
+    expect(spec.requiredFields).toEqual(['qualifierAnswer']);
     expect(spec.qualifierValues?.map((entry) => [entry.value, entry.pipeline])).toEqual([
       ['formatacao', undefined],
       ['expansao', undefined],
       ['consultoria', undefined],
-      ['nao-sei', null],
+      ['nao-sei', undefined],
     ]);
   });
 

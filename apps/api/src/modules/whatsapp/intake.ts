@@ -12,13 +12,16 @@ import {
   crmContacts,
   leadContacts,
   leadEvents,
+  leadTasks,
   leadTrackingLinks,
   leads,
   sofiaAiRuns,
   waCalls,
   waContacts,
+  waConversationEvents,
   waConversations,
   waMessages,
+  waNumberTemplates,
   waTemplates,
   waWebhookEvents,
 } from '../../db/schema/index.js';
@@ -32,7 +35,24 @@ import { formContextOf } from '../sofia/form-context.js';
 import { loadSofiaSettings } from '../sofia/settings.js';
 import { factsOf, routeInbound } from '../sofia/state.js';
 import { ART_MEDIA_GONE_CODES, invalidateArtMedia } from './art.js';
+import { alertWebhookFailed, sweepUnknownSends, warnExpiringTokens } from './alerts.js';
+import { distribute } from './attendance.js';
 import { notifyCallsChanged } from './call-signal.js';
+import { callingOn } from './calling.js';
+import { callPermissionPayload, type WhatsAppConfig } from './graph.js';
+import { CallRequestLimited, callRequestRefusal } from './call-request-limit.js';
+import { officialNumberLive } from './official-number.js';
+import { deliverWhatsApp, type Contact } from './outbox.js';
+import { contactBlock, noteContactBlocked, recordContactOptOut } from '../leads/contact-block.js';
+import { reasonOf } from './templates.js';
+import { brandOf, callPermissionText, permissionOf } from './thread.js';
+import {
+  applyNumberChange,
+  renewExpiringTokens,
+  workNumberOf,
+  type NumbersDeps,
+} from './numbers.js';
+import { applyWorkNumberChange } from './number-intake.js';
 import {
   isOptOut,
   whatsappChangesOf,
@@ -42,6 +62,7 @@ import {
   type WaStatusUpdate,
   type WaTemplateUpdate,
 } from './webhook-parse.js';
+import { notifyInboxChanged } from './inbox-signal.js';
 
 /**
  * The WhatsApp webhook queue. The route stores Meta's body and answers 200 at
@@ -53,6 +74,8 @@ import {
 
 export const WHATSAPP_JOB = 'whatsapp_intake';
 const MAX_ATTEMPTS = 5;
+/** Minutes before the next try: a passing database error gets time to pass. */
+export const retryMinutesOf = (attempts: number) => Math.min(60, 2 ** attempts);
 const PAYLOAD_DAYS = 90;
 
 export async function storeWhatsAppEvent(db: Database, payload: unknown): Promise<string> {
@@ -67,8 +90,14 @@ export interface WhatsAppIntakeDeps {
   db: Database;
   /** Our number. A change for another number of the same app is skipped. */
   phoneNumberId: string | null;
+  /** Our number's WABA: its changes are never mistaken for a seller's number. */
+  wabaId?: string | null;
   log: (facts: Record<string, unknown>) => void;
   now?: () => Date;
+  /** How Meta's call-permission request answers a "Prefiro uma ligação"; absent, the owner's task only. */
+  send?: { config: WhatsAppConfig; fetch: typeof fetch } | null;
+  /** The work numbers' connection (app and key): absent, their tokens are only warned about. */
+  numbers?: NumbersDeps | null;
 }
 
 export interface WhatsAppIntakeResult {
@@ -98,7 +127,10 @@ export async function processWhatsAppEvents(
     const claimed = await db.execute<{ id: string; payload: unknown; attempts: number }>(sql`
       update wa_webhook_events set status = 'processing', attempts = attempts + 1
       where id = (
-        select id from wa_webhook_events where status = 'pending'
+        select id from wa_webhook_events
+        -- A new body at once; one that failed waits for its next try.
+        where status = 'pending'
+          and (attempts = 0 or next_attempt_at <= ${now().toISOString()}::timestamptz)
         order by received_at limit 1 for update skip locked
       )
       returning id, payload, attempts`);
@@ -120,14 +152,23 @@ export async function processWhatsAppEvents(
       const giveUp = event.attempts >= MAX_ATTEMPTS;
       await db
         .update(waWebhookEvents)
-        .set({ status: giveUp ? 'failed' : 'pending', lastError: code })
+        .set({
+          status: giveUp ? 'failed' : 'pending',
+          lastError: code,
+          nextAttemptAt: new Date(now().getTime() + retryMinutesOf(event.attempts) * 60_000),
+        })
         .where(eq(waWebhookEvents.id, event.id));
-      if (giveUp) result.failed++;
-      else result.retried++;
+      if (giveUp) {
+        result.failed++;
+        // The Números screen lists it either way: the notice is a courtesy.
+        await alertWebhookFailed(db, event.id).catch(() => undefined);
+      } else result.retried++;
       deps.log({ job: WHATSAPP_JOB, event: event.id, error: code });
     }
   }
   await sweepCalls(db, now());
+  const unknownSends = await sweepUnknownSends(db, now());
+  if (unknownSends > 0) deps.log({ job: WHATSAPP_JOB, unknownSends });
   return result;
 }
 
@@ -148,17 +189,32 @@ export async function purgeWhatsAppPayloads(db: Database, now = new Date()) {
 }
 
 export async function applyWhatsAppPayload(deps: WhatsAppIntakeDeps, body: unknown) {
+  const official = { phoneNumberId: deps.phoneNumberId, wabaId: deps.wabaId ?? null };
   for (const change of whatsappChangesOf(body)) {
+    // A work number (docs/whatsapp/central.md): whether it left, its history's progress, and its
+    // chats in the CRM, without Sofia or the triage. Its templates stay out (they are its WABA's).
+    const number = await workNumberOf(deps.db, change, official);
+    if (number) {
+      const now = deps.now?.() ?? new Date();
+      await applyNumberChange(deps.db, change, now);
+      await applyWorkNumberChange(deps.db, number.id, change, now);
+      // Its own WABA's template reviews (phase 2): only its own rows move.
+      for (const template of change.templates)
+        await applyTemplateReview(deps.db, template, number.id);
+      continue;
+    }
     if (deps.phoneNumberId && change.phoneNumberId && change.phoneNumberId !== deps.phoneNumberId)
       continue;
     for (const message of change.messages)
-      await applyInbound(deps.db, message, deps.now?.() ?? new Date());
+      await applyInbound(deps, message, deps.now?.() ?? new Date());
     for (const status of change.statuses) await applyStatus(deps.db, status);
     for (const template of change.templates) await applyTemplateReview(deps.db, template);
     for (const call of change.calls) await applyCallEvent(deps.db, call);
     for (const status of change.callStatuses) await applyCallStatus(deps.db, status);
     // A call rang, was answered elsewhere or ended: the open ringing streams look again.
     if (change.calls.length > 0 || change.callStatuses.length > 0) notifyCallsChanged();
+    // A message came (or a status moved): the open streams look at each reader's inbox again.
+    if (change.messages.length > 0 || change.statuses.length > 0) notifyInboxChanged();
   }
 }
 
@@ -197,13 +253,18 @@ export async function openLeadByPhone(db: Database, phone: string): Promise<stri
  * message that finds one): its messages go with it.
  */
 export async function adoptUnmatched(db: Database, contactId: string, leadId: string) {
+  const official = isNull(waConversations.numberId);
   const waiting = await db.query.waConversations.findFirst({
-    where: and(eq(waConversations.contactId, contactId), isNull(waConversations.leadId)),
+    where: and(eq(waConversations.contactId, contactId), isNull(waConversations.leadId), official),
   });
   if (!waiting) return;
   await db.transaction(async (tx) => {
     const existing = await tx.query.waConversations.findFirst({
-      where: and(eq(waConversations.contactId, contactId), eq(waConversations.leadId, leadId)),
+      where: and(
+        eq(waConversations.contactId, contactId),
+        eq(waConversations.leadId, leadId),
+        official,
+      ),
     });
     const target = existing?.id ?? waiting.id;
     if (existing) {
@@ -220,14 +281,23 @@ export async function adoptUnmatched(db: Database, contactId: string, leadId: st
         .set({ conversationId: existing.id })
         .where(eq(sofiaAiRuns.conversationId, waiting.id));
       await tx
+        .update(waConversationEvents)
+        .set({ conversationId: existing.id })
+        .where(eq(waConversationEvents.conversationId, waiting.id));
+      await tx
         .update(waConversations)
         .set({
           lastMessageAt: sql`greatest(${waConversations.lastMessageAt}, ${waiting.lastMessageAt?.toISOString() ?? null}::timestamptz)`,
           referral: sql`coalesce(${waConversations.referral}, ${waiting.referral === null ? null : JSON.stringify(waiting.referral)}::jsonb)`,
+          // Two rows became one: a screen holding either version looks again.
+          version: sql`greatest(${waConversations.version}, ${waiting.version}) + 1`,
           // A deal's conversation that had ended takes the live one's state.
           ...(existing.attendance === 'closed'
             ? {
                 attendance: waiting.attendance,
+                assigneeEmployeeId: waiting.assigneeEmployeeId,
+                queue: waiting.queue,
+                sofiaPaused: waiting.sofiaPaused,
                 stateChangedAt: waiting.stateChangedAt,
                 reason: waiting.reason,
                 segment: waiting.segment,
@@ -249,24 +319,40 @@ export async function adoptUnmatched(db: Database, contactId: string, leadId: st
   });
 }
 
+/**
+ * The official number's conversation of a phone and deal, or, with `numberId`, that work number's
+ * one chat with the phone (whatever deal it joined).
+ */
 export async function openConversation(
   db: Database,
   contactId: string,
   leadId: string | null,
   first: { referral: Record<string, unknown> | null; originCode: string | null },
+  numberId: string | null = null,
 ) {
   const match = () =>
     db.query.waConversations.findFirst({
       where: and(
         eq(waConversations.contactId, contactId),
-        leadId === null ? isNull(waConversations.leadId) : eq(waConversations.leadId, leadId),
+        numberId !== null
+          ? eq(waConversations.numberId, numberId)
+          : and(
+              isNull(waConversations.numberId),
+              leadId === null ? isNull(waConversations.leadId) : eq(waConversations.leadId, leadId),
+            ),
       ),
     });
   const found = await match();
   if (found) return { conversation: found, created: false };
   const [inserted] = await db
     .insert(waConversations)
-    .values({ contactId, leadId, referral: first.referral, originCode: first.originCode })
+    .values({
+      contactId,
+      leadId,
+      numberId,
+      referral: first.referral,
+      originCode: first.originCode,
+    })
     .onConflictDoNothing()
     .returning();
   return inserted
@@ -283,7 +369,8 @@ export async function conversationFor(
   return (await openConversation(db, contactId, leadId, first)).conversation;
 }
 
-async function applyInbound(db: Database, message: WaInboundMessage, now: Date) {
+async function applyInbound(deps: WhatsAppIntakeDeps, message: WaInboundMessage, now: Date) {
+  const { db } = deps;
   // A re-sent webhook: the message is already here, and nothing runs twice.
   const known = await db.query.waMessages.findFirst({
     where: eq(waMessages.wamid, message.wamid),
@@ -319,6 +406,15 @@ async function applyInbound(db: Database, message: WaInboundMessage, now: Date) 
       },
     })
     .returning();
+  // A SAIR also goes to the one register, by phone: every deal of this number, until a manager revokes.
+  if (optOut)
+    await recordContactOptOut(db, {
+      phone,
+      channels: ['whatsapp'],
+      origin: 'whatsapp_palavra',
+      reason: 'Pediu para sair pelo WhatsApp',
+      createdBy: null,
+    });
 
   const permission = message.content.callPermission as
     { response?: string | null; isPermanent?: boolean; expiresAt?: string | null } | undefined;
@@ -410,6 +506,8 @@ async function applyInbound(db: Database, message: WaInboundMessage, now: Date) 
   // needed. It goes on the triage's list inside the transaction that stores the message, so a
   // restart or an error before the triage runs cannot leave the conversation unnoticed.
   let triageQueued = false;
+  let storedNow = false;
+  let routed: string | null = null;
   // The message and who answers it are one step: a failure in between is
   // retried whole (a stored message is never left without its routing).
   await db.transaction(async (tx) => {
@@ -430,6 +528,7 @@ async function applyInbound(db: Database, message: WaInboundMessage, now: Date) 
       .onConflictDoNothing()
       .returning({ id: waMessages.id });
     if (!stored) return;
+    storedNow = true;
     await tx
       .update(waConversations)
       .set({
@@ -450,7 +549,7 @@ async function applyInbound(db: Database, message: WaInboundMessage, now: Date) 
           .from(leads)
           .where(eq(leads.id, leadId))
       : [];
-    await routeInbound(tx, {
+    routed = await routeInbound(tx, {
       conversation,
       created,
       messageId: stored.id,
@@ -487,8 +586,115 @@ async function applyInbound(db: Database, message: WaInboundMessage, now: Date) 
       }
     }
   });
-  // Otherwise the conversation just waits for an attendant.
+  // Otherwise the conversation just waits for an attendant, or the rotation gives it to one.
   if (triageQueued) scheduleLeadTriage({ conversationId: conversation.id });
+  else if (routed === 'waiting_human' || routed === 'waiting_seller')
+    await distribute(db, conversation.id, now);
+  if (storedNow && talks && message.text?.trim().toLowerCase() === CALL_REQUEST)
+    await answerCallRequest(deps, {
+      contact: contact!,
+      conversationId: conversation.id,
+      leadId,
+      at,
+    });
+}
+
+/** The quick reply of our welcome templates where the person asks for a call. */
+const CALL_REQUEST = 'prefiro uma ligação';
+export const CALL_REQUEST_TASK = 'Ligar: o lead pediu uma ligação pelo WhatsApp';
+const DAY_MS = 24 * 3_600_000;
+
+/**
+ * "Prefiro uma ligação" (Eric, 26/10): the deal's owner gets a task to call
+ * now, and, with the official number live and calling on, Meta's call-permission
+ * request goes at once (the tap just opened the 24 h window). Not again while
+ * the person allows calls or within a day of the last request (Meta allows 1 a
+ * day, and 2 a week); sent once, never retried, nothing about the person logged.
+ */
+async function answerCallRequest(
+  deps: WhatsAppIntakeDeps,
+  target: { contact: Contact; conversationId: string; leadId: string | null; at: Date },
+) {
+  const { db } = deps;
+  const { contact, leadId, at } = target;
+  const [lead] = leadId
+    ? await db.select({ owner: leads.ownerEmployeeId }).from(leads).where(eq(leads.id, leadId))
+    : [];
+  if (leadId && lead?.owner) {
+    const open = await db.query.leadTasks.findFirst({
+      where: and(
+        eq(leadTasks.leadId, leadId),
+        eq(leadTasks.title, CALL_REQUEST_TASK),
+        isNull(leadTasks.doneAt),
+      ),
+      columns: { id: true },
+    });
+    if (!open) {
+      const [task] = await db
+        .insert(leadTasks)
+        .values({
+          leadId,
+          kind: 'call',
+          title: CALL_REQUEST_TASK,
+          dueAt: at,
+          assigneeEmployeeId: lead.owner,
+          auto: true,
+        })
+        .returning({ id: leadTasks.id });
+      await db.insert(leadEvents).values({
+        leadId,
+        kind: 'lead.task_created',
+        detail: { taskId: task!.id, kind: 'call', auto: true, dueAt: at.toISOString() },
+      });
+    }
+  }
+  const send = deps.send;
+  const state = permissionOf(contact, at).status;
+  const askedToday =
+    contact.callPermissionRequestedAt !== null &&
+    at.getTime() - contact.callPermissionRequestedAt.getTime() < DAY_MS;
+  // No open deal: nobody to call and no known brand voice, so nothing goes.
+  if (
+    !send ||
+    !leadId ||
+    state === 'temporary' ||
+    state === 'permanent' ||
+    askedToday ||
+    !(await officialNumberLive(db)) ||
+    !(await callingOn(send.fetch, send.config)) ||
+    (await callRequestRefusal(db, contact.id)) !== null
+  )
+    return;
+  // The system asks on its own: a "não me contate" (or the Prospecção opt-in rule) stops it.
+  const block = await contactBlock(db, 'whatsapp', { leadId, phone: contact.phone });
+  if (block.blocked)
+    return noteContactBlocked(db, leadId, {
+      channel: 'whatsapp',
+      path: 'pedido_ligacao_automatico',
+      origin: block.origin,
+    });
+  const shown = callPermissionText(await brandOf(db, leadId, target.conversationId));
+  const delivered = await deliverWhatsApp(db, send.fetch, send.config, {
+    contact,
+    conversationId: target.conversationId,
+    leadId,
+    author: 'system',
+    employeeId: null,
+    kind: 'interactive',
+    shown,
+    content: { callPermissionRequest: true },
+    payload: callPermissionPayload(shown),
+    at,
+  }).catch((error: unknown) => {
+    // A seller's request got in at the same moment: Meta's limit stops this one, nothing goes.
+    if (error instanceof CallRequestLimited) return null;
+    throw error;
+  });
+  if (delivered?.outcome === 'sent')
+    await db
+      .update(waContacts)
+      .set({ callPermission: 'requested', callPermissionRequestedAt: at })
+      .where(eq(waContacts.id, contact.id));
 }
 
 /** How long a seller's message from a closed deal keeps the person's answers with that seller. */
@@ -506,6 +712,7 @@ async function heldDealOf(db: Database, contactId: string, now: Date): Promise<s
     .where(
       and(
         eq(waConversations.contactId, contactId),
+        isNull(waConversations.numberId),
         sql`${waConversations.leadId} is not null`,
         inArray(waConversations.attendance, ['with_person', 'waiting_seller']),
         sql`exists (select 1 from wa_messages o where o.conversation_id = ${waConversations.id}
@@ -527,7 +734,7 @@ const STAMP: Partial<Record<WaMessageStatus, 'sentAt' | 'deliveredAt' | 'readAt'
   failed: 'failedAt',
 };
 
-async function applyStatus(db: Database, update: WaStatusUpdate) {
+export async function applyStatus(db: Database, update: WaStatusUpdate) {
   if (!update.status) return;
   const row = await db.query.waMessages.findFirst({ where: eq(waMessages.wamid, update.wamid) });
   if (!row || row.direction !== 'out') return;
@@ -545,15 +752,16 @@ async function applyStatus(db: Database, update: WaStatusUpdate) {
           : {}),
       })
       .where(eq(waMessages.id, row.id));
-    // A message with the art that Meta failed later because of the file: the art goes up again next time.
-    const art = (row.content as { art?: { mediaId?: unknown } } | null)?.art;
+    // A message with the art (or a deal's file) that Meta failed later because of the file: it goes up again next time.
+    const sent = row.content as { art?: { mediaId?: unknown }; media?: { id?: unknown } } | null;
+    const mediaId = sent?.art?.mediaId ?? sent?.media?.id;
     if (
       update.status === 'failed' &&
-      typeof art?.mediaId === 'string' &&
+      typeof mediaId === 'string' &&
       update.errorCode !== null &&
       ART_MEDIA_GONE_CODES.has(update.errorCode)
     )
-      await invalidateArtMedia(db, art.mediaId, at);
+      await invalidateArtMedia(db, mediaId, at);
   } else if (stamp && stamp !== 'failedAt' && row[stamp] === null && current !== 'failed') {
     // Arrived late (a "delivered" after the "read"): only its time is filled in.
     await db
@@ -565,10 +773,27 @@ async function applyStatus(db: Database, update: WaStatusUpdate) {
 
 // --- a template review ------------------------------------------------------------------------
 
-async function applyTemplateReview(db: Database, update: WaTemplateUpdate) {
+async function applyTemplateReview(
+  db: Database,
+  update: WaTemplateUpdate,
+  numberId: string | null = null,
+) {
+  if (numberId) {
+    await db
+      .update(waNumberTemplates)
+      .set({ status: update.status, rejectedReason: reasonOf(update.reason), syncedAt: new Date() })
+      .where(
+        and(
+          eq(waNumberTemplates.numberId, numberId),
+          eq(waNumberTemplates.name, update.name),
+          update.language ? eq(waNumberTemplates.language, update.language) : sql`true`,
+        ),
+      );
+    return;
+  }
   await db
     .update(waTemplates)
-    .set({ status: update.status, syncedAt: new Date() })
+    .set({ status: update.status, rejectedReason: reasonOf(update.reason), syncedAt: new Date() })
     .where(
       and(
         eq(waTemplates.name, update.name),
@@ -800,6 +1025,13 @@ export function startWhatsAppIntake(deps: WhatsAppIntakeDeps & { tickMs?: number
       purgedOn = today;
       const { purged } = await purgeWhatsAppPayloads(deps.db, deps.now?.());
       if (purged > 0) deps.log({ job: WHATSAPP_JOB, purgedPayloads: purged });
+      // The work numbers' 60-day access: renewed near its end, and people told when it was not
+      // (told even when the renewal pass itself broke).
+      if (deps.numbers)
+        await renewExpiringTokens(deps.numbers, deps.log).catch(() =>
+          deps.log({ job: 'whatsapp_token', error: 'renew_pass_failed' }),
+        );
+      await warnExpiringTokens(deps.db, deps.now?.() ?? new Date());
     }
   };
   const timer = setInterval(() => void tick().catch(() => undefined), deps.tickMs ?? 60_000);

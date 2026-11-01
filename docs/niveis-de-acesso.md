@@ -29,32 +29,43 @@ what, and both the API and the screen read it:
 department (Projects); `sector` = the person's own sector. Formatação is the six sub-levels (Jurídico,
 Financeiro, Processos e Projetos, Contábil/Tributário, Logística, TI).
 
-| Module → screen                         | Admin Master | Diretoria         | RH/DP | Gerente Comercial | Marketing | Formatação                    | Vendedor Expansão | Vendedor Formatação |
-| --------------------------------------- | ------------ | ----------------- | ----- | ----------------- | --------- | ----------------------------- | ----------------- | ------------------- |
-| Início                                  | yes          | yes               | yes   | yes               | yes       | yes                           | yes               | yes                 |
-| CRM Vendas (deals, WhatsApp, contacts…) | all          | all, no editing   | —     | all               | —         | —                             | own               | own                 |
-| CRM → Empresas, Landing pages           | yes          | yes               | —     | yes               | —         | —                             | —                 | —                   |
-| CRM → Configurações                     | yes          | —                 | —     | yes               | —         | —                             | —                 | —                   |
-| CRM → Sofia (every conversation)        | yes          | yes               | —     | yes               | —         | —                             | —                 | —                   |
-| Dashboard → Vendas                      | all          | all               | —     | all               | —         | —                             | own, in the CRM   | own, in the CRM     |
-| Dashboard → Marketing                   | yes          | yes               | —     | —                 | yes       | —                             | —                 | —                   |
-| Dashboard → Leads das Campanhas         | all          | all               | —     | all               | —         | —                             | —                 | own, in the CRM     |
-| Marketing (traffic agent, media studio) | yes          | yes               | —     | —                 | yes       | —                             | —                 | —                   |
-| Formatação → Clientes                   | yes          | yes               | —     | —                 | yes       | Jurídico only                 | —                 | —                   |
-| Gestão → Projetos                       | all          | all               | read  | dept              | dept      | dept (P&P all; Log., TI read) | dept, in the CRM  | dept, in the CRM    |
-| Drive                                   | all          | all               | dept  | dept              | dept      | dept                          | —                 | —                   |
-| Produtividade → Agenda                  | yes          | yes               | yes   | yes               | yes       | yes                           | read only         | read only           |
-| Produtividade → Reuniões                | all          | all               | —     | all               | —         | —                             | own               | own                 |
-| Administração → Usuários e acessos      | all          | all (levels only) | all   | sector            | —         | —                             | —                 | —                   |
-| Administração → Drive: modelo de pastas | yes          | yes               | —     | —                 | —         | —                             | —                 | —                   |
-| Administração → Roadmap, Integrações    | yes          | —                 | —     | —                 | —         | —                             | —                 | —                   |
-| Configurações, APIs e credenciais       | yes          | —                 | —     | —                 | —         | —                             | —                 | —                   |
-| Laboratório, SaaS                       | yes          | —                 | —     | —                 | —         | —                             | —                 | —                   |
-| "Em breve" placeholders                 | yes          | yes               | —     | —                 | —         | —                             | —                 | —                   |
+| Module → screen                         | Admin Master | Diretoria             | RH/DP | Gerente Comercial | Marketing | Formatação                    | Vendedor Expansão | Vendedor Formatação |
+| --------------------------------------- | ------------ | --------------------- | ----- | ----------------- | --------- | ----------------------------- | ----------------- | ------------------- |
+| Início                                  | yes          | yes                   | yes   | yes               | yes       | yes                           | yes               | yes                 |
+| CRM Vendas (deals, WhatsApp, contacts…) | all          | all, no editing       | —     | all               | —         | —                             | own               | own                 |
+| CRM → Empresas, Landing pages           | yes          | yes                   | —     | yes               | —         | —                             | —                 | —                   |
+| CRM → Configurações                     | yes          | —                     | —     | yes               | —         | —                             | —                 | —                   |
+| CRM → Sofia (every conversation)        | yes          | yes                   | —     | yes               | —         | —                             | —                 | —                   |
+| CRM → WhatsApp → Modelos                | yes          | yes                   | —     | —                 | —         | —                             | —                 | —                   |
+| CRM → Prospecção                        | all          | all, no lead creation | —     | all               | —         | —                             | —                 | own                 |
+| Dashboard → Vendas                      | all          | all                   | —     | all               | —         | —                             | own, in the CRM   | own, in the CRM     |
+| Dashboard → Marketing                   | yes          | yes                   | —     | —                 | yes       | —                             | —                 | —                   |
+| Dashboard → Leads das Campanhas         | all          | all                   | —     | all               | —         | —                             | —                 | own, in the CRM     |
+| Marketing (traffic agent, media studio) | yes          | yes                   | —     | —                 | yes       | —                             | —                 | —                   |
+| Formatação → Clientes                   | yes          | yes                   | —     | —                 | yes       | Jurídico only                 | —                 | —                   |
+| Gestão → Projetos                       | all          | all                   | read  | dept              | dept      | dept (P&P all; Log., TI read) | dept, in the CRM  | dept, in the CRM    |
+| Drive                                   | all          | all                   | dept  | dept              | dept      | dept                          | —                 | —                   |
+| Produtividade → Agenda                  | yes          | yes                   | yes   | yes               | yes       | yes                           | read only         | read only           |
+| Produtividade → Reuniões                | all          | all                   | —     | all               | —         | —                             | own               | own                 |
+| Administração → Usuários e acessos      | all          | all (levels only)     | all   | sector            | —         | —                             | —                 | —                   |
+| Administração → Drive: modelo de pastas | yes          | yes                   | —     | —                 | —         | —                             | —                 | —                   |
+| Administração → Roadmap, Integrações    | yes          | —                     | —     | —                 | —         | —                             | —                 | —                   |
+| Configurações, APIs e credenciais       | yes          | —                     | —     | —                 | —         | —                             | —                 | —                   |
+| Laboratório, SaaS                       | yes          | —                     | —     | —                 | —         | —                             | —                 | —                   |
+| "Em breve" placeholders                 | yes          | yes                   | —     | —                 | —         | —                             | —                 | —                   |
 
 Also by level, outside the menu: the sector-manager flag (`is_sector_manager`) adds the register of the person's
 own sector; Diretoria never sees TI sector records; Diretoria does not edit deals or employee data (only levels);
-nobody but the Admin Master sets the ad budget caps or connects Kairogen.
+nobody but the Admin Master sets the ad budget caps, connects Kairogen, or registers and connects a WhatsApp work
+number (CRM Vendas → WhatsApp → Números, `integrations.manage`).
+
+**Prospecção (Eric, 24/10; `docs/crm/prospeccao.md`).** `prospecting.use` opens the screen: `own` for the Vendedor
+Formatação (their own prospects; a company another seller holds is hidden from their search), `all` for the Gerente
+Comercial, Diretoria and Admin Master (every prospect, and passing one to another seller). Creating the lead also
+needs `leads.write`, so Diretoria searches but does not create. `prospecting.configure` (ICP weights and exclusion
+list) belongs to the Gerente Comercial and the Admin Master; `prospecting.quota` (the calls to Google) to the Admin
+Master alone. `prospecting.export` (the prospects as a spreadsheet, our data only, audited) belongs to the Gerente
+Comercial and the Admin Master: not Diretoria, not the seller. The Vendedor Expansão has none of them.
 
 Decisions of 13/10, asked and answered: sellers keep the WhatsApp inbox, Projects, the Sales dashboard and (Vendedor
 Formatação) Leads das Campanhas, and lose the Sofia screen and the employee register; the Gerente Comercial keeps
@@ -99,6 +110,24 @@ comercial see every one. The old `/crm-vendas/agenda` redirects to `/produtivida
 - **WhatsApp → Importar em lote** (`whatsapp.import_bulk`, 19/10): Admin Master only, scope all, because it pairs
   conversations with any open deal. The single import in a deal stays `leads.whatsapp` + `leads.write`. See
   `docs/whatsapp/importar-conversa.md`.
+- **Central WhatsApp, work numbers** (26/10, `docs/whatsapp/central.md`): a chat on a company work number is seen
+  (list, conversation, files, send) by the **number's owner** and by whoever reads every lead (`leads.whatsapp`
+  scope all: Admin Master, Diretoria, Gerente Comercial). A seller who owns the deal but not the number does not see
+  that number's chat (404), only the official conversation of the deal; decision open for Eric. The official
+  number's rule does not change (deal owner; no deal: scope all). The seller's "em breve" key is the official
+  number's: a seller writes from their own connected work number with it off. Sofia's screen never lists a work
+  number's chat. The registry, the connection, the token's end and its renewal ("Renovar acesso") and the failed
+  webhook bodies ("Processar de novo") are Admin Master only (`integrations.manage`); audit rows carry ids only. A
+  work number's templates (its own WABA's) are read by whoever reaches its chats.
+- **Central WhatsApp, who answers** (phase 2, `docs/whatsapp/central.md`, "Atendimento"): a conversation **given to a
+  person** (taken, transferred to them, or by the rotation) is seen and answered by that person too, whoever owns
+  the deal or the number. Only the one who holds it writes; anyone else who sees it takes it first ("Assumir"),
+  which tells the one who had it. Passing it to a person: a full-scope reader only (they see the team, as
+  `GET /crm/sellers` needs `leads.assign`); to a department's queue, and resolving it: the holder or a full-scope
+  reader. Reopening, and pausing Sofia in it: anyone who sees it. Turning Sofia on in it: `sofia.read`
+  (as "Devolver para a Sofia"). The rotation mode (`PUT /whatsapp/assignment`): `crm.manage`, as the funnels'
+  rotation. A seller does not see a department's queue: the managers or the rotation give it out (decision open
+  for Eric).
 
 Not in the system: **Notion** (no module or link exists). **Meet** for a seller is the Google connection in
 "Minha conta" and the meetings inside the deal; Produtividade → Agenda and Reuniões only read (above).

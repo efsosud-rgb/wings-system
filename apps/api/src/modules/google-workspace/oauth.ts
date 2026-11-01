@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { GMAIL_READ_SCOPE } from '@wings/shared';
 
 /**
  * Google's OAuth 2.0 code flow for one person (docs/integracoes/google-workspace.md).
@@ -6,13 +7,19 @@ import { createHash, randomBytes } from 'node:crypto';
  * Plain `fetch` against Google's endpoints, like the Google Ads and GA4 clients:
  * no library. The scopes are the smallest set that creates events with a Meet
  * on any calendar the person can write to, finds the shared Wings Company
- * calendar, sends mail as the person and names the account that consented.
+ * calendar, sends mail as the person, reads the leads' replies in their
+ * mailbox (`gmail.readonly`, the narrowest scope that reaches a message's
+ * text and attachments; t083) and names the account that consented.
  * Nothing here logs a token, a code or an address.
  */
 
 export const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 export const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 export const GOOGLE_REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
+/** Every call to Google gives up after this long: a stalled one must not hold a click or a pass. */
+export const GOOGLE_TIMEOUT_MS = 30_000;
+/** A call that carries up to 20 MB of files (sending, or one attachment read) gets longer. */
+export const GOOGLE_FILE_TIMEOUT_MS = 120_000;
 
 export const GOOGLE_WORKSPACE_SCOPES = [
   'openid',
@@ -20,6 +27,7 @@ export const GOOGLE_WORKSPACE_SCOPES = [
   'https://www.googleapis.com/auth/calendar.events',
   'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
   'https://www.googleapis.com/auth/gmail.send',
+  GMAIL_READ_SCOPE,
 ] as const;
 
 export class GoogleOAuthError extends Error {
@@ -117,6 +125,7 @@ async function tokenRequest(
         client_secret: client.clientSecret,
         ...grant,
       }).toString(),
+      signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS),
     });
   } catch {
     throw new GoogleOAuthError('google_unreachable', 'O Google não respondeu.');
@@ -177,6 +186,7 @@ export async function revokeToken(transport: typeof fetch, token: string): Promi
     await transport(`${GOOGLE_REVOKE_URL}?${new URLSearchParams({ token }).toString()}`, {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS),
     });
   } catch {
     // The row is deleted anyway; Google expires the token on its own.

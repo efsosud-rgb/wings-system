@@ -1,3 +1,4 @@
+import type { WaSendKind } from '@wings/shared';
 import type { Env } from '../../env.js';
 
 /**
@@ -42,7 +43,8 @@ type Fetch = typeof fetch;
 
 async function graph<T>(
   fetchImpl: Fetch,
-  token: string,
+  /** Null only for the token exchange, which has no token yet. */
+  token: string | null,
   method: 'GET' | 'POST',
   path: string,
   body?: unknown,
@@ -55,7 +57,7 @@ async function graph<T>(
     response = await fetchImpl(`${GRAPH}${path}`, {
       method,
       headers: {
-        Authorization: `Bearer ${token}`,
+        ...(token === null ? {} : { Authorization: `Bearer ${token}` }),
         ...(body === undefined || form ? {} : { 'Content-Type': 'application/json' }),
       },
       body: body === undefined ? undefined : form ? body : JSON.stringify(body),
@@ -92,6 +94,9 @@ export type InteractiveHeader =
 export type OutgoingPayload =
   | { type: 'text'; text: { body: string; preview_url: boolean } }
   | { type: 'image'; image: { id: string; caption?: string } }
+  | { type: 'video'; video: { id: string; caption?: string } }
+  | { type: 'audio'; audio: { id: string; voice?: true } }
+  | { type: 'document'; document: { id: string; caption?: string; filename: string } }
   | {
       type: 'interactive';
       interactive: {
@@ -180,6 +185,27 @@ export const imagePayload = (mediaId: string, caption: string): OutgoingPayload 
   type: 'image',
   image: { id: mediaId, ...(caption ? { caption } : {}) },
 });
+
+/**
+ * A deal's file by its Meta media id, inside the 24-hour window: an audio goes
+ * without a caption, a document with its name (what the person sees).
+ */
+export const filePayload = (
+  kind: WaSendKind,
+  mediaId: string,
+  caption: string,
+  filename: string,
+  /** A recording made in the conversation: Meta shows it as a voice message (OGG/OPUS only). */
+  voice = false,
+): OutgoingPayload => {
+  const text = caption ? { caption } : {};
+  if (kind === 'audio')
+    return { type: 'audio', audio: { id: mediaId, ...(voice ? { voice: true as const } : {}) } };
+  if (kind === 'video') return { type: 'video', video: { id: mediaId, ...text } };
+  if (kind === 'document')
+    return { type: 'document', document: { id: mediaId, ...text, filename } };
+  return imagePayload(mediaId, caption);
+};
 
 /** One link button (title of up to 20 characters), inside the 24-hour window. */
 export const ctaUrlPayload = (
@@ -350,10 +376,10 @@ export async function readCallingSettings(
   );
 }
 
-// --- files we send (the art) -------------------------------------------------------------
+// --- files we send (the art, a deal's file) ----------------------------------------------
 
 /**
- * POST /{phone-number-id}/media: the art goes up to Meta once and is sent by
+ * POST /{phone-number-id}/media: the file goes up to Meta once and is sent by
  * its id (Meta keeps it 30 days). Uploading sends nothing to anybody.
  */
 export async function uploadWhatsAppMedia(
@@ -386,8 +412,12 @@ export interface GraphTemplate {
   language?: string;
   status?: string;
   category?: string;
+  rejected_reason?: string;
   components?: unknown[];
 }
+
+/** At most 10 pages of 100: a list this long may be cut short. */
+export const TEMPLATE_LIST_MAX = 1000;
 
 /** GET /{waba-id}/message_templates, following Meta's pages (at most 10). */
 export async function listWhatsAppTemplates(
@@ -398,7 +428,7 @@ export async function listWhatsAppTemplates(
   let after: string | null = null;
   for (let page = 0; page < 10; page++) {
     const query = new URLSearchParams({
-      fields: 'id,name,language,status,category,components',
+      fields: 'id,name,language,status,category,rejected_reason,components',
       limit: '100',
     });
     if (after) query.set('after', after);
@@ -412,6 +442,33 @@ export async function listWhatsAppTemplates(
     if (!after) break;
   }
   return { ok: true, data: out };
+}
+
+/** POST /{waba-id}/message_templates: the template goes to Meta's review (PENDING). */
+export function createWhatsAppTemplate(
+  fetchImpl: Fetch,
+  config: WhatsAppConfig & { wabaId: string },
+  template: { name: string; language: string; category: string; components: unknown[] },
+) {
+  return graph<{ id?: string; status?: string; category?: string }>(
+    fetchImpl,
+    config.token,
+    'POST',
+    `/${config.wabaId}/message_templates`,
+    template,
+  );
+}
+
+/** POST /{template-id}: new words go back to Meta's review (at most once a day, 10 times in 30 days). */
+export function editWhatsAppTemplate(
+  fetchImpl: Fetch,
+  config: WhatsAppConfig,
+  metaId: string,
+  components: unknown[],
+) {
+  return graph<{ success?: boolean }>(fetchImpl, config.token, 'POST', `/${metaId}`, {
+    components,
+  });
 }
 
 // --- received files ---------------------------------------------------------------------
@@ -435,7 +492,8 @@ export const MAX_MEDIA_BYTES = 100 * 1024 * 1024;
 
 /**
  * A received file: GET /{media-id} gives a short-lived signed URL, which is
- * read with the same token. Nothing is stored; the browser gets the bytes.
+ * read with the same token. The caller keeps the bytes (`media-store.ts`) or
+ * passes them on to the browser.
  */
 export async function downloadWhatsAppMedia(
   fetchImpl: Fetch,
@@ -470,11 +528,161 @@ export async function downloadWhatsAppMedia(
   }
 }
 
+// --- a seller's number, by coexistence (docs/whatsapp/conectar-numero.md) ----------------
+
+/**
+ * Embedded Signup's code (it lives 30 seconds) for the business token, GET /oauth/access_token.
+ * The one call that carries a credential outside the Authorization header: Meta's exchange takes
+ * the app secret as a parameter. No URL is ever logged.
+ */
+export async function exchangeSignupCode(
+  fetchImpl: Fetch,
+  app: { appId: string; appSecret: string },
+  code: string,
+): Promise<GraphResult<{ token: string; expiresIn: number | null }>> {
+  const query = new URLSearchParams({ client_id: app.appId, client_secret: app.appSecret, code });
+  const result = await graph<{ access_token?: unknown; expires_in?: unknown }>(
+    fetchImpl,
+    null,
+    'GET',
+    `/oauth/access_token?${query}`,
+  );
+  return tokenOf(result);
+}
+
+function tokenOf(
+  result: GraphResult<{ access_token?: unknown; expires_in?: unknown }>,
+): GraphResult<{ token: string; expiresIn: number | null }> {
+  if (!result.ok) return result;
+  // Seconds until the token ends (60 days with Meta's default configuration); absent: no end given.
+  const expiresIn = Number(result.data.expires_in);
+  return typeof result.data.access_token === 'string' && result.data.access_token
+    ? {
+        ok: true,
+        data: {
+          token: result.data.access_token,
+          expiresIn: Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn : null,
+        },
+      }
+    : { ok: false, code: null, title: 'no_token', unknown: false };
+}
+
+/**
+ * A work number's 60-day token renewed before it ends: Meta's `fb_exchange_token` with
+ * `set_token_expires_in_60_days`, as its docs give it for an expiring system user token. NOT
+ * verified live (no number was ever connected); a refusal leaves the current token as it is.
+ */
+export async function refreshBusinessToken(
+  fetchImpl: Fetch,
+  app: { appId: string; appSecret: string },
+  token: string,
+): Promise<GraphResult<{ token: string; expiresIn: number | null }>> {
+  const query = new URLSearchParams({
+    grant_type: 'fb_exchange_token',
+    client_id: app.appId,
+    client_secret: app.appSecret,
+    set_token_expires_in_60_days: 'true',
+    fb_exchange_token: token,
+  });
+  return tokenOf(
+    await graph<{ access_token?: unknown; expires_in?: unknown }>(
+      fetchImpl,
+      null,
+      'GET',
+      `/oauth/access_token?${query}`,
+    ),
+  );
+}
+
+export interface GraphBusinessNumber {
+  id?: string;
+  display_phone_number?: string;
+  verified_name?: string;
+  /** True for a number that stays in the WhatsApp Business app (coexistence). */
+  is_on_biz_app?: boolean;
+  platform_type?: string;
+}
+
+/** GET /{waba-id}/phone_numbers: the business token sees only what the business shared. */
+export async function readWabaNumbers(
+  fetchImpl: Fetch,
+  token: string,
+  wabaId: string,
+): Promise<GraphResult<GraphBusinessNumber[]>> {
+  const fields = 'id,display_phone_number,verified_name,is_on_biz_app,platform_type';
+  const result = await graph<{ data?: GraphBusinessNumber[] }>(
+    fetchImpl,
+    token,
+    'GET',
+    `/${wabaId}/phone_numbers?fields=${fields}`,
+  );
+  return result.ok ? { ok: true, data: result.data.data ?? [] } : result;
+}
+
+/** The business portfolio that owns the WABA (GET /{waba-id}?fields=owner_business_info). */
+export async function readWabaOwner(
+  fetchImpl: Fetch,
+  token: string,
+  wabaId: string,
+): Promise<GraphResult<string | null>> {
+  const result = await graph<{ owner_business_info?: { id?: unknown } }>(
+    fetchImpl,
+    token,
+    'GET',
+    `/${wabaId}?fields=owner_business_info`,
+  );
+  if (!result.ok) return result;
+  const id = result.data.owner_business_info?.id;
+  return { ok: true, data: typeof id === 'string' && /^\d+$/.test(id) ? id : null };
+}
+
+/** POST /{waba-id}/subscribed_apps: our app gets this WABA's webhooks. Safe to repeat. */
+export async function subscribeWaba(
+  fetchImpl: Fetch,
+  token: string,
+  wabaId: string,
+): Promise<GraphResult<boolean>> {
+  const result = await graph<{ success?: unknown }>(
+    fetchImpl,
+    token,
+    'POST',
+    `/${wabaId}/subscribed_apps`,
+  );
+  return result.ok ? { ok: true, data: result.data.success === true } : result;
+}
+
+export type SmbSyncType = 'smb_app_state_sync' | 'history';
+
+/**
+ * POST /{phone-number-id}/smb_app_data: Meta sends the app's contacts or its history through the
+ * webhook. Meta takes each once per connection, so it is sent once and never retried here.
+ */
+export async function requestSmbSync(
+  fetchImpl: Fetch,
+  token: string,
+  phoneNumberId: string,
+  syncType: SmbSyncType,
+): Promise<GraphResult<string | null>> {
+  const result = await graph<{ request_id?: unknown }>(
+    fetchImpl,
+    token,
+    'POST',
+    `/${phoneNumberId}/smb_app_data`,
+    { messaging_product: 'whatsapp', sync_type: syncType },
+  );
+  if (!result.ok) return result;
+  const id = result.data.request_id;
+  return { ok: true, data: typeof id === 'string' ? id.slice(0, 200) : null };
+}
+
 // --- errors in plain Portuguese -----------------------------------------------------------
 
 const ERRORS: Record<number, string> = {
   131047: 'Fora das 24 horas: só um modelo aprovado pode ir agora.',
   131026: 'Não entregue: o número pode não ter WhatsApp ou não aceitar mensagens da empresa.',
+  // The staging still runs on Meta's test number, which only delivers to the numbers listed in the app.
+  131030:
+    'Não entregue: o sistema está no número de teste da Meta, que só manda para até 5 números cadastrados no app. Para falar com lead de verdade, falta ligar o número da Wings na API (veja docs/whatsapp/cloud-api.md).',
   131049:
     'A Meta segurou a mensagem para não cansar a pessoa com mensagens de empresa. Tente outro dia.',
   131050: 'A pessoa pediu para não receber mensagens de marketing.',
