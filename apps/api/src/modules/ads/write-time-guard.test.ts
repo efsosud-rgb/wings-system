@@ -54,7 +54,7 @@ interface World {
   client: FakeMetaClient;
   campaign: (externalId: string) => Promise<string>;
   committed: () => Promise<number>;
-  reconcile: () => Promise<void>;
+  reconcile: (now: Date) => Promise<void>;
   budgetWrites: () => string[];
 }
 
@@ -86,10 +86,11 @@ async function world(budgets: Record<string, number>): Promise<World> {
     usablePercent: 70,
   });
 
-  const reconcile = async () => {
-    await reconcileAccount(db, client, account.id, NOW);
+  const reconcile = async (now: Date) => {
+    await reconcileAccount(db, client, account.id, now);
   };
-  await reconcile();
+  // Half an hour before the requests: what they reserve comes after it.
+  await reconcile(at(-0.5));
 
   return {
     accountId: account.id,
@@ -171,9 +172,9 @@ async function changeRow(changeId: string) {
 async function twoIncreasesAcrossAReconciliation(bTo: number) {
   const w = await world({ a: 1000, b: 1000 });
   const a = await approved(w, 'a', 4000); // +78_750 → 131_250 once applied
-  await w.reconcile();
+  await w.reconcile(at(0.25));
   expect(await w.committed()).toBe(52_500); // A's reservation is gone (T-1)
-  const b = await approved(w, 'b', bTo);
+  const b = await approved(w, 'b', bTo, at(0.5));
   return { w, a, b };
 }
 
@@ -182,8 +183,8 @@ describe('the executor judges the change’s own delta at the instant of the wri
     // B to R$ 40/dia: +78_750, so 131_250 + 78_750 = 210_000 = usable.
     const { w, a, b } = await twoIncreasesAcrossAReconciliation(4000);
 
-    expect(await execute(w, a.changeId)).toMatchObject({ outcome: 'applied' });
-    expect(await execute(w, b.changeId)).toMatchObject({ outcome: 'applied' });
+    expect(await execute(w, a.changeId, at(1))).toMatchObject({ outcome: 'applied' });
+    expect(await execute(w, b.changeId, at(1))).toMatchObject({ outcome: 'applied' });
     expect(w.budgetWrites()).toEqual(['a', 'b']);
   });
 
@@ -193,8 +194,8 @@ describe('the executor judges the change’s own delta at the instant of the wri
     // 78_776) with the ceiling, and both writes went out.
     const { w, a, b } = await twoIncreasesAcrossAReconciliation(4001);
 
-    expect(await execute(w, a.changeId)).toMatchObject({ outcome: 'applied' });
-    const second = await execute(w, b.changeId);
+    expect(await execute(w, a.changeId, at(1))).toMatchObject({ outcome: 'applied' });
+    const second = await execute(w, b.changeId, at(1));
 
     expect(second).toMatchObject({ outcome: 'refused', reason: 'cap_no_longer_allows' });
     expect(w.budgetWrites()).toEqual(['a']);
@@ -218,7 +219,10 @@ describe('the executor judges the change’s own delta at the instant of the wri
   it('lets only one of two simultaneous executions out when they only fit alone', async () => {
     const { w, a, b } = await twoIncreasesAcrossAReconciliation(5000);
 
-    const results = await Promise.all([execute(w, a.changeId), execute(w, b.changeId)]);
+    const results = await Promise.all([
+      execute(w, a.changeId, at(1)),
+      execute(w, b.changeId, at(1)),
+    ]);
 
     const applied = results.filter((result) => result.outcome === 'applied');
     const refused = results.filter(
@@ -238,7 +242,7 @@ describe('the executor judges the change’s own delta at the instant of the wri
       .set({ reservationActive: false })
       .where(eq(adChangeRequests.id, a.changeId));
 
-    expect(await execute(w, a.changeId)).toMatchObject({
+    expect(await execute(w, a.changeId, at(1))).toMatchObject({
       outcome: 'refused',
       reason: 'reservation_missing',
     });
@@ -301,6 +305,43 @@ describe('a reduction is never held back', () => {
       where: eq(adAccounts.id, w.accountId),
     });
     expect(account?.killSwitchEngaged).toBe(true);
+  });
+});
+
+describe('a reservation is given back once (T-2)', () => {
+  it('rejecting an increase that crossed a reconciliation does not take it out again', async () => {
+    const w = await world({ a: 1000, b: 1000 }); // 52_500
+    const raise = await requested(w, 'a', { kind: 'set_daily_budget', to: 4000 }); // 131_250
+    await w.reconcile(at(0.25)); // back to 52_500: the reservation is already gone
+
+    expect(await decide(raise.approvalId, 'rejected', at(0.5))).toMatchObject({ ok: true });
+
+    // Before: 52_500 − 78_750, floored at 0, and the month looked empty.
+    expect(await w.committed()).toBe(52_500);
+    expect(await changeRow(raise.changeId)).toMatchObject({
+      status: 'rejected',
+      reservationActive: false,
+    });
+  });
+
+  it('expiring a pause that crossed a reconciliation does not add it back again', async () => {
+    const w = await world({ a: 1000, b: 1000 }); // 52_500
+    const pause = await requested(w, 'a', { kind: 'pause_campaign' }); // 26_250
+    await w.reconcile(at(0.25)); // 52_500: the pause never happened on the platform
+
+    await expireStaleChanges(db, { now: at(25) });
+
+    expect(await changeRow(pause.changeId)).toMatchObject({ status: 'expired' });
+    expect(await w.committed()).toBe(52_500); // not 78_750
+  });
+
+  it('still gives back a reservation taken since the last reconciliation', async () => {
+    const w = await world({ a: 1000 }); // 26_250
+    const raise = await requested(w, 'a', { kind: 'set_daily_budget', to: 2000 }); // 52_500
+
+    await decide(raise.approvalId, 'rejected');
+
+    expect(await w.committed()).toBe(26_250);
   });
 });
 

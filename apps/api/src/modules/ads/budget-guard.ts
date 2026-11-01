@@ -956,12 +956,18 @@ export async function reserveCampaignCreation(
 async function lockPeriodById(
   tx: Transaction,
   periodId: string,
-): Promise<{ state: PeriodState; periodMonth: string; closed: boolean } | null> {
+): Promise<{
+  state: PeriodState;
+  periodMonth: string;
+  closed: boolean;
+  lastReconciledAt: Date | null;
+} | null> {
   const locked = await tx.execute<
     {
       id: string;
       period_month: string;
       closed_at: Date | string | null;
+      last_reconciled_at: Date | string | null;
       cap_cents: string;
       usable_cents: string;
       committed_cents: string;
@@ -970,7 +976,8 @@ async function lockPeriodById(
       platform_limit_source: string | null;
     } & Record<string, unknown>
   >(sql`
-    select id, period_month::text as period_month, closed_at, cap_cents, usable_cents,
+    select id, period_month::text as period_month, closed_at, last_reconciled_at,
+           cap_cents, usable_cents,
            committed_cents, spent_cents, platform_remaining_cents, platform_limit_source
       from ad_budget_periods
      where id = ${periodId}
@@ -981,6 +988,7 @@ async function lockPeriodById(
   return {
     periodMonth: row.period_month,
     closed: row.closed_at !== null,
+    lastReconciledAt: row.last_reconciled_at === null ? null : new Date(row.last_reconciled_at),
     state: periodState({
       id: row.id,
       capCents: Number(row.cap_cents),
@@ -1001,6 +1009,9 @@ async function lockPeriodById(
  * change moves only from one of those statuses (a decision and the expiry job
  * racing each other: one wins, the other is told no) and a reservation is
  * given back if it still holds one. Returns whether the change moved.
+ *
+ * Only a reservation still counted in the commitment is given back: one
+ * taken before the last reconciliation was already wiped by it.
  *
  * Giving back a reduction re-adds its exposure. If that space was handed to
  * another request in the meantime (T-5), the true commitment no longer fits:
@@ -1039,6 +1050,11 @@ export async function releaseReservation(
       .where(eq(adChangeRequests.id, changeRequestId));
 
     if (!request.reservationActive || !period) return true;
+    // Reconciliation rewrites the commitment from the platform alone, so a
+    // reservation taken before the last one is no longer in it (T-1): taking
+    // it out again would hand its space out twice (T-2). Part 2 replaces this
+    // with one calculation of the commitment.
+    if (period.lastReconciledAt && request.createdAt <= period.lastReconciledAt) return true;
 
     const { state } = period;
     const room = Math.min(state.usableCents, Math.max(0, state.capCents - state.spentCents));
