@@ -13,7 +13,7 @@ import {
   stripUtms,
   type CampaignDraft,
 } from '@wings/shared';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   adAccounts,
@@ -42,6 +42,7 @@ import {
   claimWithinCeiling,
   draftPayloadHash,
   engageKillSwitch,
+  recordCommitment,
   releaseReservation,
 } from './budget-guard.js';
 import {
@@ -135,6 +136,10 @@ export async function executeApprovedChange(
   options: ExecuteOptions = {},
 ): Promise<ExecutionResult> {
   const now = options.now ?? new Date();
+  // The run's own clock, moved on by the time really spent: when a platform
+  // answer arrived, on the same clock as `now` (tests fix it).
+  const startedMs = Date.now();
+  const clock = () => new Date(now.getTime() + Date.now() - startedMs);
 
   const refuse = (reason: ExecutionRefusal, message: string): ExecutionResult => ({
     ok: false,
@@ -503,12 +508,15 @@ export async function executeApprovedChange(
         }
       }
     } else if (campaign) {
+      // Stamped with the moment the platform's answer arrived, not the click:
+      // a reconciliation that began before it read the old budget, and must
+      // not write that back over this one (`syncCampaigns`).
       await db
         .update(adCampaigns)
         .set({
           dailyBudgetCents: outcome.campaign.dailyBudgetCents ?? 0,
           status: outcome.campaign.status,
-          lastSyncedAt: now,
+          lastSyncedAt: clock(),
           updatedAt: now,
         })
         .where(eq(adCampaigns.id, campaign.id));
@@ -525,10 +533,18 @@ export async function executeApprovedChange(
       })
       .where(eq(adExecutions.id, execution.id));
 
-    await db
-      .update(adChangeRequests)
-      .set({ status: 'executed', executedAt: new Date() })
-      .where(eq(adChangeRequests.id, change.id));
+    // The mirror already shows the write; leaving the count of reservations
+    // and storing the new figure happen together, under the period lock.
+    await db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select id from ad_budget_periods where id = ${change.budgetPeriodId} for update`,
+      );
+      await tx
+        .update(adChangeRequests)
+        .set({ status: 'executed', executedAt: new Date() })
+        .where(eq(adChangeRequests.id, change.id));
+      await recordCommitment(tx, account, change.budgetPeriodId, now);
+    });
 
     await writeAudit(db, {
       actorEmployeeId: options.actorEmployeeId ?? null,

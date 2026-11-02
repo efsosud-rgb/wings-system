@@ -17,6 +17,7 @@ staging está no fim.
 | Criar um pedido de alteração      | ❌ **não havia caminho** fora dos testes            | ✅ `ops-cli request`                              |
 | Executor confere o próprio delta  | ❌ só olhava `comprometido ≤ permitido` (T-1)       | ✅ desde 01/11/2026 (parte 1, abaixo)             |
 | Pedido velho expira               | ❌ `expired` existia, nada o gravava (T-8)          | ✅ desde 01/11/2026, no fim de cada ingestão      |
+| Comprometido: um número só        | ❌ pedido e reconciliação com contas diferentes     | ✅ desde 02/11/2026 (parte 2, abaixo)             |
 
 As quatro linhas com ❌ são o achado principal: o motor estava certo e testado,
 mas as alavancas que uma pessoa puxa numa sessão real não existiam.
@@ -39,12 +40,12 @@ quer — e merece decisão própria.
 
 ### Quem aciona
 
-| Gatilho                                                         | Onde                     |
-| --------------------------------------------------------------- | ------------------------ |
-| Gasto reportado atingiu o teto, ou comeu o que estava reservado | `applyReportedSpend`     |
-| Orçamentos na plataforma somam mais que o permitido no mês      | `reconcileAccount`       |
-| Execução com resultado desconhecido                             | `executeApprovedChange`  |
-| Reconciliação parada há mais de 120 min (dead-man)              | fim do ciclo de ingestão |
+| Gatilho                                                                                                                                                              | Onde                     |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| Gasto reportado atingiu o teto, ou não deixa espaço para o que roda (espelho + alterações em execução ou desconhecidas); aumento só pedido ou aprovado nunca congela | `applyReportedSpend`     |
+| Orçamentos na plataforma somam mais que o permitido no mês                                                                                                           | `reconcileAccount`       |
+| Execução com resultado desconhecido                                                                                                                                  | `executeApprovedChange`  |
+| Reconciliação parada há mais de 120 min (dead-man)                                                                                                                   | fim do ciclo de ingestão |
 
 ### Quem libera
 
@@ -112,19 +113,21 @@ saudável.
    ligada.** Ele só chama leituras, então nada aconteceria — mas agora é
    estrutural: a ingestão monta sempre um leitor, mesmo com a flag ligada.
 
-### 🚫 Bloqueador de automação: reservas e reconciliação não se conhecem
+### 🚫 Bloqueador de automação: reservas e reconciliação não se conheciam
 
-> **Enquanto isto não for corrigido, nada de automação sobre gasto:** nenhum
-> agente pedindo alteração, nenhuma aprovação automática, nenhum worker
-> executando. Decisão de 18/09/2026. Com uma pessoa aprovando e executando uma
-> alteração por vez, o risco é aceitável; no dia em que não for uma pessoa, é
-> um bug de dinheiro. A regra também está no `AGENTS.md` (seção "What never to do").
+> **Nada de automação sobre gasto até o Eric liberar:** nenhum agente pedindo
+> alteração, nenhuma aprovação automática, nenhum worker executando. Decisão
+> de 18/09/2026. A causa no código (os dois donos do comprometido, abaixo) foi
+> consertada em duas partes, em 01 e 02/11/2026; **a regra continua valendo**
+> mesmo assim, porque liberar é decisão do Eric, e há o que fazer antes (ver
+> "O bloqueio de automação depois da parte 2"). A regra também está no
+> `AGENTS.md` (seção "What never to do").
 
 > O chat do agente (Onda 7, `agente-conversa.md`) **não** mexe nesta regra: o
 > agente só propõe. Quem pede é a pessoa que clica em "Criar pedido", uma
 > alteração por vez, e o pedido fica marcado como "sugerido pelo agente".
 
-O comprometido do mês (`committed_cents`) tem **dois donos que não conversam**:
+_Até 02/11/2026_ (a parte 2 consertou), o comprometido do mês (`committed_cents`) tinha **dois donos que não conversavam**:
 
 - `reserveChange` soma o delta de cada pedido **na hora do pedido**;
 - `reconcileAccount` **sobrescreve** o número a cada ciclo com a exposição que
@@ -165,11 +168,11 @@ duas estarem prontas.
 - **Parte 1 (01/11/2026, esta seção):** o executor revalida o delta da própria
   alteração contra o teto no instante da escrita, numa transação, e um job
   expira pedidos velhos.
-- **Parte 2 (a fazer):** um cálculo único do comprometido —
+- **Parte 2 (02/11/2026, abaixo):** um cálculo único do comprometido —
   `exposição na plataforma + soma dos deltas positivos com reserva ativa`,
-  reduções só contam quando executadas — usado pela reconciliação e pelo
-  pedido. É ela que fecha T-1 e T-3 na conta; a parte 1 impede que o número
-  errado vire dinheiro.
+  reduções só contam quando executadas — usado pelo pedido, pela aprovação,
+  pela execução e pela reconciliação. Fecha T-1, T-2, T-3 e T-5; a parte 1
+  já impedia que o número errado virasse dinheiro.
 
 ### Parte 1: o que mudou (01/11/2026)
 
@@ -232,6 +235,10 @@ outra num impasse.
   `applyReportedSpend` faz com gasto que comeu a reserva), em vez de a rota
   responder 500 e o pedido ficar preso.
 
+_Os dois itens acima foram substituídos pela parte 2:_ devolver passou a ser
+recalcular o número sem a alteração, e uma redução pendente nunca liberou
+espaço, então devolvê-la não muda nada e não há mais o que congelar.
+
 **4. Pedidos velhos expiram** (`expireStaleChanges` em `expiry.ts`, chamado
 por `reportExpiredChanges`, que nunca derruba o ciclo: se a leitura falha, o
 erro vai para o log e o próximo ciclo tenta de novo), no fim de cada ciclo de
@@ -252,12 +259,110 @@ registrado no log da ingestão (`NÃO expirou`) e não impede os outros. Para
 fazer de novo, faz-se um pedido novo, com aprovação nova. O prazo de 24 h é a
 opção mais segura enquanto o Eric não define outro (`CHANGE_REQUEST_MAX_AGE_HOURS`).
 
-**O que a parte 1 não resolve:** o número `committed_cents` continua errado
-entre uma reconciliação e outra (T-1, T-3) — um pedido pode ser **aceito**
-contra um espaço que não existe. O que muda é que ele não pode mais ser
-**executado** contra esse espaço. A reconciliação continua sem trava (variante
-de T-1: reserva feita durante o reconcile se perde). As duas coisas são a
-parte 2.
+**O que a parte 1 não resolvia:** o número `committed_cents` continuava errado
+entre uma reconciliação e outra (T-1, T-3) — um pedido podia ser **aceito**
+contra um espaço que não existe, só não **executado**. A reconciliação
+continuava sem trava (variante de T-1: reserva feita durante o reconcile se
+perdia). As duas coisas foram a parte 2.
+
+### Parte 2: o que mudou (02/11/2026)
+
+**Um número só.** `commitmentCents` em `budget-guard.ts`:
+
+```
+comprometido = exposição das campanhas no espelho da plataforma
+             + soma dos aumentos (delta > 0) ainda não refletidos no espelho:
+                 pedidos pendentes e aprovados do período, com reserva ativa
+                 alterações em execução (`executing`) ou com resultado
+                 desconhecido (`unknown`), de qualquer período
+```
+
+Uma **redução** (pausa, orçamento menor) não entra: ela só conta quando é
+executada, pelo espelho, porque até lá a campanha continua gastando.
+
+**Quem usa o número, e onde.** Sempre sob a trava da linha do período
+(`FOR UPDATE`), na mesma ordem de antes (período → pedido → aprovação):
+
+| Etapa                                 | O que confere                                               | Se não cabe                                                                                                                                                                  |
+| ------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pedido (`reserveChange`)              | número + delta do aumento nos três tetos (`ceilingRefusal`) | recusado, como antes                                                                                                                                                         |
+| Criação de campanha                   | número + custo dela como se ligada                          | recusada, como antes                                                                                                                                                         |
+| **Aprovação** (nova)                  | número sem ela + o próprio delta (`approveWithinCeiling`)   | **continua pendente**; a tela recebe 409 com o motivo                                                                                                                        |
+| Execução (`claimWithinCeiling`)       | número sem ela + o próprio delta                            | recusada (`cap_no_longer_allows`), continua aprovada, nada enviado                                                                                                           |
+| Devolução (rejeitar, expirar, falhar) | recalcula o número sem ela                                  | —                                                                                                                                                                            |
+| Reconciliação                         | grava o gasto e o número **numa transação só**              | congela **só** pelo que roda: a exposição da própria plataforma passa do plano, ou o gasto não deixa espaço para ela e as alterações em voo; aumento esperando nunca congela |
+
+Redução nunca é barrada pelo teto em nenhuma etapa: pedir para gastar menos
+tem de ser sempre possível.
+
+**O que cada achado vira:**
+
+- **T-1** (reconciliação apagava reservas): a reconciliação agora conta as
+  reservas ativas, e calcula depois de tomar a trava do período. Um pedido
+  feito enquanto ela lia a plataforma espera a trava e entra no número.
+- **T-2** (devolver duas vezes): devolver é recalcular sem a alteração, então
+  um aumento sai do número uma vez só, com ou sem reconciliação no meio.
+- **T-3** (redução liberava espaço antes de existir): a redução pendente não
+  entra no número. Cinco pausas pedidas não abrem espaço nenhum.
+- **T-5** (devolver uma redução cujo espaço foi usado): não acontece mais,
+  porque o espaço nunca foi dado. A trava que a parte 1 acionava nesse caso
+  saiu.
+- **Escrita no espelho:** o executor grava no espelho o orçamento que acabou de
+  escrever na plataforma, com a hora em que a resposta chegou; a reconciliação
+  não grava por cima uma campanha atualizada depois que ela começou a ler. Sem
+  isso, uma leitura velha devolvia o orçamento antigo ao espelho e o aumento
+  já executado sumia do número até o ciclo seguinte.
+
+**A coluna `committed_cents` agora é só registro.** Ela é gravada sempre que
+o número muda (pedido, devolução, execução, reconciliação), cortada no espaço
+que os CHECKs do banco permitem (`≤ parcela utilizável` e `≤ teto − gasto`).
+Nenhuma decisão lê a coluna: cada uma recalcula o número. Num mês que
+encolheu, a tela mostra o comprometido no teto, e o número de verdade está nos
+eventos de guardrail da recusa (`committedWithoutCents`).
+
+Para quem opera:
+
+- **O comprometido na tela pode subir** na primeira reconciliação depois do
+  deploy: pedidos pendentes e aprovados passam a contar, e pausas pendentes
+  deixam de abater. É o número certo; antes ele estava baixo.
+- **Uma pausa pedida não abre espaço.** Para aumentar outra campanha no lugar,
+  execute a pausa primeiro.
+- **Mês que encolheu** (a plataforma passou a permitir menos, ou chegou gasto):
+  um aumento pendente não é aprovado e um aprovado não é executado enquanto o
+  número inteiro não couber, **mesmo que ele sozinho coubesse**: os outros
+  aumentos reservados também contam. Uma alteração aprovada não tem botão de
+  desistir; ela expira 24 h depois da aprovação, e aí a outra pode sair. Se
+  isso atrapalhar, o caminho é um botão "cancelar aprovada" (decisão do Eric, ainda não
+  tomada).
+- **Conta em dobro, de propósito, em dois casos:** entre o executor gravar o
+  orçamento novo no espelho e marcar a alteração como executada (milissegundos),
+  e numa alteração com resultado desconhecido depois de uma reconciliação (o
+  espelho já mostra a escrita e a alteração ainda conta). Isso pode recusar um
+  aumento que caberia, nunca deixar passar um que não cabe. A conta já fica
+  congelada no caso do desconhecido.
+
+### O bloqueio de automação depois da parte 2
+
+**Continua valendo**, até o Eric liberar. O que muda: o motivo escrito no
+bloqueio (dois donos do comprometido que não conversam) **deixou de existir no
+código**. Com a parte 2, dois aumentos que juntos não cabem não são aceitos,
+aprovados nem executados, em sequência ou ao mesmo tempo (testes abaixo).
+
+O que ainda precisa acontecer antes de qualquer automação, além da decisão do
+Eric:
+
+1. **A aprovação automática não passa pela conferência nova.** O modo
+   `thresholds` de `gateChange` (`approvals.ts`) marca a alteração como
+   `approved` direto, sem a trava do período e sem `approveWithinCeiling`.
+   Hoje ele não roda (o modo é `always`); antes de ligá-lo, ele precisa passar
+   pelo mesmo caminho da aprovação de uma pessoa.
+2. **`escalateStaleApprovals` continua sem chamador** (pedido parado não sobe
+   para a Diretoria sozinho).
+3. **Não há como desistir de uma alteração aprovada** antes de ela expirar
+   (24 h). Com uma pessoa, ela simplesmente não clica em Executar; com um
+   worker, precisaria existir.
+4. **Conferir em staging** que o comprometido depois do deploy bate com o que
+   se espera (a lista do fim deste documento).
 
 ## Evidência
 
@@ -285,6 +390,33 @@ Testes novos (todos contra banco descartável, cliente falso):
   (só a trava do período põe uma depois da outra): uma sai; aprovar e
   rejeitar, dois "aprovar" e aprovar e expirar, todos parados atrás da linha
   do período: uma decisão vale, com uma entrada de auditoria.
+- `commitment.test.ts` (parte 2, 02/11/2026) — o número é exposição +
+  aumentos esperando, e a pausa só conta quando executada; teto exato passa e
+  um centavo a mais é recusado, com a pausa ainda aceita no mês cheio; criação
+  de campanha julgada em cima dos aumentos esperando e do que roda agora (não
+  da coluna gravada); pedido de mês encerrado não conta no mês novo; resultado
+  desconhecido continua contando; aprovação e execução recusadas quando o mês
+  encolheu, e a outra sai depois que a primeira expira; redução pedida e
+  aprovada em mês que encolheu; a reconciliação congela só pela exposição da
+  plataforma; gasto que chega com um aumento só pedido não congela (a pausa
+  continua possível e a aprovação recusa o aumento), e gasto que come o que
+  roda congela.
+- `commitment-races.test.ts` (parte 2) — com os concorrentes parados numa
+  linha conhecida: pedido feito enquanto a reconciliação lê a plataforma;
+  reconciliação na fila logo atrás de um pedido na trava do período; dois
+  pedidos ao mesmo tempo que só cabem sozinhos (um passa); alteração que
+  continua contando com a escrita a caminho da Meta e uma reconciliação no
+  meio; reconciliação que leu a plataforma antes da escrita não devolve o
+  orçamento antigo ao espelho.
+- `routes.test.ts` — a aprovação de um aumento que o mês não comporta mais
+  responde 409 e o pedido continua pendente.
+- As duas corridas de execução da parte 1 (`write-time-guard-races.test.ts`,
+  "two executions at the same instant") saíram: o par de aumentos aprovados que
+  só cabem sozinhos só existia por causa de T-1, e agora o segundo pedido é
+  recusado. Os testes da parte 1 que fixavam o comportamento antigo (pausa que
+  abatia na hora, devolução que congelava) seguem a regra nova.
+- Cada teste novo foi provado quebrando a linha que ele protege (relatório da
+  tarefa d-t035b).
 - `reconcile.test.ts` — arquivada fica de fora; nunca reconciliada é
   desconhecida.
 - `ops.test.ts` — o roteiro da primeira escrita ponta a ponta: pedido →

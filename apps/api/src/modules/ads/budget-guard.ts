@@ -196,6 +196,65 @@ export async function mirroredExposureCents(
   );
 }
 
+/**
+ * The commitment: one number for the request, the approval, the execution
+ * and reconciliation (Eric, 29/10/2026, `docs/ads/travas.md`). What the
+ * mirrored campaigns can still cost this month, plus every increase holding a
+ * live reservation that is not on the mirror yet. A reduction counts only once
+ * executed, through the mirror: until then its campaign is still spending.
+ *
+ * Pending and approved count in their own period only: a request from an
+ * earlier month can no longer run and expires. A change in flight
+ * (`executing`, `unknown`) counts whatever its period, because it may already
+ * be on the platform. Read it under the period lock, or it is a guess.
+ *
+ * `runningOnly` leaves out the increases still waiting: what can be spending
+ * now. Reported spend freezes an account on that alone (`applyReportedSpend`).
+ */
+export async function commitmentCents(
+  db: Database | Transaction,
+  account: { id: string; platform: string; timezone: string },
+  periodId: string,
+  now: Date,
+  options: { excluding?: string; runningOnly?: boolean } = {},
+): Promise<Cents> {
+  const waiting = options.runningOnly
+    ? sql``
+    : sql`or (reservation_active
+                and status in ('pending_approval', 'approved')
+                and budget_period_id = ${periodId})`;
+  const reserved = await db.execute<{ total: string } & Record<string, unknown>>(sql`
+    select coalesce(sum(exposure_delta_cents), 0)::text as total
+      from ad_change_requests
+     where ad_account_id = ${account.id}
+       and exposure_delta_cents > 0
+       and (status in ('executing', 'unknown') ${waiting})
+       ${options.excluding ? sql`and id <> ${options.excluding}` : sql``}
+  `);
+  return (await mirroredExposureCents(db, account, now)) + Number(reserved.rows[0]?.total ?? 0);
+}
+
+/**
+ * Writes the commitment on the locked period row and returns what was stored.
+ * The row's constraints cap it at the usable slice and at cap − spent, so a
+ * commitment the month no longer holds is stored at that room: every decision
+ * re-derives the full figure with `commitmentCents`, never from this column.
+ */
+async function storeCommitment(
+  tx: Transaction,
+  account: { id: string; platform: string; timezone: string },
+  period: Pick<PeriodState, 'id' | 'usableCents' | 'capCents' | 'spentCents'>,
+  now: Date,
+): Promise<Cents> {
+  const room = Math.min(period.usableCents, Math.max(0, period.capCents - period.spentCents));
+  const committedCents = Math.min(await commitmentCents(tx, account, period.id, now), room);
+  await tx
+    .update(budgetPeriods)
+    .set({ committedCents, updatedAt: now })
+    .where(eq(budgetPeriods.id, period.id));
+  return committedCents;
+}
+
 export function payloadHash(input: {
   adAccountId: string;
   campaignId: string;
@@ -621,25 +680,21 @@ export async function reserveChange(
             toBudget > 0 ? exposureOf(toBudget, 1, dailyOverdeliveryFactor(account.platform)) : 0,
           );
     const exposureDeltaCents = nextExposure - currentExposure;
-    // Floored at zero, as releaseReservation already does. A pause hands back
-    // the campaign's whole exposure, but the period may never have counted it:
-    // a campaign created since the last reconciliation, or a commitment that
-    // reconciliation clipped to the allowance. Without the floor, the request
-    // to *reduce* spend died on the non-negative constraint. The next
-    // reconciliation re-derives the true figure from the platform either way.
-    const newCommitted = Math.max(0, current.committedCents + exposureDeltaCents);
 
-    // Pre-checks give a precise reason; the database constraints are what
-    // actually guarantee the outcome.
-    const refusal = await ceilingRefusal(db, input.adAccountId, current, exposureDeltaCents, {
-      campaignId: input.campaignId,
-    });
-    if (refusal) return refusal;
-
-    await tx
-      .update(budgetPeriods)
-      .set({ committedCents: newCommitted, updatedAt: now })
-      .where(eq(budgetPeriods.id, current.id));
+    // Judged against the commitment worked out now, not the stored column. A
+    // reduction frees nothing until it runs, so it is never held back here:
+    // asking to spend less must always be possible.
+    if (exposureDeltaCents > 0) {
+      const committedCents = await commitmentCents(tx, account, current.id, now);
+      const refusal = await ceilingRefusal(
+        db,
+        input.adAccountId,
+        { ...current, committedCents },
+        exposureDeltaCents,
+        { campaignId: input.campaignId },
+      );
+      if (refusal) return refusal;
+    }
 
     const hash = payloadHash({
       adAccountId: input.adAccountId,
@@ -671,6 +726,7 @@ export async function reserveChange(
       .returning({ id: adChangeRequests.id });
 
     if (!request) throw new Error('failed to record change request');
+    const committedCents = await storeCommitment(tx, account, current, now);
 
     return {
       ok: true as const,
@@ -682,7 +738,7 @@ export async function reserveChange(
           id: current.id,
           capCents: current.capCents,
           usableCents: current.usableCents,
-          committedCents: newCommitted,
+          committedCents,
           spentCents: current.spentCents,
         }),
       },
@@ -877,19 +933,19 @@ export async function reserveCampaignCreation(
       campaignDaysInMonth(judgedFrom, draft.endDate, today),
       account.platform,
     );
-    const refusal = await ceilingRefusal(db, input.adAccountId, current, judgedCents, {
-      attempted: 'create_campaign',
-      ...(judgedCents !== exposureDeltaCents
-        ? { note: 'casca pausada julgada como se ativa' }
-        : {}),
-    });
+    const refusal = await ceilingRefusal(
+      db,
+      input.adAccountId,
+      { ...current, committedCents: await commitmentCents(tx, account, current.id, now) },
+      judgedCents,
+      {
+        attempted: 'create_campaign',
+        ...(judgedCents !== exposureDeltaCents
+          ? { note: 'casca pausada julgada como se ativa' }
+          : {}),
+      },
+    );
     if (refusal) return refusal;
-
-    const newCommitted = current.committedCents + exposureDeltaCents;
-    await tx
-      .update(budgetPeriods)
-      .set({ committedCents: newCommitted, updatedAt: now })
-      .where(eq(budgetPeriods.id, current.id));
 
     const [stored] = await tx
       .insert(adCampaignDrafts)
@@ -933,6 +989,7 @@ export async function reserveCampaignCreation(
       })
       .returning({ id: adChangeRequests.id });
     if (!request) throw new Error('failed to record change request');
+    const committedCents = await storeCommitment(tx, account, current, now);
 
     return {
       ok: true as const,
@@ -941,7 +998,7 @@ export async function reserveCampaignCreation(
         draftId: stored.id,
         exposureDeltaCents,
         payloadHash: hash,
-        period: periodState({ ...current, committedCents: newCommitted }),
+        period: periodState({ ...current, committedCents }),
       },
     };
   });
@@ -1003,6 +1060,27 @@ async function lockPeriodById(
 }
 
 /**
+ * Works the commitment out again and stores it, taking the period lock
+ * itself (a no-op if the caller already holds it). Reconciliation calls it
+ * after recording spend, in the same transaction; a release and the executor
+ * after a change leaves the count. A period whose month is over keeps its
+ * figure: its days are gone, so there is nothing left to work out.
+ */
+export async function recordCommitment(
+  tx: Transaction,
+  account: { id: string; platform: string; timezone: string },
+  periodId: string,
+  now: Date,
+): Promise<Cents> {
+  const locked = await lockPeriodById(tx, periodId);
+  if (!locked) throw new Error('budget period not found');
+  if (locked.closed || locked.periodMonth !== periodMonthOf(now, account.timezone)) {
+    return locked.state.committedCents;
+  }
+  return storeCommitment(tx, account, locked.state, now);
+}
+
+/**
  * Releases a reservation when a change is rejected, expired or superseded.
  *
  * Without `from`, a change holding no reservation is left alone. With it, the
@@ -1010,14 +1088,10 @@ async function lockPeriodById(
  * racing each other: one wins, the other is told no) and a reservation is
  * given back if it still holds one. Returns whether the change moved.
  *
- * Only a reservation still counted in the commitment is given back: one
- * taken before the last reconciliation was already wiped by it.
- *
- * Giving back a reduction re-adds its exposure. If that space was handed to
- * another request in the meantime (T-5), the true commitment no longer fits:
- * it is recorded at the ceiling and the account is frozen, the way
- * `applyReportedSpend` records spend that ate a reservation — rather than the
- * release dying on the constraint and leaving the request stuck.
+ * Giving back is working the commitment out again without this change
+ * (`commitmentCents`): an increase leaves it exactly once, whatever
+ * reconciliation did in between (T-2), and a reduction, which never freed
+ * anything, changes nothing (T-5).
  */
 export async function releaseReservation(
   db: Database | Transaction,
@@ -1050,41 +1124,10 @@ export async function releaseReservation(
       .where(eq(adChangeRequests.id, changeRequestId));
 
     if (!request.reservationActive || !period) return true;
-    // Reconciliation rewrites the commitment from the platform alone, so a
-    // reservation taken before the last one is no longer in it (T-1): taking
-    // it out again would hand its space out twice (T-2). Part 2 replaces this
-    // with one calculation of the commitment.
-    if (period.lastReconciledAt && request.createdAt <= period.lastReconciledAt) return true;
-
-    const { state } = period;
-    const room = Math.min(state.usableCents, Math.max(0, state.capCents - state.spentCents));
-    const restored = Math.max(0, state.committedCents - request.exposureDeltaCents);
-    const committedCents = Math.min(restored, room);
-    await tx
-      .update(budgetPeriods)
-      .set({ committedCents, updatedAt: now })
-      .where(eq(budgetPeriods.id, state.id));
-
-    if (committedCents < restored) {
-      const reason = 'Devolver uma redução não executada passaria do teto do mês';
-      await tx
-        .update(adAccounts)
-        .set({ killSwitchEngaged: true, killSwitchReason: reason, updatedAt: now })
-        .where(eq(adAccounts.id, request.adAccountId));
-      await tx.insert(adGuardrailEvents).values({
-        adAccountId: request.adAccountId,
-        kind: 'kill_switch_engaged',
-        detail: {
-          reason,
-          changeRequestId,
-          releasedAs: status,
-          exposureDeltaCents: request.exposureDeltaCents,
-          committedBefore: state.committedCents,
-          restoredCents: restored,
-          recordedCents: committedCents,
-        },
-      });
-    }
+    const account = await tx.query.adAccounts.findFirst({
+      where: eq(adAccounts.id, request.adAccountId),
+    });
+    if (account) await recordCommitment(tx, account, period.state.id, now);
     return true;
   });
 }
@@ -1100,19 +1143,113 @@ export type ClaimRefusal =
     >;
 
 /**
+ * Whether a change's own increase still fits on top of everything else the
+ * commitment counts: the same figure its request was judged by, worked out
+ * again now. Under the period lock. A reduction never needs room.
+ */
+async function ownIncreaseRefusal(
+  tx: Transaction,
+  account: { id: string; platform: string; timezone: string },
+  period: PeriodState,
+  change: { id: string; exposureDeltaCents: number },
+  now: Date,
+  stage: 'approval' | 'execution',
+) {
+  if (change.exposureDeltaCents <= 0) return null;
+  const othersCents = await commitmentCents(tx, account, period.id, now, { excluding: change.id });
+  // Recorded through this transaction: it commits with the refusal, on the connection already held.
+  return ceilingRefusal(
+    tx,
+    account.id,
+    { ...period, committedCents: othersCents },
+    change.exposureDeltaCents,
+    { changeRequestId: change.id, stage, committedWithoutCents: othersCents },
+  );
+}
+
+export type ApprovalRefusal =
+  | 'already_decided'
+  | Extract<
+      GuardRefusal,
+      'usable_would_be_exceeded' | 'platform_limit_would_be_exceeded' | 'cap_would_be_exceeded'
+    >;
+
+/**
+ * The approval's move (`pending_approval` → `approved`), inside the caller's
+ * transaction and under the period lock. One decision wins (T-4): a change
+ * already moved, or holding no reservation, is `already_decided`. An increase
+ * is approved only if it still fits the commitment worked out now; the month
+ * may have shrunk since the request (a platform limit read lower, spend
+ * reported). A refusal leaves it pending, to be rejected or to expire.
+ *
+ * A request from a month already over is not judged: its days are gone, and
+ * the executor refuses it whatever it is (`period_not_current`).
+ */
+export async function approveWithinCeiling(
+  tx: Transaction,
+  changeRequestId: string,
+  approverEmployeeId: string,
+  now: Date,
+): Promise<{ ok: true } | { ok: false; reason: ApprovalRefusal; message: string }> {
+  const decided = {
+    ok: false as const,
+    reason: 'already_decided' as const,
+    message: 'Esta solicitação já foi decidida ou expirou.',
+  };
+  const found = await tx.query.adChangeRequests.findFirst({
+    where: eq(adChangeRequests.id, changeRequestId),
+  });
+  if (!found) return decided;
+  const period = await lockPeriodById(tx, found.budgetPeriodId);
+
+  const [change] = await tx
+    .select()
+    .from(adChangeRequests)
+    .where(eq(adChangeRequests.id, changeRequestId))
+    .for('update');
+  if (!change || change.status !== 'pending_approval' || !change.reservationActive) return decided;
+
+  const account = await tx.query.adAccounts.findFirst({
+    where: eq(adAccounts.id, change.adAccountId),
+  });
+  if (
+    account &&
+    period &&
+    !period.closed &&
+    period.periodMonth === periodMonthOf(now, account.timezone)
+  ) {
+    const refusal = await ownIncreaseRefusal(tx, account, period.state, change, now, 'approval');
+    if (refusal) {
+      return {
+        ok: false,
+        reason: refusal.reason,
+        message: `O orçamento do mês não comporta mais esta alteração, que continua pendente: ${refusal.message}`,
+      };
+    }
+  }
+
+  await tx
+    .update(adChangeRequests)
+    .set({ status: 'approved', decidedAt: now, decidedBy: approverEmployeeId })
+    .where(eq(adChangeRequests.id, change.id));
+  return { ok: true };
+}
+
+/**
  * The executor's last check, made at the instant of the write and in the same
  * transaction that claims the change (`approved` → `executing`).
  *
  * Under the period lock it confirms the change is still approved, still holds
  * its reservation, belongs to the month now running, and that this change's
- * own delta still fits every ceiling on top of what is really running: the
- * mirrored platform exposure plus whatever other change of the account is
- * being written right now. The stored commitment is not trusted here, because
- * reconciliation overwrites it without the reservations (T-1, part 2).
+ * own delta still fits every ceiling on top of everything else the
+ * commitment counts (`commitmentCents`): the mirrored platform exposure, the
+ * other increases in flight, and the ones still waiting with a reservation.
+ * The same number the request and the approval were judged by.
  *
  * Two approvals that each fit alone but not together therefore cannot both go
- * out: the second waits for the lock, finds the first `executing`, and is
- * refused. A reduction (delta ≤ 0) is never held back by the ceilings.
+ * out, nor can one go out over a reservation still waiting: if the month
+ * shrank since they were reserved, neither does until one is rejected or
+ * expires. A reduction (delta ≤ 0) is never held back by the ceilings.
  */
 export async function claimWithinCeiling(
   db: Database,
@@ -1165,26 +1302,8 @@ export async function claimWithinCeiling(
       );
     }
 
-    if (change.exposureDeltaCents > 0) {
-      const inFlight = await tx.execute<{ total: string } & Record<string, unknown>>(sql`
-        select coalesce(sum(greatest(exposure_delta_cents, 0)), 0)::text as total
-          from ad_change_requests
-         where ad_account_id = ${account.id}
-           and status in ('executing', 'unknown')
-           and id <> ${change.id}
-      `);
-      const runningCents =
-        (await mirroredExposureCents(tx, account, now)) + Number(inFlight.rows[0]?.total ?? 0);
-      // Recorded through this transaction: it commits with the refusal, on the connection already held.
-      const refusal = await ceilingRefusal(
-        tx,
-        account.id,
-        { ...period.state, committedCents: runningCents },
-        change.exposureDeltaCents,
-        { changeRequestId: change.id, stage: 'execution', runningCents },
-      );
-      if (refusal) return refuse(refusal.reason, refusal.message);
-    }
+    const refusal = await ownIncreaseRefusal(tx, account, period.state, change, now, 'execution');
+    if (refusal) return refuse(refusal.reason, refusal.message);
 
     await tx
       .update(adChangeRequests)
@@ -1197,12 +1316,15 @@ export async function claimWithinCeiling(
 /**
  * Records spend reported by the platform.
  *
- * Truth is always recordable: if real spend has eaten into the reserve, the
- * commitment is trimmed to fit and the kill switch is engaged, rather than the
- * write being refused.
+ * Truth is always recordable: the stored commitment is trimmed to what the
+ * month still holds rather than the write being refused. The kill switch is
+ * engaged when spend reaches the cap or leaves no room for what is running
+ * (the mirror plus changes in flight). An increase still waiting does not
+ * freeze: approval and execution refuse it, and a frozen account could not
+ * even ask for a pause.
  */
 export async function applyReportedSpend(
-  db: Database,
+  db: Database | Transaction,
   input: { periodId: string; spentCents: Cents; now?: Date },
 ): Promise<{ killSwitchEngaged: boolean; committedCents: Cents }> {
   const now = input.now ?? new Date();
@@ -1222,11 +1344,19 @@ export async function applyReportedSpend(
     const row = locked.rows[0];
     if (!row) throw new Error('budget period not found');
 
+    const account = await tx.query.adAccounts.findFirst({
+      where: eq(adAccounts.id, String(row.ad_account_id)),
+    });
+    if (!account) throw new Error('ad account not found');
+
     const capCents = Number(row.cap_cents);
     const committed = Number(row.committed_cents);
     const room = Math.max(0, capCents - input.spentCents);
     const trimmed = Math.min(committed, room);
-    const needsKillSwitch = input.spentCents >= capCents || trimmed < committed;
+    const runningCents = await commitmentCents(tx, account, input.periodId, now, {
+      runningOnly: true,
+    });
+    const needsKillSwitch = input.spentCents >= capCents || runningCents > room;
 
     await tx
       .update(budgetPeriods)
@@ -1246,7 +1376,13 @@ export async function applyReportedSpend(
       await tx.insert(adGuardrailEvents).values({
         adAccountId: String(row.ad_account_id),
         kind: 'kill_switch_engaged',
-        detail: { spentCents: input.spentCents, capCents, committedBefore: committed, trimmed },
+        detail: {
+          spentCents: input.spentCents,
+          capCents,
+          committedBefore: committed,
+          trimmed,
+          runningCents,
+        },
       });
     }
 
@@ -1255,7 +1391,7 @@ export async function applyReportedSpend(
 }
 
 export async function engageKillSwitch(
-  db: Database,
+  db: Database | Transaction,
   adAccountId: string,
   reason: string,
 ): Promise<void> {

@@ -5,12 +5,18 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
-import { adAccounts, adApprovalRequests, adCampaigns } from '../../db/schema/index.js';
+import {
+  adAccounts,
+  adApprovalRequests,
+  adCampaigns,
+  budgetPeriods,
+} from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
 import { gateChange } from './approvals.js';
 import { openPeriod, reserveChange } from './budget-guard.js';
+import { periodMonthOf } from './reconcile.js';
 
 const NOW = new Date('2026-09-17T12:00:00.000Z');
 const PERIOD = '2026-09-01';
@@ -252,6 +258,64 @@ describe('POST /ads/approvals/:id/decision', () => {
     });
 
     expect(second.statusCode).toBe(409);
+  });
+
+  it('answers 409 and leaves it pending when the month no longer holds the increase', async () => {
+    // The route decides on the real clock, so the period is this month's; the
+    // assertion does not depend on how many days are left in it.
+    const now = new Date();
+    const [account] = await db
+      .insert(adAccounts)
+      .values({ platform: 'meta', externalId: `act_${randomBytes(4).toString('hex')}`, name: 'X' })
+      .returning({ id: adAccounts.id });
+    if (!account) throw new Error('failed');
+    await openPeriod(db, {
+      adAccountId: account.id,
+      periodMonth: periodMonthOf(now),
+      capCents: 400_000,
+      usablePercent: 70,
+    });
+    const [campaign] = await db
+      .insert(adCampaigns)
+      .values({
+        adAccountId: account.id,
+        externalId: `c_${randomBytes(4).toString('hex')}`,
+        name: 'Institucional',
+        status: 'ACTIVE',
+        dailyBudgetCents: 0,
+        budgetLevel: 'campaign',
+      })
+      .returning({ id: adCampaigns.id });
+    if (!campaign) throw new Error('failed');
+    const reserved = await reserveChange(db, {
+      adAccountId: account.id,
+      campaignId: campaign.id,
+      kind: 'set_daily_budget',
+      toDailyBudgetCents: 2000,
+      now,
+    });
+    if (!reserved.ok) throw new Error(`reservation refused: ${reserved.reason}`);
+    const gate = await gateChange(db, { changeRequestId: reserved.value.changeRequestId, now });
+    // Read since the request: the platform now allows one cent.
+    await db
+      .update(budgetPeriods)
+      .set({ platformRemainingCents: 1 })
+      .where(eq(budgetPeriods.adAccountId, account.id));
+    const { cookies } = await sessionFor('admin_master');
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/ads/approvals/${gate.approvalId}/decision`,
+      cookies,
+      payload: { decision: 'approved' },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('platform_limit_would_be_exceeded');
+    const approval = await db.query.adApprovalRequests.findFirst({
+      where: eq(adApprovalRequests.id, gate.approvalId ?? ''),
+    });
+    expect(approval?.status).toBe('pending');
   });
 });
 

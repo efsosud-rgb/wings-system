@@ -209,7 +209,10 @@ describe('the first write, end to end', () => {
       where: eq(adCampaigns.externalId, w.campaignExternalId),
     });
     expect(mirrored?.status).toBe('PAUSED');
-    expect((await getPeriodState(db, w.accountId, PERIOD))?.committedCents).toBe(committedBefore);
+    // A pause frees its space only once it ran: asked and approved, the
+    // campaign still counted; paused, it counts nothing.
+    expect(committedBefore).toBeGreaterThan(0);
+    expect((await getPeriodState(db, w.accountId, PERIOD))?.committedCents).toBe(0);
 
     // A second press does nothing.
     const again = await executeApprovedChange(db, w.client, requested.value.changeRequestId, {

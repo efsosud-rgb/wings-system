@@ -5,7 +5,6 @@ import {
   adAccounts,
   adApprovalRequests,
   adChangeRequests,
-  adGuardrailEvents,
   auditLog,
   budgetPeriods,
 } from '../../db/schema/index.js';
@@ -19,7 +18,10 @@ import { at, CAP, guardFixtures, NOW, USABLE } from './write-time-guard-fixtures
  * Travas de verba, part 1: the executor judges the change's own delta at the
  * instant of the write, decisions cannot both win, and old requests expire.
  * The clock and the world are in write-time-guard-fixtures.ts; the races
- * (two clicks at the same instant) in write-time-guard-races.test.ts.
+ * (two clicks at the same instant) in write-time-guard-races.test.ts. Part 2
+ * (one commitment for every stage) is in commitment*.test.ts; the
+ * expectations here follow it: a reduction frees nothing until it runs, and
+ * a release works the commitment out again on the day it happens.
  */
 let harness: TestDatabase;
 let db: Database;
@@ -55,32 +57,19 @@ describe('the executor judges the change’s own delta at the instant of the wri
     expect(w.budgetWrites()).toEqual(['a', 'b']);
   });
 
-  it('refuses the second increase when it would pass the ceiling, and sends nothing', async () => {
-    // B to R$ 40,01/dia: 131_250 + 78_776 = 210_026 > 210_000. Before this
-    // change the executor only compared the stored commitment (52_500 +
-    // 78_776) with the ceiling, and both writes went out.
-    const { w, a, b } = await twoIncreasesAcrossAReconciliation(4001);
+  it('refuses the second increase at its request when it would pass the ceiling', async () => {
+    // B to R$ 40,01/dia: 131_250 + 78_776 = 210_026 > 210_000. In part 1 the
+    // reconciliation wiped A, B was reserved and approved, and only the
+    // executor stopped it; now the request itself is refused.
+    const w = await world({ a: 1000, b: 1000 });
+    const raise = await approved(w, 'a', 4000);
+    await w.reconcile(at(0.25));
 
-    expect(await execute(w, a.changeId, at(1))).toMatchObject({ outcome: 'applied' });
-    const second = await execute(w, b.changeId, at(1));
-
-    expect(second).toMatchObject({ outcome: 'refused', reason: 'cap_no_longer_allows' });
+    await expect(approved(w, 'b', 4001, at(0.5))).rejects.toThrow(
+      'reservation refused: usable_would_be_exceeded',
+    );
+    expect(await execute(w, raise.changeId, at(1))).toMatchObject({ outcome: 'applied' });
     expect(w.budgetWrites()).toEqual(['a']);
-    // A refusal changes nothing: B stays approved, ready for when there is room.
-    expect(await changeRow(b.changeId)).toMatchObject({
-      status: 'approved',
-      reservationActive: true,
-    });
-    const events = await db.query.adGuardrailEvents.findMany({
-      where: eq(adGuardrailEvents.adAccountId, w.accountId),
-    });
-    expect(
-      events.some(
-        (event) =>
-          event.kind === 'usable_would_be_exceeded' &&
-          (event.detail as Record<string, unknown>).stage === 'execution',
-      ),
-    ).toBe(true);
   });
 
   it('refuses an approved change that no longer holds its reservation', async () => {
@@ -138,23 +127,26 @@ describe('a reduction is never held back', () => {
     expect(w.budgetWrites()).toEqual(['a']);
   });
 
-  it('rejecting a pause whose space was used freezes the account instead of failing (T-5)', async () => {
+  it('a pending pause frees no space, so rejecting it needs no freeze (T-3, T-5)', async () => {
     const w = await world({ a: 4000, b: 4000 }); // 210_000
-    const pause = await requested(w, 'a', { kind: 'pause_campaign' }); // committed 105_000
-    await approved(w, 'b', 8000); // +105_000 → 210_000 again, on space the pause only promised
+    const pause = await requested(w, 'a', { kind: 'pause_campaign' });
+    expect(await w.committed()).toBe(USABLE); // a is still spending
 
-    const rejected = await decide(pause.approvalId, 'rejected');
+    // Part 1 reserved this raise on the space the pause only promised.
+    await expect(approved(w, 'b', 8000)).rejects.toThrow(
+      'reservation refused: usable_would_be_exceeded',
+    );
+    expect(await decide(pause.approvalId, 'rejected')).toMatchObject({ ok: true });
 
-    expect(rejected).toMatchObject({ ok: true, status: 'rejected' });
     expect(await changeRow(pause.changeId)).toMatchObject({
       status: 'rejected',
       reservationActive: false,
     });
-    expect(await w.committed()).toBe(USABLE); // recorded at the ceiling, not past it
+    expect(await w.committed()).toBe(USABLE);
     const account = await db.query.adAccounts.findFirst({
       where: eq(adAccounts.id, w.accountId),
     });
-    expect(account?.killSwitchEngaged).toBe(true);
+    expect(account?.killSwitchEngaged).toBe(false);
   });
 });
 
@@ -162,11 +154,12 @@ describe('a reservation is given back once (T-2)', () => {
   it('rejecting an increase that crossed a reconciliation does not take it out again', async () => {
     const w = await world({ a: 1000, b: 1000 }); // 52_500
     const raise = await requested(w, 'a', { kind: 'set_daily_budget', to: 4000 }); // 131_250
-    await w.reconcile(at(0.25)); // back to 52_500: the reservation is already gone
+    await w.reconcile(at(0.25)); // still 131_250: the reservation survives it (part 2)
+    expect(await w.committed()).toBe(131_250);
 
     expect(await decide(raise.approvalId, 'rejected', at(0.5))).toMatchObject({ ok: true });
 
-    // Before: 52_500 − 78_750, floored at 0, and the month looked empty.
+    // Part 1 era: 52_500 − 78_750, floored at 0, and the month looked empty.
     expect(await w.committed()).toBe(52_500);
     expect(await changeRow(raise.changeId)).toMatchObject({
       status: 'rejected',
@@ -176,13 +169,14 @@ describe('a reservation is given back once (T-2)', () => {
 
   it('expiring a pause that crossed a reconciliation does not add it back again', async () => {
     const w = await world({ a: 1000, b: 1000 }); // 52_500
-    const pause = await requested(w, 'a', { kind: 'pause_campaign' }); // 26_250
+    const pause = await requested(w, 'a', { kind: 'pause_campaign' }); // frees nothing: 52_500
     await w.reconcile(at(0.25)); // 52_500: the pause never happened on the platform
 
     await expireStaleChanges(db, { now: at(25) });
 
     expect(await changeRow(pause.changeId)).toMatchObject({ status: 'expired' });
-    expect(await w.committed()).toBe(52_500); // not 78_750
+    // Worked out on the day it expires: 2 × 1000 × 20 days × 1.25. Not 78_750.
+    expect(await w.committed()).toBe(50_000);
   });
 
   it('still gives back a reservation taken since the last reconciliation', async () => {
@@ -215,7 +209,8 @@ describe('old requests expire', () => {
       status: 'expired',
       reservationActive: false,
     });
-    expect(await w.committed()).toBe(26_250);
+    // The campaign alone, on the day it expired: 1000 × 20 days × 1.25.
+    expect(await w.committed()).toBe(25_000);
     const approval = await db.query.adApprovalRequests.findFirst({
       where: eq(adApprovalRequests.id, ids.approvalId),
     });
@@ -233,7 +228,7 @@ describe('old requests expire', () => {
     expect((await expireStaleChanges(db, { now: at(27) })).expired).not.toContainEqual(
       expect.objectContaining({ changeRequestId: ids.changeId }),
     );
-    expect(await w.committed()).toBe(26_250);
+    expect(await w.committed()).toBe(25_000);
   });
 
   it('counts an approval’s day from the decision, and then the executor refuses it', async () => {
@@ -267,10 +262,9 @@ describe('old requests expire', () => {
     );
   });
 
-  it('gives back an expired reduction without breaking on the ceiling', async () => {
+  it('expiring a reduction in a full month neither breaks nor freezes', async () => {
     const w = await world({ a: 4000, b: 4000 }); // 210_000
-    const pause = await requested(w, 'a', { kind: 'pause_campaign' }); // 105_000
-    const raise = await approved(w, 'b', 8000, at(10)); // 210_000 again; its own day runs to at(34)
+    const pause = await requested(w, 'a', { kind: 'pause_campaign' });
 
     const expired = (await expireStaleChanges(db, { now: at(25) })).expired;
 
@@ -278,12 +272,12 @@ describe('old requests expire', () => {
       expect.objectContaining({ changeRequestId: pause.changeId, why: 'age' }),
     );
     expect(await changeRow(pause.changeId)).toMatchObject({ status: 'expired' });
-    expect(await changeRow(raise.changeId)).toMatchObject({ status: 'approved' });
-    expect(await w.committed()).toBe(USABLE);
+    // Both campaigns, on the day it expired: 2 × 4000 × 20 days × 1.25.
+    expect(await w.committed()).toBe(200_000);
     const account = await db.query.adAccounts.findFirst({
       where: eq(adAccounts.id, w.accountId),
     });
-    expect(account?.killSwitchEngaged).toBe(true);
+    expect(account?.killSwitchEngaged).toBe(false);
   });
 
   it('one request that cannot be expired does not keep the others holding money', async () => {
@@ -315,7 +309,8 @@ describe('old requests expire', () => {
         status: 'pending_approval',
         reservationActive: true,
       });
-      expect(await w.committed()).toBe(52_500 + 26_250);
+      // Worked out when the other expired: the mirror at 20 days (50_000) and the stuck reservation.
+      expect(await w.committed()).toBe(50_000 + 26_250);
     } finally {
       await db.execute(
         sql.raw(

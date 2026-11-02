@@ -13,6 +13,7 @@ import {
   applyReportedSpend,
   engageKillSwitch,
   mirroredExposureCents,
+  recordCommitment,
 } from './budget-guard.js';
 import {
   effectiveHeadroomCents,
@@ -152,6 +153,10 @@ export async function syncCampaigns(
           lastSyncedAt: now,
           updatedAt: now,
         },
+        // A row written after this reading began (the executor mirrors its
+        // own write at once) is newer than what was read: writing the old
+        // budget back would drop a change from the commitment.
+        setWhere: sql`${adCampaigns.lastSyncedAt} is null or ${adCampaigns.lastSyncedAt} <= ${now.toISOString()}`,
       });
   }
 
@@ -421,52 +426,57 @@ export async function reconcileAccount(
     };
   }
 
-  const applied = await applyReportedSpend(db, { periodId: period.id, spentCents, now });
+  // One transaction under the period lock: the spend, then the commitment
+  // (`commitmentCents`: the mirror just synced plus the increases holding a
+  // reservation at this instant). A request made while the platform was being
+  // read waits for the lock and is counted, never overwritten (T-1).
+  const settled = await db.transaction(async (tx) => {
+    const applied = await applyReportedSpend(tx, { periodId: period.id, spentCents, now });
 
-  // Re-derive commitment from what is really running on the platform. If
-  // someone changed budgets directly in Ads Manager, this is where we find out.
-  // Exposure follows the budget, whether it sits on the campaign (CBO) or on
-  // its ad sets (ABO).
-  const desiredCommitted = await mirroredExposureCents(db, account, now);
+    // What is really running on the platform. If someone changed budgets
+    // directly in Ads Manager, this is where we find out. Exposure follows the
+    // budget, whether it sits on the campaign (CBO) or on its ad sets (ABO).
+    const platformExposureCents = await mirroredExposureCents(tx, account, now);
 
-  const internalAllowed = Math.min(period.usableCents, Math.max(0, period.capCents - spentCents));
-  // Three ceilings, smallest wins: usable slice, hard cap, and what the
-  // platform will actually let us spend.
-  //
-  // Except on a prepaid account (Google): there the platform's number is a
-  // balance that drains and is topped up by Pix, so running below the month's
-  // exposure is its normal state, not a sign that somebody raised budgets
-  // behind our back. It still binds every new request (`ceilingRefusal`) and is
-  // still recorded (`applyPlatformLimit`); it just does not freeze the account.
-  const allowed =
-    account.platform === 'google'
-      ? internalAllowed
-      : effectiveHeadroomCents(internalAllowed, platformLimit.remainingCents);
-  const outOfBandChangeDetected = desiredCommitted > allowed;
-  const committedCents = Math.min(desiredCommitted, allowed);
+    const internalAllowed = Math.min(period.usableCents, Math.max(0, period.capCents - spentCents));
+    // Three ceilings, smallest wins: usable slice, hard cap, and what the
+    // platform will actually let us spend.
+    //
+    // Except on a prepaid account (Google): there the platform's number is a
+    // balance that drains and is topped up by Pix, so running below the month's
+    // exposure is its normal state, not a sign that somebody raised budgets
+    // behind our back. It still binds every new request (`ceilingRefusal`) and is
+    // still recorded (`applyPlatformLimit`); it just does not freeze the account.
+    const allowed =
+      account.platform === 'google'
+        ? internalAllowed
+        : effectiveHeadroomCents(internalAllowed, platformLimit.remainingCents);
+    // Only the platform's own exposure freezes: reservations the month no
+    // longer holds are refused at approval and at execution instead, and a
+    // frozen account could not even ask for a pause.
+    const outOfBandChangeDetected = platformExposureCents > allowed;
+    const committedCents = await recordCommitment(tx, account, period.id, now);
 
-  await db
-    .update(budgetPeriods)
-    .set({ committedCents, lastReconciledAt: now, updatedAt: now })
-    .where(eq(budgetPeriods.id, period.id));
-
-  if (outOfBandChangeDetected) {
-    await db.insert(adGuardrailEvents).values({
-      adAccountId,
-      kind: 'usable_would_be_exceeded',
-      detail: {
-        note: 'Orçamentos na plataforma excedem o plano — alteração feita fora do sistema?',
-        desiredCommittedCents: desiredCommitted,
-        allowedCents: allowed,
-        spentCents,
-      },
-    });
-    await engageKillSwitch(
-      db,
-      adAccountId,
-      'Orçamentos na plataforma excedem o limite planejado do mês',
-    );
-  }
+    if (outOfBandChangeDetected) {
+      await tx.insert(adGuardrailEvents).values({
+        adAccountId,
+        kind: 'usable_would_be_exceeded',
+        detail: {
+          note: 'Orçamentos na plataforma excedem o plano — alteração feita fora do sistema?',
+          desiredCommittedCents: platformExposureCents,
+          allowedCents: allowed,
+          spentCents,
+        },
+      });
+      await engageKillSwitch(
+        tx,
+        adAccountId,
+        'Orçamentos na plataforma excedem o limite planejado do mês',
+      );
+    }
+    return { applied, committedCents, outOfBandChangeDetected };
+  });
+  const { applied, committedCents, outOfBandChangeDetected } = settled;
 
   return {
     campaignsSynced: synced.campaigns,
