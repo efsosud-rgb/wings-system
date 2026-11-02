@@ -14,6 +14,7 @@ import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
 import { leadEvents, leadStageHistory, leadTasks, leads } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
+import { loadHolidays } from '../../lib/holidays.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
 import type { LoadedLead } from './service.js';
@@ -257,7 +258,9 @@ describe('the rotation and the first-contact task', () => {
       assigneeEmployeeId: first.lead.ownerEmployeeId,
     });
     // One working hour (Mon–Fri 9h–18h São Paulo): the same instant the shared helper gives.
-    expect(tasks[0]!.dueAt).toEqual(addBusinessHours(tasks[0]!.createdAt, 1));
+    expect(tasks[0]!.dueAt).toEqual(
+      addBusinessHours(tasks[0]!.createdAt, 1, await loadHolidays(db)),
+    );
     expect(tasks[0]!.dueAt.getTime()).toBeGreaterThan(tasks[0]!.createdAt.getTime());
 
     // Pause B: the next two go to A.

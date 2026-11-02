@@ -22,6 +22,7 @@ import {
   sql,
 } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
+import { loadHolidays } from '../../lib/holidays.js';
 import { LEAD_ADMIN_ROLE_KEYS } from './access.js';
 import { contactBlock } from './contact-block.js';
 import {
@@ -290,6 +291,7 @@ async function firstContactRows(
 ): Promise<(typeof crmNotifications.$inferInsert)[]> {
   const cases = await firstContactCases(db, now);
   if (cases.length === 0) return [];
+  const holidays = await loadHolidays(db);
   const ownerIds = [
     ...new Set(cases.flatMap((c) => (c.ownerEmployeeId ? [c.ownerEmployeeId] : []))),
   ];
@@ -347,7 +349,7 @@ async function firstContactRows(
         item.ownerEmployeeId,
         'Primeiro contato atrasado: passou da 1 hora útil.',
       );
-    if (now.getTime() < endOfBusinessDay(item.dueAt).getTime()) continue;
+    if (now.getTime() < endOfBusinessDay(item.dueAt, holidays).getTime()) continue;
     const seller = sellers.get(item.ownerEmployeeId ?? '') || '';
     const message = `Primeiro contato sem registro até o fim do dia útil: a negociação segue em "${item.stage ?? 'Sem contato'}"${seller ? ` (vendedor: ${seller})` : ''}.`;
     for (const person of who)

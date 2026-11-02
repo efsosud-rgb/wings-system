@@ -18,6 +18,7 @@ import {
 } from '@wings/shared';
 import { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
+import { loadHolidays } from '../../lib/holidays.js';
 import { contactNameSql, listConditions, nextTaskSql, type LeadListFilter } from './service.js';
 import {
   clients,
@@ -801,7 +802,7 @@ export async function ensureFirstContactTask(
       leadId: lead.id,
       kind: 'first_contact',
       title: 'Primeiro contato com o lead',
-      dueAt: addBusinessHours(now, config.firstContactSlaHours),
+      dueAt: addBusinessHours(now, config.firstContactSlaHours, await loadHolidays(db)),
       assigneeEmployeeId: lead.ownerEmployeeId,
       auto: true,
       createdBy: actorEmployeeId,
@@ -877,7 +878,7 @@ export async function ensureReturnTask(
       leadId: lead.id,
       kind: 'follow_up',
       title: RETURN_TASK_TITLE,
-      dueAt: addBusinessHours(now, config.firstContactSlaHours),
+      dueAt: addBusinessHours(now, config.firstContactSlaHours, await loadHolidays(db)),
       assigneeEmployeeId: lead.ownerEmployeeId,
       auto: true,
       createdBy: null,
