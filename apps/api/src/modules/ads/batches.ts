@@ -13,8 +13,9 @@ import { adApprovalRequests } from '../../db/schema/index.js';
  * approval policy exists to prevent.
  *
  * The totals here describe exposure that is **already reserved**: a pending
- * request holds its delta in `committed_cents` from the moment it is created.
- * Approving does not add to it; rejecting gives it back.
+ * increase holds its delta in the commitment from the moment it is created.
+ * Approving does not add to it; rejecting gives it back. A reduction holds
+ * nothing: it counts only once executed (docs/ads/travas.md).
  */
 
 export interface PendingGroupItem {

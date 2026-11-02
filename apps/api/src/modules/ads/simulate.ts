@@ -8,7 +8,7 @@ import {
   adSets,
   budgetPeriods,
 } from '../../db/schema/index.js';
-import { campaignExposure, exposureOf, remainingDays } from './budget-guard.js';
+import { campaignExposure, commitmentCents, exposureOf, remainingDays } from './budget-guard.js';
 
 /**
  * The scenario simulator behind the approval screen.
@@ -19,8 +19,8 @@ import { campaignExposure, exposureOf, remainingDays } from './budget-guard.js';
  * enforces.
  *
  * One thing this has to be honest about: exposure is reserved **when the change
- * is requested**, not when it is approved. So a pending request is already
- * inside `committed_cents`. Approving it changes reality (the platform starts
+ * is requested**, not when it is approved. So a pending increase is already
+ * inside the commitment (`commitmentCents`). Approving it changes reality (the platform starts
  * spending), not the committed figure; rejecting it releases the reservation.
  * The simulator therefore reports both "com esta solicitação" and "se for
  * recusada", because a screen showing only the current committed total would
@@ -168,14 +168,21 @@ export async function simulateChange(
     daysLeft,
   );
 
-  // A waiting increase holds its share of the commitment, so back it out to
+  // A waiting increase holds its share of the commitment, so leave it out to
   // show the month without this request; a reduction holds nothing until it
-  // runs (docs/ads/travas.md). "With" is the month once the change runs.
-  const heldCents =
-    change.reservationActive && ['pending_approval', 'approved'].includes(change.status)
-      ? Math.max(0, change.exposureDeltaCents)
-      : 0;
-  const committedWithoutRequestCents = period.committedCents - heldCents;
+  // runs (docs/ads/travas.md). "With" is the month once the change runs. The
+  // full figure, not the stored column: that one is cut at the month's room.
+  const held =
+    change.reservationActive &&
+    ['pending_approval', 'approved'].includes(change.status) &&
+    change.exposureDeltaCents > 0;
+  const committedWithoutRequestCents = await commitmentCents(
+    db,
+    account,
+    period.id,
+    now,
+    held ? { excluding: change.id } : {},
+  );
   const committedWithRequestCents = Math.max(
     0,
     committedWithoutRequestCents + change.exposureDeltaCents,
