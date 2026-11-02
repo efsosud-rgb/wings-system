@@ -120,6 +120,18 @@ export function TrafficStudioPage() {
             </p>
           </StudioToolGroup>
 
+          <StudioToolGroup title="Etapas do CRM">
+            <Link
+              to="/marketing/trafego-pago-wings/conversoes"
+              className="btn btn-ghost btn-inline"
+            >
+              Meta e Google: etapas enviadas
+            </Link>
+            <p className="field-hint">
+              Quantos eventos de reunião, proposta e COF foram e quantos falharam.
+            </p>
+          </StudioToolGroup>
+
           <StudioToolGroup title="Desempenho">
             <Link to="/dashboard/marketing" className="btn btn-ghost btn-inline">
               Relatório de campanhas

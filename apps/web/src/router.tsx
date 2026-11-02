@@ -38,6 +38,7 @@ import { ProspectingPage } from './pages/crm/ProspectingPage.js';
 import { TasksPage } from './pages/crm/TasksPage.js';
 import { LoginPage } from './pages/LoginPage.js';
 import { MyAccountPage } from './pages/MyAccountPage.js';
+import { AdConversionsPage } from './pages/AdConversionsPage.js';
 import { CampaignLeadsPage } from './pages/CampaignLeadsPage.js';
 import { MarketingDashboardPage } from './pages/MarketingDashboardPage.js';
 import { SalesDashboardPage } from './pages/SalesDashboardPage.js';
@@ -135,6 +136,7 @@ const SCREENS: Record<string, RouteObject[]> = {
     { index: true, element: <TrafficStudioPage /> },
     { path: 'aprovacoes', element: <ApprovalsPage /> },
     { path: 'aprovacoes/:id', element: <ApprovalDetailPage /> },
+    { path: 'conversoes', element: <AdConversionsPage /> },
   ],
 };
 

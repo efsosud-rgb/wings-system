@@ -11,6 +11,9 @@ import {
   type CampaignDraft,
   type ChangeSimulation,
   type CockpitSnapshot,
+  type ConversionMapping,
+  type ConversionMappingInput,
+  type ConversionsPanel,
   type DemandGenOptions,
   type SpendCapReset,
   type CreativeUpload,
@@ -521,6 +524,26 @@ export function useRequestAddAds() {
       ),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['ads'] });
+    },
+  });
+}
+
+// --- Closing the loop: CRM stages sent to Meta and Google (docs/ads/fechar-ciclo.md) ---------
+
+export function useConversionsPanel() {
+  return useQuery({
+    queryKey: ['ads', 'conversions'],
+    queryFn: () => api.get<ConversionsPanel>('/ads/conversions'),
+  });
+}
+
+export function useSaveConversionMapping() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: ConversionMappingInput) =>
+      api.put<{ mapping: ConversionMapping }>('/ads/conversions/mappings', input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['ads', 'conversions'] });
     },
   });
 }
