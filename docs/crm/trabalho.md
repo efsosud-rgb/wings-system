@@ -19,7 +19,7 @@
 
 - `lead_notes` (append-only; texto livre só na ficha do lead; o evento guarda id e tamanho). `POST /leads/:id/notes`.
 - `lead_tasks`: tipo (`first_contact`, `follow_up`, `call`, `meeting`, `other`), título, vencimento, responsável (padrão: dono do lead), feita em/por. `POST /leads/:id/tasks`, `PATCH /leads/:id/tasks/:taskId` (`done`, `dueAt`, `title`), `GET /crm/tasks?status=open|overdue|done|all[&everyone=true]` (a lista do vendedor; `everyone` só para quem vê todos).
-- **SLA de 1º contato** (Eric, 05/10): **1 hora útil**, contando só de segunda a sexta, 9h–18h (São Paulo); feriados ficam para depois. Quando um lead ganha dono (rodízio ou atribuição) e está em andamento, nasce a tarefa automática "Primeiro contato com o lead" vencendo em `addBusinessHours(agora, CRM_FIRST_CONTACT_SLA_HOURS)` (1 por padrão): lead de sexta 17h30 vence segunda 9h30. Trocar o dono passa a tarefa aberta para o novo dono.
+- **SLA de 1º contato** (Eric, 05/10): **1 hora útil**, contando só de segunda a sexta, 9h–18h (São Paulo), sem os feriados nacionais, do estado do RJ e da cidade do Rio (Eric, 31/10/2026; `prazos-horas-uteis.md`). Quando um lead ganha dono (rodízio ou atribuição) e está em andamento, nasce a tarefa automática "Primeiro contato com o lead" vencendo em `addBusinessHours(agora, CRM_FIRST_CONTACT_SLA_HOURS)` (1 por padrão): lead de sexta 17h30 vence segunda 9h30 (terça 9h30 se segunda for feriado). Trocar o dono passa a tarefa aberta para o novo dono.
 - **Início de uso** (Eric, 09/10/2026): o SLA e os contadores só valem para negociação que **entrou** (`leads.entered_at`) a partir de `CRM_TRACKING_START` (dia `AAAA-MM-DD`, 00:00 de São Paulo; **2026-10-09** quando não definida). O histórico do RD (inclusive as de Expansão sem dono) fica como está e sai de: **"novas sem contato"**, **"1º contato atrasado"** e **"atrasadas"** em Negociações (a resposta de `GET /leads/board/counters` traz `since`), o painel de Vendas ("1º contato atrasado"), o Escritório, os avisos `first_contact_overdue` e a lista de tarefas (`open`/`overdue`); `ensureFirstContactTask` não cria tarefa para elas. Só a tarefa `first_contact` é cortada: a tarefa que uma pessoa cria (retorno, ligação, reunião) conta em qualquer negociação. As tarefas de 1º contato que já existiam em negócio antigo não foram apagadas (continuam na ficha do lead), apenas deixam de contar e de avisar.
 
 ## Distribuição (`crm_distribution_members`)
@@ -44,5 +44,5 @@
 ## Pendências
 
 - Teste de tela do kanban e da ficha editável (browser, no staging).
-- Etapas e vendedores: os do RD por enquanto (decisão do Eric, 05/10), ajustáveis em `/administracao/crm`. Feriados no cálculo do SLA.
+- Etapas e vendedores: os do RD por enquanto (decisão do Eric, 05/10), ajustáveis em `/administracao/crm`.
 - Painel técnico do Lead Ads com os eventos com falha (hoje só contagens no Funil).

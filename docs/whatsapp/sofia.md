@@ -65,7 +65,7 @@ Estados (`wa_conversations.attendance`): `sofia` Sofia atendendo · `waiting_sel
   atendente", mas o bloqueio continua até a gerência ou a diretoria revogá-lo na negociação, com motivo
   (`docs/crm/nao-me-contate.md`).
 - **Limites:** não informa valores, não promete nada, mensagens curtas. Fora do horário (seg–sex 9h–18h, São
-  Paulo) a transferência leva o texto de fora do horário.
+  Paulo, sem os feriados do CRM) a transferência leva o texto de fora do horário.
 
 ## O estado só avança quando a Meta aceitou (26/10)
 
