@@ -6,7 +6,7 @@ import {
   type CampaignDraft,
 } from '@wings/shared';
 import { and, eq } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Database } from '../../db/client.js';
 import {
   adAccounts,
@@ -43,6 +43,16 @@ const PAGE = '104567890123456';
 let harness: TestDatabase;
 let db: Database;
 let imageId: string;
+
+// Today and this month are read once, at load, and the code reads its own clock: stopped at that
+// instant, a midnight or a month turning during the run cannot set the two apart.
+beforeAll(() => {
+  vi.useFakeTimers({ toFake: ['Date'], now: NOW });
+});
+
+afterAll(() => {
+  vi.useRealTimers();
+});
 
 beforeAll(async () => {
   harness = await createTestDatabase();
