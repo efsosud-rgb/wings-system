@@ -175,8 +175,10 @@ describe('a change never leaves the count on its way to the platform', () => {
     const w = await world({ a: 1000, b: 1000 });
     const a = await approved(w, 'a', 4000);
     // The reconciliation read the campaigns (A at R$ 10/dia) and waits there.
+    // Its clock is a minute behind the execution's, as a read made before the
+    // write is: the test does not lean on the executor's clock moving 1 ms.
     const read = hold(w, 'listCampaigns', 'after');
-    const reconciling = w.reconcile(at(1));
+    const reconciling = w.reconcile(new Date(at(1).getTime() - 60_000));
     await read.reached;
 
     try {
