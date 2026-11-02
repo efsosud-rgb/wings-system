@@ -66,6 +66,7 @@ A push does not deploy: the repository has no webhook. Deploys are started throu
 - Identifiers and comments in English; text the user sees in Brazilian Portuguese.
 - Prettier decides layout (single quotes, semicolons, 100 columns, trailing commas): `pnpm format` fixes, `pnpm format:check` is in CI. ESLint (`pnpm lint`) is in CI too.
 - TypeScript is `strict` with `noUncheckedIndexedAccess` and `verbatimModuleSyntax`: import types with `import type`, handle the `undefined` of an indexed read.
+- `wings/no-async-reply-return` (`apps/api/src/lint/`, in `pnpm lint`) refuses an async helper that returns the Fastify reply: a reply is thenable, so `await` turns it into `undefined` and the caller's `if (refused) return refused;` lets the request go on (PR #66). The helper returns the reason (text or `null`); the handler sends the reply and returns at once. A reply handed straight back to Fastify (the handler, a hook, a helper only ever `return`ed from one) is allowed.
 - No `console.log` (ESLint warns; only `console.warn` and `console.error` are allowed), and never with personal data in it. An unused argument starts with `_`.
 - Match the code around you: naming, comment density, idiom. Do not reformat or restructure code you were not asked to change.
 - `packages/studio` is a vendored fork: its own `tsconfig.json`, its tests in `tests/`, and Prettier and ESLint skip its `src/` and `tests/`. These rules apply to the other packages.
