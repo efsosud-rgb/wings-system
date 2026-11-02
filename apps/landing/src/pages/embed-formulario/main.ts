@@ -13,7 +13,12 @@ import {
 import { primeInlineFonts } from '../../lib/fonts.js';
 import { installGtm, pushEvent } from '../../lib/gtm.js';
 import { readRuntimeConfig } from '../../lib/runtime-config.js';
-import { captureOrigin, dataLayerOriginOf, trackingPayloadOf } from '../../lib/tracking.js';
+import {
+  captureOrigin,
+  dataLayerOriginOf,
+  documentCookies,
+  trackingPayloadOf,
+} from '../../lib/tracking.js';
 import { setupForm } from '../fale-com-a-wings/form.js';
 
 /**
@@ -67,7 +72,7 @@ const form = setupForm({
   embedded: true,
   turnstileTheme: 'dark',
   href: options.page ?? location.href,
-  tracking: () => withHomeSource(trackingPayloadOf(origin)),
+  tracking: () => withHomeSource(trackingPayloadOf(origin, documentCookies())),
   whatsappUrl: () => whatsappUrl,
   onSent: (answer) => {
     pushEvent({ event: 'lead_submit', interesse: answer, origem: dataLayerOriginOf(origin) });

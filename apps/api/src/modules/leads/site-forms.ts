@@ -417,6 +417,7 @@ export const siteFormRoutes: FastifyPluginAsync = async (app) => {
           cnpj: body.data.cnpj,
         },
         attribution,
+        metaBrowserIds: { fbc: body.data.tracking?.fbc, fbp: body.data.tracking?.fbp },
         legalBasis: 'consent',
         consentedAt: now,
         consentSource: `site_form:${page.pattern}`,

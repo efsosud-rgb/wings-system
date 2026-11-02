@@ -9021,3 +9021,28 @@ tr.task-overdue td:nth-child(2) strong {
   color: var(--accent-soft-text);
   font-weight: 600;
 }
+
+/* Closing the loop panel (AdConversionsPage): counts per platform and the stage → event form. */
+.conversion-stats {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 16px;
+  margin: 12px 0;
+}
+
+.conversion-stats dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.conversion-form {
+  display: grid;
+  gap: 12px;
+  max-width: 520px;
+  margin-top: 16px;
+}
+
+.conversion-form label {
+  display: grid;
+  gap: 4px;
+}

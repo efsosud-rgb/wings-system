@@ -73,6 +73,7 @@ import {
   rdUserMap,
 } from '../../db/schema/index.js';
 import { activitiesOf } from './activities.js';
+import { adIdentifiersOf, recordAdIdentifiers } from './ad-identifiers.js';
 import { announceNewLead } from './crm-alerts.js';
 import {
   attachLeadContact,
@@ -326,6 +327,8 @@ export interface IncomingLead {
   distribute?: boolean;
   /** First touch: kept only when the lead has none yet, and then as a whole. */
   attribution?: LeadAttribution | null;
+  /** Meta's pixel cookies a site form sent (`_fbc`, `_fbp`); kept in `lead_ad_identifiers`. */
+  metaBrowserIds?: { fbc?: string | null; fbp?: string | null } | null;
   /** The timeline entry for this arrival. `detail` carries ids and codes, never personal data. */
   event: { kind: string; detail?: Record<string, unknown>; actorEmployeeId?: string | null };
 }
@@ -623,6 +626,22 @@ export async function upsertLead(db: Database, given: IncomingLead): Promise<Ups
   return result;
 }
 
+/**
+ * Every ad identifier of this arrival, under the lead it landed on (docs/ads/fechar-ciclo.md). Not
+ * for an import or the RD mirror: their stage changes are never sent, and their click ids stay in
+ * the attribution columns.
+ */
+async function recordArrivalIdentifiers(ex: Executor, leadId: string, incoming: IncomingLead) {
+  if (incoming.importBatchId || incoming.source === 'rd_crm') return;
+  await recordAdIdentifiers(
+    ex,
+    leadId,
+    adIdentifiersOf(incoming),
+    incoming.source,
+    incoming.enteredAt ?? new Date(),
+  );
+}
+
 async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<UpsertResult> {
   return db.transaction(async (tx) => {
     const phone = normalizeBrazilianPhone(incoming.phone);
@@ -713,6 +732,7 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
         .where(eq(leads.id, existing.id))
         .returning();
       const lead = updated ?? existing;
+      await recordArrivalIdentifiers(tx, lead.id, incoming);
       await attachLeadContact(tx, lead, incoming.event.actorEmployeeId ?? null);
       await tx.insert(leadEvents).values({
         leadId: lead.id,
@@ -819,6 +839,7 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
       })
       .returning();
     if (!created) throw new Error('lead insert returned no row');
+    await recordArrivalIdentifiers(tx, created.id, incoming);
     await attachLeadContact(tx, created, incoming.event.actorEmployeeId ?? null);
     await tx.insert(leadEvents).values({
       leadId: created.id,

@@ -6,6 +6,7 @@ import { storageOf } from './lib/storage/index.js';
 import { createOpenRouterLlm } from './modules/agent/llm.js';
 import { startFormatacaoIntakeScheduler } from './modules/expansion/formatacao.js';
 import { startExpansionIntakeScheduler } from './modules/expansion/scheduler.js';
+import { startConversionsScheduler } from './modules/ads/crm-conversions.js';
 import { startInsightsScheduler } from './modules/insights/scheduler.js';
 import { startCrmAutomationsScheduler } from './modules/leads/automations-scheduler.js';
 import { startEmailRepliesScheduler } from './modules/leads/email-replies.js';
@@ -247,6 +248,21 @@ async function main() {
       apiKey: env.YOUTUBE_API_KEY,
       channelEnv: env.YOUTUBE_CHANNEL_ID,
       cron: env.YOUTUBE_INGEST_CRON,
+      log: (facts) => app.log.info(facts),
+    });
+    app.addHook('onClose', async () => stop());
+  }
+
+  // Closing the loop (docs/ads/fechar-ciclo.md): CRM stages to Meta and Google every 5 minutes,
+  // only while one of Eric's switches is on; each platform still checks its own switch and config.
+  if (
+    env.CRM_CONVERSIONS_META_ENABLED === 'true' ||
+    env.CRM_CONVERSIONS_GOOGLE_ENABLED === 'true'
+  ) {
+    const stop = startConversionsScheduler({
+      db,
+      env,
+      fetchImpl: fetch,
       log: (facts) => app.log.info(facts),
     });
     app.addHook('onClose', async () => stop());

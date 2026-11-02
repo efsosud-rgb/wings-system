@@ -134,3 +134,44 @@ describe('trackingPayloadOf', () => {
     ).toEqual({ ts: 1, gclid: '1' });
   });
 });
+
+describe("Meta's browser ids (docs/ads/fechar-ciclo.md)", () => {
+  const FBP = 'fb.1.1761955200000.1234567890';
+  const FBC = 'fb.1.1761955200000.AbCdEf';
+
+  it('sends the pixel cookies as they are', () => {
+    const payload = trackingPayloadOf(
+      { first: null, now: {}, referrer: '' },
+      `other=1; _fbp=${FBP}; _fbc=${FBC}`,
+    );
+    expect(payload).toEqual({ fbp: FBP, fbc: FBC });
+  });
+
+  it('refuses a cookie out of Meta’s shape', () => {
+    expect(
+      trackingPayloadOf({ first: null, now: {}, referrer: '' }, '_fbp=x; _fbc=fb.1.1.'),
+    ).toEqual({});
+  });
+
+  it('builds fbc from this visit’s fbclid with the moment it was seen', () => {
+    const payload = trackingPayloadOf(
+      { first: null, now: { fbclid: 'IwAR1' }, referrer: '' },
+      '',
+      () => 1_762_000_000_000,
+    );
+    expect(payload.fbc).toBe('fb.1.1762000000000.IwAR1');
+  });
+
+  it('builds fbc from the first touch’s fbclid with the first touch’s moment', () => {
+    const payload = trackingPayloadOf(
+      { first: { ts: 1_761_000_000_000, fbclid: 'IwAR0' }, now: {}, referrer: '' },
+      '',
+      () => 1_762_000_000_000,
+    );
+    expect(payload.fbc).toBe('fb.1.1761000000000.IwAR0');
+  });
+
+  it('never reads fbc or fbp from the address', () => {
+    expect(trackingOfSearch(`?fbc=${FBC}&fbp=${FBP}`)).toEqual({});
+  });
+});

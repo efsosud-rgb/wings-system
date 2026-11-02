@@ -708,6 +708,46 @@ const schema = z.object({
     .default('false')
     .transform((value) => value === 'true'),
 
+  /**
+   * Closing the loop (docs/ads/fechar-ciclo.md): CRM stages sent to Meta and Google as events. Each
+   * platform has its own switch, Eric's, off unless "true"; nothing is queued or sent while off.
+   * Stage changes before CRM_CONVERSIONS_SINCE (a day, YYYY-MM-DD, Brasília) are never sent, and
+   * without it nothing is. E-mail and phone go (hashed) only with CRM_CONVERSIONS_HASHED_ENABLED,
+   * after Jurídico. Google's requests only validate until CRM_CONVERSIONS_GOOGLE_VALIDATE_ONLY is
+   * "false". META_CAPI_TOKEN and CRM_CONVERSIONS_GOOGLE_REFRESH_TOKEN are secrets: Coolify only.
+   */
+  CRM_CONVERSIONS_META_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
+  CRM_CONVERSIONS_GOOGLE_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
+  CRM_CONVERSIONS_HASHED_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
+  CRM_CONVERSIONS_GOOGLE_VALIDATE_ONLY: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
+  CRM_CONVERSIONS_SINCE: optionalString.refine(
+    (value) =>
+      value === undefined ||
+      (/^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T03:00:00Z`))),
+    'must be a day as YYYY-MM-DD',
+  ),
+  /** The Meta dataset (pixel) that receives the CRM events; not a secret. */
+  CRM_CONVERSIONS_META_DATASET_ID: optionalString.refine(
+    (value) => value === undefined || /^\d{5,25}$/.test(value),
+    'must be digits',
+  ),
+  META_CAPI_TOKEN: optionalString,
+  /** "Testar eventos" code (Events Manager). Meta still keeps those events: they are real sends. */
+  CRM_CONVERSIONS_META_TEST_EVENT_CODE: optionalString,
+  /** Authorised for the Data Manager scope, with the GOOGLE_ADS_CLIENT_ID/SECRET client. */
+  CRM_CONVERSIONS_GOOGLE_REFRESH_TOKEN: optionalString,
   /** Google Workspace SMTP. Optional in development; required in production. */
   SMTP_HOST: optionalString,
   SMTP_PORT: z.coerce.number().int().positive().default(587),

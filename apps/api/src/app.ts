@@ -14,6 +14,7 @@ import { audienceRoutes } from './modules/ads/audience-routes.js';
 import { campaignLeadsRoutes } from './modules/ads/campaign-leads-routes.js';
 import { cockpitRoutes } from './modules/ads/cockpit-routes.js';
 import { creativeRoutes } from './modules/ads/creative-routes.js';
+import { crmConversionsRoutes } from './modules/ads/crm-conversions-routes.js';
 import { dashboardRoutes } from './modules/ads/dashboard/routes.js';
 import { leadFormRoutes } from './modules/ads/lead-form-routes.js';
 import { metaRoutes } from './modules/ads/meta-routes.js';
@@ -336,6 +337,7 @@ export async function buildApp(deps: {
   await app.register(authRoutes);
   await app.register(employeeRoutes);
   await app.register(adsRoutes);
+  await app.register(crmConversionsRoutes);
   await app.register(savedDraftRoutes);
   await app.register(cockpitRoutes);
   await app.register(dashboardRoutes);
