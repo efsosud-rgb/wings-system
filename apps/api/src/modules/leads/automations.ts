@@ -13,6 +13,7 @@ import {
 } from '@wings/shared';
 import { and, asc, eq, inArray, isNull, lt, lte, ne } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
+import { loadHolidays } from '../../lib/holidays.js';
 import {
   crmAutomationRules,
   crmAutomationRuns,
@@ -248,7 +249,7 @@ async function createTaskAction(
   )
     return skipped('already_exists');
   const dueAt = config.data.businessHours
-    ? addBusinessHours(now, config.data.dueInHours)
+    ? addBusinessHours(now, config.data.dueInHours, await loadHolidays(db))
     : new Date(now.getTime() + config.data.dueInHours * 3_600_000);
   const task = await createTask(db, {
     leadId: lead.id,

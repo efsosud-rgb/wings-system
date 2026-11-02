@@ -6,13 +6,13 @@ uma negociação **entra** nela. Tela: `/crm-vendas/configuracoes/automacoes/:pi
 
 ## Ações
 
-| Ação                    | O que faz                                                                                                      | Serviço usado                   |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------- |
-| Criar tarefa            | tarefa automática (`auto`) para o responsável ou uma pessoa, prazo em horas úteis (seg–sex 9h–18h) ou corridas | `createTask`                    |
-| Mudar o responsável     | para uma pessoa ou o próximo do rodízio do funil                                                               | `nextInRotation` + `changeLead` |
-| Avisar alguém           | aviso no painel (`crm_notifications`), texto da regra, sem dado pessoal                                        | —                               |
-| Iniciar sequência       | agenda os passos (tarefa, e-mail ou aviso) com intervalo em horas                                              | —                               |
-| Enviar modelo de e-mail | grava no `crm_email_outbox` e na linha do tempo (`lead.email_sent`, só ids)                                    | transporte de CRM               |
+| Ação                    | O que faz                                                                                                                    | Serviço usado                   |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| Criar tarefa            | tarefa automática (`auto`) para o responsável ou uma pessoa, prazo em horas úteis (seg–sex 9h–18h, sem feriados) ou corridas | `createTask`                    |
+| Mudar o responsável     | para uma pessoa ou o próximo do rodízio do funil                                                                             | `nextInRotation` + `changeLead` |
+| Avisar alguém           | aviso no painel (`crm_notifications`), texto da regra, sem dado pessoal                                                      | —                               |
+| Iniciar sequência       | agenda os passos (tarefa, e-mail ou aviso) com intervalo em horas                                                            | —                               |
+| Enviar modelo de e-mail | grava no `crm_email_outbox` e na linha do tempo (`lead.email_sent`, só ids)                                                  | transporte de CRM               |
 
 Cada regra pode ter atraso (minutos, horas ou dias após a entrada).
 
@@ -54,8 +54,8 @@ perdida não gera aviso. Sem WhatsApp. Por e-mail, só o que está em `docs/crm/
 A regra é uma só (`firstContactOverdueSql`, em `crm.ts`) e vale para o aviso, para o número e para a
 lista: negociação **aberta**, ainda na **etapa de entrada** do funil ("Sem contato" na Formatação,
 "Novo Contato" na Expansão, "Novo contato" na Consultoria), com a tarefa `first_contact` **aberta e
-vencida** (1 hora útil: seg–sex 9h–18h de São Paulo; não há calendário de feriados, só fins de
-semana), entre as que contam desde `CRM_TRACKING_START`. Tirar a negociação da etapa de entrada,
+vencida** (1 hora útil: seg–sex 9h–18h de São Paulo, sem os feriados nacionais, do estado do RJ e da
+cidade do Rio; ver `prazos-horas-uteis.md`), entre as que contam desde `CRM_TRACKING_START`. Tirar a negociação da etapa de entrada,
 concluir a tarefa, ganhar ou perder encerra a condição.
 
 1. **Passou da 1 hora útil**: aviso `first_contact_overdue` ao **vendedor dono**.

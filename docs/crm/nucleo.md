@@ -30,5 +30,5 @@ Branch `feat/crm-nucleo`, migração **0065** `crm_nucleo` (gerada sobre a 0064;
 ## Pendências
 
 - Conferência no browser pelo Eric (staging): arrastar cards, filtros, importação com planilha real, "Virar cliente".
-- Feriados no SLA; e-mail e WhatsApp pelo CRM (Sonnet); Painel (Sonnet); regras de automação (Sonnet).
+- E-mail e WhatsApp pelo CRM (Sonnet); Painel (Sonnet); regras de automação (Sonnet).
 - Vendedores = só Eric, Thais e Fernando: papéis dos outros usuários em Administração → Usuários (não é coisa de migração).

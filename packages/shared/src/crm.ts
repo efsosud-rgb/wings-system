@@ -307,10 +307,19 @@ export const boardColumnQuerySchema = z.object({
 
 // --- business hours (the first-contact SLA) ----------------------------------------
 
-/** Wings' working hours (Eric, 05/10/2026): Monday to Friday, 9h–18h, São Paulo. Holidays come later. */
+/**
+ * Wings' working hours (Eric, 05/10/2026): Monday to Friday, 9h–18h, São Paulo. Holidays are
+ * skipped too (Eric, 31/10/2026: national, state of RJ and city of Rio), read from the Ponto's
+ * `holidays` table by the API and passed in as a `HolidaySet` (docs/crm/prazos-horas-uteis.md).
+ */
 export const BUSINESS_HOURS = { start: 9, end: 18, timeZone: 'America/Sao_Paulo' } as const;
 
+/** Days off on top of the weekend, as São Paulo calendar days (`AAAA-MM-DD`). */
+export type HolidaySet = ReadonlySet<string>;
+
 interface LocalParts {
+  /** The São Paulo calendar day, `AAAA-MM-DD`. */
+  day: string;
   weekday: number;
   hour: number;
   minute: number;
@@ -341,6 +350,7 @@ function localParts(date: Date): LocalParts {
     Number(get('second')),
   );
   return {
+    day: `${get('year')}-${get('month')}-${get('day')}`,
     weekday,
     hour: Number(get('hour')),
     minute: Number(get('minute')),
@@ -348,17 +358,21 @@ function localParts(date: Date): LocalParts {
   };
 }
 
-const isWorkday = (weekday: number) => weekday >= 1 && weekday <= 5;
+const isWorkday = (local: LocalParts, holidays: HolidaySet) =>
+  local.weekday >= 1 && local.weekday <= 5 && !holidays.has(local.day);
+
+/** How many days in a row the search for the next working day may look ahead. */
+const DAYS_AHEAD = 60;
 
 /** The next instant inside working hours, `from` itself when it already is. */
-export function nextBusinessInstant(from: Date): Date {
+export function nextBusinessInstant(from: Date, holidays: HolidaySet): Date {
   let cursor = new Date(from.getTime());
   cursor.setUTCSeconds(0, 0);
-  for (let guard = 0; guard < 14; guard++) {
+  for (let guard = 0; guard < DAYS_AHEAD; guard++) {
     const local = localParts(cursor);
     const minutesOfDay = local.hour * 60 + local.minute;
     if (
-      isWorkday(local.weekday) &&
+      isWorkday(local, holidays) &&
       minutesOfDay >= BUSINESS_HOURS.start * 60 &&
       minutesOfDay < BUSINESS_HOURS.end * 60
     ) {
@@ -366,7 +380,7 @@ export function nextBusinessInstant(from: Date): Date {
     }
     // Jump to the next 9h (today if before 9h, else tomorrow), in local time.
     const toStart =
-      isWorkday(local.weekday) && minutesOfDay < BUSINESS_HOURS.start * 60
+      isWorkday(local, holidays) && minutesOfDay < BUSINESS_HOURS.start * 60
         ? BUSINESS_HOURS.start * 60 - minutesOfDay
         : 24 * 60 - minutesOfDay + BUSINESS_HOURS.start * 60;
     cursor = new Date(cursor.getTime() + toStart * 60_000);
@@ -378,41 +392,43 @@ export function nextBusinessInstant(from: Date): Date {
   return cursor;
 }
 
-/** Whether an instant is inside working hours (Mon–Fri, 9h–18h São Paulo). */
-export const isBusinessInstant = (date: Date): boolean =>
-  nextBusinessInstant(date).getTime() <= date.getTime();
+/** Whether an instant is inside working hours (Mon–Fri, 9h–18h São Paulo, not a holiday). */
+export const isBusinessInstant = (date: Date, holidays: HolidaySet): boolean =>
+  nextBusinessInstant(date, holidays).getTime() <= date.getTime();
 
 /**
- * `from` plus `hours` of working time (Mon–Fri, 9h–18h São Paulo). Time
- * outside those hours does not count: a lead that arrives Friday 17h30 with
- * a 1-hour SLA is due Monday 9h30.
+ * `from` plus `hours` of working time (Mon–Fri, 9h–18h São Paulo, holidays
+ * skipped). Time outside those hours does not count: a lead that arrives
+ * Friday 17h30 with a 1-hour SLA is due Monday 9h30, or Tuesday 9h30 when
+ * Monday is a holiday.
  */
-export function addBusinessHours(from: Date, hours: number): Date {
+export function addBusinessHours(from: Date, hours: number, holidays: HolidaySet): Date {
   let remaining = Math.max(0, hours) * 60;
-  let cursor = nextBusinessInstant(from);
+  let cursor = nextBusinessInstant(from, holidays);
   for (let guard = 0; guard < 400 && remaining > 0; guard++) {
     const local = localParts(cursor);
     const untilClose = BUSINESS_HOURS.end * 60 - (local.hour * 60 + local.minute);
     if (remaining <= untilClose) return new Date(cursor.getTime() + remaining * 60_000);
     remaining -= untilClose;
-    cursor = nextBusinessInstant(new Date(cursor.getTime() + untilClose * 60_000));
+    cursor = nextBusinessInstant(new Date(cursor.getTime() + untilClose * 60_000), holidays);
   }
   return cursor;
 }
 
 /**
- * The close of working hours (18h São Paulo, on a workday) that comes strictly
- * after `from`: the end of the business day an overdue first contact is judged
- * by. A deadline at 11h closes that same day at 18h; one that falls on the 18h
- * close itself, or on a weekend, closes the next workday at 18h.
+ * The close of working hours (18h São Paulo, on a workday that is not a
+ * holiday) that comes strictly after `from`: the end of the business day an
+ * overdue first contact is judged by. A deadline at 11h closes that same day
+ * at 18h; one that falls on the 18h close itself, on a weekend or on a
+ * holiday, closes the next workday at 18h.
  */
-export function endOfBusinessDay(from: Date): Date {
+export function endOfBusinessDay(from: Date, holidays: HolidaySet): Date {
   let cursor = new Date(from.getTime());
   cursor.setUTCSeconds(0, 0);
-  for (let guard = 0; guard < 14; guard++) {
+  for (let guard = 0; guard < DAYS_AHEAD; guard++) {
     const local = localParts(cursor);
     const minutesOfDay = local.hour * 60 + local.minute;
-    if (isWorkday(local.weekday) && minutesOfDay < BUSINESS_HOURS.end * 60) {
+    if (isWorkday(local, holidays) && minutesOfDay < BUSINESS_HOURS.end * 60) {
       return new Date(cursor.getTime() + (BUSINESS_HOURS.end * 60 - minutesOfDay) * 60_000);
     }
     // Past today's close, or not a workday: look again from the next local midnight.

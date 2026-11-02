@@ -12,6 +12,7 @@ import {
   leads,
 } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
+import { loadHolidays } from '../../lib/holidays.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
 
@@ -97,7 +98,7 @@ async function expectWorkedLead(
   const tasks = await db.select().from(leadTasks).where(eq(leadTasks.leadId, lead!.id));
   expect(tasks).toHaveLength(1);
   expect(tasks[0]).toMatchObject({ kind: 'first_contact', assigneeEmployeeId: expected.owner });
-  expect(tasks[0]!.dueAt).toEqual(addBusinessHours(tasks[0]!.createdAt, 1));
+  expect(tasks[0]!.dueAt).toEqual(addBusinessHours(tasks[0]!.createdAt, 1, await loadHolidays(db)));
 }
 
 describe('the doors a new lead comes through', () => {

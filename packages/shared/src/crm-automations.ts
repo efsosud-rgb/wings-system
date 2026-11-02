@@ -30,7 +30,7 @@ export const AUTOMATION_RULE_KIND_LABELS: Record<AutomationRuleKind, string> = {
 export const automationPersonSchema = z.union([z.literal('owner'), z.uuid()]);
 
 const taskTitle = z.string().trim().min(2, 'Informe o título da tarefa').max(160);
-/** Up to 90 days; counted in business hours (Mon–Fri 9h–18h) when `businessHours` is on. */
+/** Up to 90 days; counted in business hours (Mon–Fri 9h–18h, holidays skipped) when `businessHours` is on. */
 const afterHours = z
   .number()
   .int()
