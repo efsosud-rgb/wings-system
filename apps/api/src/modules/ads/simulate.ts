@@ -168,12 +168,18 @@ export async function simulateChange(
     daysLeft,
   );
 
-  // The reservation is live while the request is pending, so back it out to
-  // show what the month looks like without this request.
-  const committedWithRequestCents = period.committedCents;
-  const committedWithoutRequestCents = change.reservationActive
-    ? period.committedCents - change.exposureDeltaCents
-    : period.committedCents;
+  // A waiting increase holds its share of the commitment, so back it out to
+  // show the month without this request; a reduction holds nothing until it
+  // runs (docs/ads/travas.md). "With" is the month once the change runs.
+  const heldCents =
+    change.reservationActive && ['pending_approval', 'approved'].includes(change.status)
+      ? Math.max(0, change.exposureDeltaCents)
+      : 0;
+  const committedWithoutRequestCents = period.committedCents - heldCents;
+  const committedWithRequestCents = Math.max(
+    0,
+    committedWithoutRequestCents + change.exposureDeltaCents,
+  );
 
   const periodContext: PeriodContext = {
     periodMonth: period.periodMonth,

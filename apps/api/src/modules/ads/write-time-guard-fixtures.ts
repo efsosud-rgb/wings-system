@@ -150,18 +150,18 @@ export function guardFixtures(context: () => { db: Database; approverId: string 
   }
 
   /**
-   * Two increases that each fit alone. A is reserved; the 15-minute
-   * reconciliation then rewrites the commitment from the platform and wipes A
-   * (T-1, fixed in part 2); B is reserved on top of the wiped figure. Both are
-   * approved. Base: two campaigns at R$ 10/dia = 52_500.
+   * Two increases across a reconciliation. A is reserved; the 15-minute
+   * reconciliation then works the commitment out again, and A stays in it
+   * (T-1, part 2: it used to be wiped); B is judged on top of A. Both are
+   * approved. Base: two campaigns at R$ 10/dia = 52_500. `bTo` must fit with
+   * A, or the request for B is refused and this throws.
    */
   async function twoIncreasesAcrossAReconciliation(bTo: number) {
     const w = await world({ a: 1000, b: 1000 });
-    const a = await approved(w, 'a', 4000); // +78_750 → 131_250 once applied
+    const a = await approved(w, 'a', 4000); // +78_750 → 131_250
     await w.reconcile(at(0.25));
-    const wiped = await w.committed();
-    // A's reservation is gone (T-1)
-    if (wiped !== 52_500) throw new Error(`expected 52_500 after the reconcile, got ${wiped}`);
+    const kept = await w.committed();
+    if (kept !== 131_250) throw new Error(`expected 131_250 after the reconcile, got ${kept}`);
     const b = await approved(w, 'b', bTo, at(0.5));
     return { w, a, b };
   }

@@ -17,8 +17,10 @@ import { decideApproval, gateChange } from './approvals.js';
 import {
   applyReportedSpend,
   engageKillSwitch,
+  exposureOf,
   getPeriodState,
   openPeriod,
+  remainingDays,
   reserveChange,
 } from './budget-guard.js';
 import { executeApprovedChange } from './executor.js';
@@ -315,9 +317,10 @@ describe('the guardrails still apply at the moment of writing', () => {
     });
     expect(result).toMatchObject({ outcome: 'refused', reason: 'platform_drift' });
 
-    // The reservation is handed back, and the drift is recorded.
+    // The reservation is handed back, and the drift is recorded. What stays
+    // committed is the campaign as mirrored: it is still running.
     const state = await getPeriodState(db, s.accountId, PERIOD);
-    expect(state?.committedCents).toBe(0);
+    expect(state?.committedCents).toBe(exposureOf(2000, remainingDays(NOW)));
     const events = await db.query.adGuardrailEvents.findMany({
       where: eq(adGuardrailEvents.adAccountId, s.accountId),
     });
@@ -373,8 +376,9 @@ describe('a platform rejection', () => {
     });
 
     expect(result).toMatchObject({ outcome: 'rejected', code: '1487079' });
+    // The increase leaves the commitment; the campaign as it runs stays.
     const state = await getPeriodState(db, s.accountId, PERIOD);
-    expect(state?.committedCents).toBe(0);
+    expect(state?.committedCents).toBe(exposureOf(2000, remainingDays(NOW)));
   });
 });
 

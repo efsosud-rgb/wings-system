@@ -450,8 +450,14 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
       });
 
       if (!result.ok) {
+        // A month that no longer holds the change is a conflict with the
+        // budget's state, not a missing permission: it stays pending.
         const status =
-          result.reason === 'not_found' ? 404 : result.reason === 'already_decided' ? 409 : 403;
+          result.reason === 'not_found'
+            ? 404
+            : result.reason === 'approver_not_allowed' || result.reason === 'payload_changed'
+              ? 403
+              : 409;
         return reply.status(status).send({ error: result.reason, message: result.message });
       }
 

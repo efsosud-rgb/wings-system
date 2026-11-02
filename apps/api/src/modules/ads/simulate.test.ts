@@ -72,33 +72,17 @@ async function scene(
       externalId: `c_${randomBytes(4).toString('hex')}`,
       name: options.campaignName ?? 'Institucional',
       status: 'ACTIVE',
-      // A pause scene starts from zero and reserves its way up, mirroring how
-      // a running budget actually comes to hold exposure.
+      // A pause scene starts from a running budget: since part 2 of the
+      // budget locks the mirror alone holds its exposure (docs/ads/travas.md).
       dailyBudgetCents:
-        options.kind === 'pause_campaign' ? 0 : (options.campaignDailyBudgetCents ?? 0),
+        options.kind === 'pause_campaign'
+          ? (options.campaignDailyBudgetCents ?? 3000)
+          : (options.campaignDailyBudgetCents ?? 0),
       budgetLevel: options.budgetLevel ?? 'campaign',
       lastSyncedAt: NOW,
     })
     .returning({ id: adCampaigns.id });
   if (!campaign) throw new Error('failed');
-
-  // A pause releases exposure, so something has to be holding it first —
-  // otherwise the guard rightly refuses to drive committed below zero.
-  if (options.kind === 'pause_campaign') {
-    const running = await reserveChange(db, {
-      adAccountId: account.id,
-      campaignId: campaign.id,
-      kind: 'set_daily_budget',
-      toDailyBudgetCents: options.campaignDailyBudgetCents ?? 3000,
-      now: NOW,
-    });
-    if (!running.ok) throw new Error(`setup reservation refused: ${running.reason}`);
-    // The platform now reflects that budget, as execution would have left it.
-    await db
-      .update(adCampaigns)
-      .set({ dailyBudgetCents: options.campaignDailyBudgetCents ?? 3000 })
-      .where(eq(adCampaigns.id, campaign.id));
-  }
 
   const reserved = await reserveChange(db, {
     adAccountId: account.id,
@@ -235,6 +219,11 @@ describe('trying an alternative value', () => {
     expect(simulation.simulated).toBeNull();
     // Pausing releases exposure rather than adding it.
     expect(simulation.requested.campaignExposureCents).toBe(0);
+    // Waiting, it frees nothing: "without" is the month as it runs, and
+    // "with" the month once the pause has run.
+    const running = Math.round(3000 * remainingDays(NOW, 'America/Sao_Paulo') * 1.25);
+    expect(simulation.period.committedWithoutRequestCents).toBe(running);
+    expect(simulation.period.committedWithRequestCents).toBe(0);
     expect(simulation.requested.committedCents).toBeLessThanOrEqual(
       simulation.current.committedCents,
     );

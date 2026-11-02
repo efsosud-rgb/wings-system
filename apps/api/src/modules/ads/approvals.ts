@@ -8,7 +8,7 @@ import {
   roles,
 } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
-import { releaseReservation } from './budget-guard.js';
+import { approveWithinCeiling, releaseReservation, type ApprovalRefusal } from './budget-guard.js';
 import { formatBrl, type Cents } from './platform/money.js';
 
 /**
@@ -280,7 +280,7 @@ async function notify(
 }
 
 export type DecisionRefusal =
-  'not_found' | 'already_decided' | 'approver_not_allowed' | 'payload_changed';
+  'not_found' | 'approver_not_allowed' | 'payload_changed' | ApprovalRefusal;
 
 export type DecisionResult =
   | { ok: true; status: 'approved' | 'rejected' }
@@ -361,23 +361,12 @@ export async function decideApproval(
   // One decision wins (T-4). Approve, reject and the expiry job each move the
   // change only from `pending_approval`, under the period lock, so a second
   // decision at the same instant finds it already moved and changes nothing.
+  // Approving also judges the change against the commitment worked out now,
+  // the same number its request and its execution are judged by.
   const decided = await db.transaction(async (tx) => {
     if (input.decision === 'approved') {
-      await tx.execute(
-        sql`select id from ad_budget_periods where id = ${change.budgetPeriodId} for update`,
-      );
-      const [moved] = await tx
-        .update(adChangeRequests)
-        .set({ status: 'approved', decidedAt: now, decidedBy: input.approverEmployeeId })
-        .where(
-          and(
-            eq(adChangeRequests.id, change.id),
-            eq(adChangeRequests.status, 'pending_approval'),
-            eq(adChangeRequests.reservationActive, true),
-          ),
-        )
-        .returning({ id: adChangeRequests.id });
-      if (!moved) return false;
+      const moved = await approveWithinCeiling(tx, change.id, input.approverEmployeeId, now);
+      if (!moved.ok) return moved;
     } else {
       // Rejection frees the reserved exposure for other changes.
       const released = await releaseReservation(
@@ -390,7 +379,13 @@ export async function decideApproval(
           now,
         },
       );
-      if (!released) return false;
+      if (!released) {
+        return {
+          ok: false as const,
+          reason: 'already_decided' as const,
+          message: 'Esta solicitação já foi decidida ou expirou.',
+        };
+      }
     }
     await tx
       .update(adApprovalRequests)
@@ -401,15 +396,9 @@ export async function decideApproval(
         decisionReason: input.reason ?? null,
       })
       .where(eq(adApprovalRequests.id, approval.id));
-    return true;
+    return { ok: true as const };
   });
-  if (!decided) {
-    return {
-      ok: false,
-      reason: 'already_decided',
-      message: 'Esta solicitação já foi decidida ou expirou.',
-    };
-  }
+  if (!decided.ok) return decided;
 
   await writeAudit(db, {
     actorEmployeeId: input.approverEmployeeId,

@@ -292,7 +292,7 @@ describe('reservations', () => {
     if (!reserved.ok) throw new Error('expected reservation');
 
     const before = await getPeriodState(db, meta, PERIOD);
-    await releaseReservation(db, reserved.value.changeRequestId, 'rejected');
+    await releaseReservation(db, reserved.value.changeRequestId, 'rejected', null, { now: NOW });
     const after = await getPeriodState(db, meta, PERIOD);
 
     expect(before?.committedCents).toBeGreaterThan(0);
@@ -523,7 +523,7 @@ describe('ABO campaigns refuse campaign-level budget changes', () => {
 });
 
 describe('a pause on a campaign the period never counted', () => {
-  it('is accepted, with the commitment floored at zero', async () => {
+  it('is accepted, and frees nothing until it runs', async () => {
     const accountId = await makeAccount('meta');
     // Mirrored from the platform but never reconciled into the commitment.
     const campaignId = await makeCampaign(accountId, 5000);
@@ -538,6 +538,7 @@ describe('a pause on a campaign the period never counted', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.exposureDeltaCents).toBeLessThan(0);
-    expect(result.value.period.committedCents).toBe(0);
+    // The campaign is still spending: the commitment is what it can cost.
+    expect(result.value.period.committedCents).toBe(exposureOf(5000, remainingDays(NOW)));
   });
 });
