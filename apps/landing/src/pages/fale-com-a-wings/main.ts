@@ -5,7 +5,12 @@ import { browserBeacon, eventSender, visitIdOf } from '../../lib/events.js';
 import { primeInlineFonts } from '../../lib/fonts.js';
 import { deferGtm } from '../../lib/gtm.js';
 import { readRuntimeConfig } from '../../lib/runtime-config.js';
-import { captureOrigin, dataLayerOriginOf, trackingPayloadOf } from '../../lib/tracking.js';
+import {
+  captureOrigin,
+  dataLayerOriginOf,
+  documentCookies,
+  trackingPayloadOf,
+} from '../../lib/tracking.js';
 import { applyWhatsappUrl } from '../../lib/whatsapp.js';
 import { setupForm } from './form.js';
 import type { GyroState, PointerState, Scene3d } from './scene.js';
@@ -298,7 +303,7 @@ const form = setupForm({
   slug: SLUG,
   apiBase: config.apiBase,
   reduce,
-  tracking: () => trackingPayloadOf(origin),
+  tracking: () => trackingPayloadOf(origin, documentCookies()),
   whatsappUrl: () => whatsappUrl,
   // the lead is already with the API; the event waits for GTM, never the other way round
   onSent: (answer) =>

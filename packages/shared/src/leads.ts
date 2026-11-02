@@ -1692,6 +1692,9 @@ export const SITE_FORM_TRACKING_KEYS = [
   'hsa_grp',
   'hsa_ad',
   'referrer',
+  // Meta's browser ids, from the pixel's `_fbc` / `_fbp` cookies (docs/ads/fechar-ciclo.md).
+  'fbc',
+  'fbp',
 ] as const;
 export type SiteFormTrackingKey = (typeof SITE_FORM_TRACKING_KEYS)[number];
 

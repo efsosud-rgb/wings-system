@@ -28,6 +28,8 @@ export const TRACKING_KEYS = [
   'hsa_grp',
   'hsa_ad',
   'referrer',
+  'fbc',
+  'fbp',
 ] as const;
 
 export type TrackingKey = (typeof TRACKING_KEYS)[number];
@@ -35,9 +37,12 @@ export type TrackingKey = (typeof TRACKING_KEYS)[number];
 export type OriginKey = TrackingKey | 'utm_id';
 export type Tracking = Partial<Record<OriginKey, string>>;
 
-/** The keys read from the address; the referrer comes from the document. */
+/** Not read from the address: the referrer comes from the document, `fbc`/`fbp` from cookies. */
+const NOT_IN_URL: readonly TrackingKey[] = ['referrer', 'fbc', 'fbp'];
+
+/** The keys read from the address. */
 export const URL_TRACKING_KEYS: readonly OriginKey[] = [
-  ...TRACKING_KEYS.filter((key) => key !== 'referrer'),
+  ...TRACKING_KEYS.filter((key) => !NOT_IN_URL.includes(key)),
   'utm_id',
 ];
 
@@ -120,12 +125,48 @@ export function captureOrigin(
   return { now: current, first, referrer: referrer.slice(0, TRACKING_VALUE_MAX) };
 }
 
-/** What the POST sends: the first touch, this visit's keys over it, and the referrer. */
-export function trackingPayloadOf(origin: Origin): Tracking {
+/** Meta's pixel cookies, as Meta writes them (`fb.1.<ms>.<id>`). */
+const FBC_COOKIE = /^fb\.\d\.\d{10,13}\.\S+$/;
+const FBP_COOKIE = /^fb\.\d\.\d{10,13}\.\d+$/;
+
+function cookieOf(cookies: string, name: string): string | null {
+  for (const part of cookies.split(';')) {
+    const [key, ...rest] = part.trim().split('=');
+    if (key === name) return rest.join('=') || null;
+  }
+  return null;
+}
+
+/**
+ * Meta's browser ids (docs/ads/fechar-ciclo.md): `_fbp` and `_fbc` as the pixel set them. Without
+ * the `_fbc` cookie, `fbc` is built from the fbclid as Meta describes, with the moment the click id
+ * was first seen: this visit's, or the stored first touch's.
+ */
+function metaBrowserIdsOf(origin: Origin, cookies: string, now: () => number): Tracking {
+  const ids: Tracking = {};
+  const fbp = cookieOf(cookies, '_fbp');
+  if (fbp && FBP_COOKIE.test(fbp)) ids.fbp = fbp;
+  const fbc = cookieOf(cookies, '_fbc');
+  const fbclid = origin.now.fbclid ?? origin.first?.fbclid;
+  if (fbc && FBC_COOKIE.test(fbc)) ids.fbc = fbc;
+  else if (fbclid) {
+    const seenAt = origin.now.fbclid ? now() : (origin.first?.ts ?? now());
+    ids.fbc = `fb.1.${seenAt}.${fbclid}`;
+  }
+  return ids;
+}
+
+/** What the POST sends: the first touch, this visit's keys over it, the referrer and Meta's browser ids. */
+export function trackingPayloadOf(
+  origin: Origin,
+  cookies = '',
+  now: () => number = Date.now,
+): Tracking {
   const merged: Record<string, unknown> = {
     ...(origin.first ?? {}),
     ...origin.now,
     ...(origin.referrer ? { referrer: origin.referrer } : {}),
+    ...metaBrowserIdsOf(origin, cookies, now),
   };
   const payload: Tracking = {};
   for (const key of TRACKING_KEYS) {
@@ -133,6 +174,15 @@ export function trackingPayloadOf(origin: Origin): Tracking {
     if (typeof value === 'string' && value) payload[key] = value.slice(0, TRACKING_VALUE_MAX);
   }
   return payload;
+}
+
+/** The page's cookies, or none where the browser refuses to read them. */
+export function documentCookies(): string {
+  try {
+    return document.cookie;
+  } catch {
+    return '';
+  }
 }
 
 /** The `origem` the dataLayer events carry: the first touch, else this visit's keys. */
