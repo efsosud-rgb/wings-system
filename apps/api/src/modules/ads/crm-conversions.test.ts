@@ -283,15 +283,13 @@ describe('a lead without a platform id', () => {
   it('with a click id from the site, sends fbc (built from the fbclid) without hashing anything', async () => {
     const { lead: row } = await setup('meta', { source: 'site_form', externalId: null });
     const seen = new Date('2026-10-30T08:59:00.000Z');
-    await db
-      .insert(leadAdIdentifiers)
-      .values({
-        leadId: row.id,
-        kind: 'fbclid',
-        value: 'IwAR-teste',
-        source: 'site_form',
-        capturedAt: seen,
-      });
+    await db.insert(leadAdIdentifiers).values({
+      leadId: row.id,
+      kind: 'fbclid',
+      value: 'IwAR-teste',
+      source: 'site_form',
+      capturedAt: seen,
+    });
     const sim = platforms();
     await cycle(envOf(META_ON), sim.fetchImpl);
     const [send] = await sendsOf(row.id);
