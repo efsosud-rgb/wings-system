@@ -15,7 +15,7 @@ import type { Database } from '../../db/client.js';
 import { leadEvents, leadStageHistory, leadTasks, leads } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { loadHolidays } from '../../lib/holidays.js';
-import { freezeClockAtMinuteEnd } from '../../test/clock.js';
+import { freezeClockAtMinuteEnd, WORKING_MINUTE } from '../../test/clock.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
 import type { LoadedLead } from './service.js';
@@ -247,9 +247,9 @@ describe('the rotation and the first-contact task', () => {
       },
     });
     expect(set.statusCode).toBe(200);
-    // The minute that just ended, never ahead of the real clock: the rotation orders sellers by the
-    // instant of their last lead, and the next two arrive on the real clock.
-    const arrivedAt = freezeClockAtMinuteEnd(new Date(Date.now() - 60_000));
+    // In the past: the rotation orders sellers by the instant of their last lead, and the next two
+    // arrive on the real clock, after it.
+    const arrivedAt = freezeClockAtMinuteEnd(WORKING_MINUTE);
     const first = await arrive('5511911110001', 'Lead Um');
     vi.useRealTimers();
     const second = await arrive('5511911110002', 'Lead Dois');
@@ -269,7 +269,7 @@ describe('the rotation and the first-contact task', () => {
     // One working hour (Mon–Fri 9h–18h São Paulo) from the instant the code read: the same instant
     // the shared helper gives. Not from created_at, the database's earlier stamp of the transaction.
     expect(tasks[0]!.dueAt).toEqual(addBusinessHours(arrivedAt, 1, await loadHolidays(db)));
-    expect(tasks[0]!.dueAt.getTime()).toBeGreaterThan(tasks[0]!.createdAt.getTime());
+    expect(tasks[0]!.dueAt.getTime()).toBeGreaterThan(arrivedAt.getTime());
 
     // Pause B: the next two go to A.
     await app.inject({

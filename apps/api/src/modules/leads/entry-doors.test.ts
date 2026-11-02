@@ -13,7 +13,7 @@ import {
 } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { loadHolidays } from '../../lib/holidays.js';
-import { freezeClockAtMinuteEnd } from '../../test/clock.js';
+import { freezeClockAtMinuteEnd, WORKING_MINUTE } from '../../test/clock.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
 
@@ -121,7 +121,7 @@ describe('the doors a new lead comes through', () => {
         },
       }),
     ).toString('base64')}`;
-    const arrivedAt = freezeClockAtMinuteEnd();
+    const arrivedAt = freezeClockAtMinuteEnd(WORKING_MINUTE);
     const delivered = await app.inject({
       method: 'POST',
       url: '/integrations/rd-station/webhook',
@@ -163,7 +163,7 @@ describe('the doors a new lead comes through', () => {
       { pipeline: 'formatacao', name: 'Reativar - 01/2026', position: 1 },
       { pipeline: 'formatacao', name: 'Sem contato', position: 1 },
     ]);
-    const arrivedAt = freezeClockAtMinuteEnd();
+    const arrivedAt = freezeClockAtMinuteEnd(WORKING_MINUTE);
     const sent = await app.inject({
       method: 'POST',
       url: '/public/site-forms/lp-porta-fmt',

@@ -1,6 +1,13 @@
 import { vi } from 'vitest';
 
 /**
+ * Tuesday 27/10/2026, 11:59 in São Paulo: working hours, no holiday, and in the past, so rows the
+ * test made on the real clock come after it. At night or on a weekend every instant becomes the
+ * next 9h and a deadline a minute off would still pass: a deadline test stops the clock here.
+ */
+export const WORKING_MINUTE = new Date('2026-10-27T14:59:00.000Z');
+
+/**
  * Stops the clock at the end of the minute of `from` (hh:mm:59.900) and returns that instant.
  * A test that checks a time the code rounds to the minute or the day computes the expected
  * value from this instant, never from a second `new Date()` or from a row's `created_at` (the
