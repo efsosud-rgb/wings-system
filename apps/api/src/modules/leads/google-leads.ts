@@ -10,7 +10,7 @@ import { answersPhone, resolveGoogleSource, upsertLead } from './service.js';
  * Google Ads lead forms (YouTube, Search, Discovery) → Funil, by webhook
  * (docs/leads/formularios.md). Google posts one lead per request:
  *
- *   { lead_id, form_id, campaign_id, adgroup_id, creative_id, gcl_id,
+ *   { lead_id, form_id, campaign_id, adgroup_id, creative_id, gcl_id (kept as the gclid),
  *     google_key, is_test, api_version,
  *     user_column_data: [{ column_id, column_name, string_value }] }
  *
@@ -25,6 +25,8 @@ export interface GoogleLead {
   campaignId: string | null;
   adgroupId: string | null;
   creativeId: string | null;
+  /** The click's GCLID, kept for closing the loop (docs/ads/fechar-ciclo.md). */
+  gclId: string | null;
   isTest: boolean;
   key: string | undefined;
   name: string | null;
@@ -87,6 +89,7 @@ export function googleLeadOf(body: unknown): GoogleLead | null {
     campaignId: str(raw.campaign_id),
     adgroupId: str(raw.adgroup_id),
     creativeId: str(raw.creative_id),
+    gclId: str(raw.gcl_id),
     isTest: raw.is_test === true || raw.is_test === 'true',
     key: typeof raw.google_key === 'string' ? raw.google_key : undefined,
     name: name ?? ([first, last].filter(Boolean).join(' ') || null),
@@ -177,6 +180,7 @@ export async function ingestGoogleLead(
       adCampaignExternalId: lead.campaignId,
       adSetExternalId: lead.adgroupId,
       adExternalId: lead.creativeId,
+      gclid: lead.gclId,
       utmSource: 'google',
     },
     event: {

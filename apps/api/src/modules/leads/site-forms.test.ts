@@ -10,6 +10,7 @@ import {
   crmDistributionMembers,
   crmNotifications,
   jobs,
+  leadAdIdentifiers,
   leadEvents,
   leads,
   leadSourceRules,
@@ -21,6 +22,7 @@ import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
 import { FALE_COM_A_WINGS } from '../../db/seed.js';
+import { shapeOf } from '../media/kairogen-adapter.js';
 import { answerPipelineOf, instagramHandleOf } from './site-forms.js';
 import { configureLeadTriage, type TriageTarget } from './triage-schedule.js';
 
@@ -365,6 +367,68 @@ describe('site form (T5)', () => {
     const same = await db.select().from(leads).where(eq(leads.email, 'pessoa.teste@example.com'));
     expect(same).toHaveLength(1);
     expect(same[0]?.utmCampaign).toBe('expansao_cenoritas_out26');
+  });
+
+  it('keeps the ad identifiers with the door and the moment; the logged shape carries none', async () => {
+    const turnstile = captcha();
+    const app = await makeApp(
+      { TURNSTILE_SECRET_KEY: '0x4AAAAAAA-secret' },
+      { captchaFetch: turnstile.fetchImpl },
+    );
+    const payload = form({
+      email: 'pessoa.ids@example.com',
+      phone: '(21) 98888-0177',
+      tracking: {
+        fbclid: 'IwAR-teste-1',
+        gclid: 'Cj0KCQ-teste-1',
+        fbc: 'fb.1.1761955200000.IwAR-teste-1',
+        fbp: 'fb.1.1761955200000.1234567890',
+      },
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/public/site-forms/cenoritas',
+      payload,
+    });
+    expect(response.statusCode).toBe(200);
+    const [lead] = await db.select().from(leads).where(eq(leads.email, 'pessoa.ids@example.com'));
+    const ids = await db
+      .select()
+      .from(leadAdIdentifiers)
+      .where(eq(leadAdIdentifiers.leadId, lead!.id));
+    expect(ids.map((id) => [id.kind, id.value, id.source]).sort()).toEqual([
+      ['fbc', 'fb.1.1761955200000.IwAR-teste-1', 'site_form'],
+      ['fbclid', 'IwAR-teste-1', 'site_form'],
+      ['fbp', 'fb.1.1761955200000.1234567890', 'site_form'],
+      ['gclid', 'Cj0KCQ-teste-1', 'site_form'],
+    ]);
+    expect(ids.every((id) => id.capturedAt.getTime() === lead!.enteredAt.getTime())).toBe(true);
+    // The route logs only the body's shape: lengths, never the values.
+    const logged = JSON.stringify(shapeOf(payload));
+    for (const value of ['IwAR-teste-1', 'Cj0KCQ-teste-1', '1234567890']) {
+      expect(logged).not.toContain(value);
+    }
+  });
+
+  it("drops an fbc or fbp out of Meta's shape", async () => {
+    const turnstile = captcha();
+    const app = await makeApp(
+      { TURNSTILE_SECRET_KEY: '0x4AAAAAAA-secret' },
+      { captchaFetch: turnstile.fetchImpl },
+    );
+    await app.inject({
+      method: 'POST',
+      url: '/public/site-forms/cenoritas',
+      payload: form({
+        email: 'pessoa.ids2@example.com',
+        phone: '(21) 98888-0178',
+        tracking: { fbc: 'qualquer-coisa', fbp: 'fb.1.123.abc' },
+      }),
+    });
+    const [lead] = await db.select().from(leads).where(eq(leads.email, 'pessoa.ids2@example.com'));
+    expect(
+      await db.select().from(leadAdIdentifiers).where(eq(leadAdIdentifiers.leadId, lead!.id)),
+    ).toEqual([]);
   });
 
   it('refuses a body without consent or with a phone without DDD, keeping nothing', async () => {

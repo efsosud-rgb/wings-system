@@ -22,6 +22,7 @@ import {
   leads,
   leadTasks,
   rdUserMap,
+  leadAdIdentifiers,
   leadStageHistory,
 } from '../../db/schema/index.js';
 import { rdCrmGetter } from '../ads/funnel-sync.js';
@@ -997,6 +998,8 @@ export async function undoRdImportBatch(
       await tx.delete(leadTasks).where(inArray(leadTasks.leadId, chunk));
       // The arrival notices of a lead the hourly follow-up gave to the rotation.
       await tx.delete(crmNotifications).where(inArray(crmNotifications.leadId, chunk));
+      // A later arrival may have left ad identifiers on it; an import's lead is never sent (no outbox row).
+      await tx.delete(leadAdIdentifiers).where(inArray(leadAdIdentifiers.leadId, chunk));
       await tx.delete(leadStageHistory).where(inArray(leadStageHistory.leadId, chunk));
       await tx.delete(leads).where(inArray(leads.id, chunk));
     }
