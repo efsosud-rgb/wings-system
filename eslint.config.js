@@ -62,6 +62,23 @@ export default tseslint.config(
     },
   },
   {
+    // A deadline rounded to the minute, recomputed from a row's created_at, compares two instants:
+    // the database stamps created_at at the start of its transaction, the code read its own clock
+    // later (CI of PR #67, 30/10/2026). Stop the clock and use that instant (apps/api/src/test/clock.ts).
+    files: ['**/*.test.ts', '**/*.test.tsx'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            "CallExpression[callee.name=/^(addBusinessHours|nextBusinessInstant|endOfBusinessDay)$/][arguments.0.property.name='createdAt']",
+          message:
+            'Expected deadline from created_at (database clock): stop the clock with freezeClockAtMinuteEnd and compute it from that instant.',
+        },
+      ],
+    },
+  },
+  {
     rules: {
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       // Personal data must never reach logs or the console (LGPD).

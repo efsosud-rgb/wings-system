@@ -9,12 +9,13 @@ import {
 } from '@wings/shared';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
 import { leadEvents, leadStageHistory, leadTasks, leads } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { loadHolidays } from '../../lib/holidays.js';
+import { freezeClockAtMinuteEnd, WORKING_MINUTE } from '../../test/clock.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
 import type { LoadedLead } from './service.js';
@@ -43,6 +44,10 @@ beforeAll(async () => {
 afterAll(async () => {
   await app?.close();
   await harness?.drop();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 type Role = 'admin_master' | 'gerente_comercial' | 'vendedor_expansao' | 'vendedor_formatacao';
@@ -242,7 +247,11 @@ describe('the rotation and the first-contact task', () => {
       },
     });
     expect(set.statusCode).toBe(200);
+    // In the past: the rotation orders sellers by the instant of their last lead, and the next two
+    // arrive on the real clock, after it.
+    const arrivedAt = freezeClockAtMinuteEnd(WORKING_MINUTE);
     const first = await arrive('5511911110001', 'Lead Um');
+    vi.useRealTimers();
     const second = await arrive('5511911110002', 'Lead Dois');
     const third = await arrive('5511911110003', 'Lead Três');
     const owners = [first, second, third].map((r) => r.lead.ownerEmployeeId);
@@ -257,11 +266,10 @@ describe('the rotation and the first-contact task', () => {
       auto: true,
       assigneeEmployeeId: first.lead.ownerEmployeeId,
     });
-    // One working hour (Mon–Fri 9h–18h São Paulo): the same instant the shared helper gives.
-    expect(tasks[0]!.dueAt).toEqual(
-      addBusinessHours(tasks[0]!.createdAt, 1, await loadHolidays(db)),
-    );
-    expect(tasks[0]!.dueAt.getTime()).toBeGreaterThan(tasks[0]!.createdAt.getTime());
+    // One working hour (Mon–Fri 9h–18h São Paulo) from the instant the code read: the same instant
+    // the shared helper gives. Not from created_at, the database's earlier stamp of the transaction.
+    expect(tasks[0]!.dueAt).toEqual(addBusinessHours(arrivedAt, 1, await loadHolidays(db)));
+    expect(tasks[0]!.dueAt.getTime()).toBeGreaterThan(arrivedAt.getTime());
 
     // Pause B: the next two go to A.
     await app.inject({

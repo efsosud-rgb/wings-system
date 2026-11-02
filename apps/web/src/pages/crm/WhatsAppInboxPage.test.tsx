@@ -263,7 +263,10 @@ beforeEach(() => {
   state.actions = [];
   state.typed = 0;
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 function renderAt(path: string) {
   render(
@@ -299,13 +302,14 @@ describe('the WhatsApp screen', () => {
   });
 
   it('reads as WhatsApp Desktop: initials, the time of today by the clock, older ones by day', () => {
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
+    // The screen reads its own clock: stopped at 23:59:59.9 (browser time), a midnight turning
+    // between building the rows and drawing them cannot move "today" to "Ontem".
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date(2026, 9, 14, 23, 59, 59, 900) });
     state.listQuery = {
       data: {
         conversations: [
-          { ...rows[0]!, lastAt: new Date(new Date().setHours(9, 7, 0, 0)).toISOString() },
-          { ...rows[1]!, lastAt: yesterday.toISOString() },
+          { ...rows[0]!, lastAt: new Date(2026, 9, 14, 9, 7).toISOString() },
+          { ...rows[1]!, lastAt: new Date(2026, 9, 13, 23, 59, 59, 900).toISOString() },
           // A profile name in a "fancy" alphabet: two UTF-16 units per letter.
           { ...rows[1]!, conversationId: 'c3', profileName: '𝓜𝓪𝓻𝓲𝓪 𝓢𝓸𝓾𝔃𝓪' },
         ],
