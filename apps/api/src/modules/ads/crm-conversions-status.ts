@@ -11,7 +11,7 @@ import { and, asc, eq, gte, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { adConversionSends, adConversionStageEvents, crmStages } from '../../db/schema/index.js';
 import type { Env } from '../../env.js';
-import { conversionsSince, missingConfig, platformEnabled } from './crm-conversions.js';
+import { conversionsSince, missingConfig, platformEnabled, rehearsing } from './crm-conversions.js';
 
 /**
  * The panel of closing the loop: per platform, what went, what failed and why,
@@ -57,6 +57,7 @@ async function platformStatus(
     db
       .select({
         sent: sql<string>`count(*) filter (where ${adConversionSends.state} = 'sent')`,
+        validated: sql<string>`count(*) filter (where ${adConversionSends.state} = 'validated')`,
         pending: sql<string>`count(*) filter (where ${adConversionSends.state} in ('pending', 'sending'))`,
         failed: sql<string>`count(*) filter (where ${adConversionSends.state} = 'failed')`,
         skipped: sql<string>`count(*) filter (where ${adConversionSends.state} = 'skipped')`,
@@ -90,6 +91,7 @@ async function platformStatus(
     enabled: platformEnabled(env, platform),
     missing: missingConfig(env, platform),
     sent: Number(counts?.sent ?? 0),
+    validated: Number(counts?.validated ?? 0),
     pending: Number(counts?.pending ?? 0),
     failed: Number(counts?.failed ?? 0),
     skipped: Number(counts?.skipped ?? 0),
@@ -114,7 +116,8 @@ export async function conversionsPanel(
   return {
     since: conversionsSince(env)?.toISOString() ?? null,
     hashedEnabled: env.CRM_CONVERSIONS_HASHED_ENABLED === 'true',
-    googleValidateOnly: env.CRM_CONVERSIONS_GOOGLE_VALIDATE_ONLY !== 'false',
+    googleValidateOnly: rehearsing(env, 'google'),
+    metaTestEvents: Boolean(env.CRM_CONVERSIONS_META_TEST_EVENT_CODE),
     platforms,
     mappings,
   };

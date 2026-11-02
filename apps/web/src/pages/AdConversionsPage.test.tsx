@@ -36,12 +36,14 @@ const loaded: ConversionsPanel = {
   since: '2026-10-20T03:00:00.000Z',
   hashedEnabled: false,
   googleValidateOnly: true,
+  metaTestEvents: false,
   platforms: [
     {
       platform: 'meta',
       enabled: true,
       missing: [],
       sent: 12,
+      validated: 4,
       pending: 2,
       failed: 1,
       skipped: 3,
@@ -54,6 +56,7 @@ const loaded: ConversionsPanel = {
       enabled: false,
       missing: ['CRM_CONVERSIONS_GOOGLE_REFRESH_TOKEN'],
       sent: 0,
+      validated: 0,
       pending: 0,
       failed: 0,
       skipped: 0,
@@ -88,6 +91,8 @@ describe('AdConversionsPage', () => {
     expect(meta.textContent).toContain('Ligado');
     expect(meta.textContent).toContain('12');
     expect(meta.textContent).toContain('http_400:100');
+    // What only a rehearsal took is counted apart, never as sent.
+    expect(meta.textContent).toMatch(/Só validados[^]*4/);
     expect(meta.textContent).toContain('Sem identificador');
     const google = screen.getByRole('region', { name: 'Google Ads' });
     expect(google.textContent).toContain('Desligado');

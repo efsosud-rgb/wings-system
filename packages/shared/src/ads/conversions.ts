@@ -28,7 +28,18 @@ export const AD_IDENTIFIER_KINDS = [
 ] as const;
 export type AdIdentifierKind = (typeof AD_IDENTIFIER_KINDS)[number];
 
-export const CONVERSION_SEND_STATES = ['pending', 'sending', 'sent', 'failed', 'skipped'] as const;
+/**
+ * `validated`: a 200 to Google's `validateOnly`, which records nothing. Never counts as sent, and
+ * goes back to `pending` when validation is switched off.
+ */
+export const CONVERSION_SEND_STATES = [
+  'pending',
+  'sending',
+  'sent',
+  'validated',
+  'failed',
+  'skipped',
+] as const;
 export type ConversionSendState = (typeof CONVERSION_SEND_STATES)[number];
 
 /** Why a stage event was not sent. */
@@ -92,6 +103,8 @@ export interface ConversionPlatformStatus {
   /** Credentials and destination present; what is missing, by variable name. */
   missing: string[];
   sent: number;
+  /** Only validated by Google (`validateOnly`): not recorded yet, they go when validation is off. */
+  validated: number;
   pending: number;
   failed: number;
   skipped: number;
@@ -108,6 +121,11 @@ export interface ConversionsPanel {
   hashedEnabled: boolean;
   /** Google's requests only validate, nothing is recorded (CRM_CONVERSIONS_GOOGLE_VALIDATE_ONLY). */
   googleValidateOnly: boolean;
+  /**
+   * Meta's events carry the "Testar eventos" code (CRM_CONVERSIONS_META_TEST_EVENT_CODE). They still
+   * count at Meta (it does not drop them), so they are sent and never sent again.
+   */
+  metaTestEvents: boolean;
   platforms: ConversionPlatformStatus[];
   mappings: ConversionMapping[];
 }

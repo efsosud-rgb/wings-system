@@ -708,7 +708,6 @@ const schema = z.object({
     .default('false')
     .transform((value) => value === 'true'),
 
-  /** Google Workspace SMTP. Optional in development; required in production. */
   /**
    * Closing the loop (docs/ads/fechar-ciclo.md): CRM stages sent to Meta and Google as events. Each
    * platform has its own switch, Eric's, off unless "true"; nothing is queued or sent while off.
@@ -745,10 +744,11 @@ const schema = z.object({
     'must be digits',
   ),
   META_CAPI_TOKEN: optionalString,
-  /** Events Manager's "Testar eventos" code; with it the events show only there. */
+  /** "Testar eventos" code (Events Manager). Meta still keeps those events: they are real sends. */
   CRM_CONVERSIONS_META_TEST_EVENT_CODE: optionalString,
   /** Authorised for the Data Manager scope, with the GOOGLE_ADS_CLIENT_ID/SECRET client. */
   CRM_CONVERSIONS_GOOGLE_REFRESH_TOKEN: optionalString,
+  /** Google Workspace SMTP. Optional in development; required in production. */
   SMTP_HOST: optionalString,
   SMTP_PORT: z.coerce.number().int().positive().default(587),
   SMTP_USER: optionalString,

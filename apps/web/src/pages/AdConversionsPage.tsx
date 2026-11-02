@@ -37,6 +37,8 @@ function PlatformCard({ status }: { status: ConversionPlatformStatus }) {
       <dl className="conversion-stats">
         <dt>Enviados</dt>
         <dd>{status.sent}</dd>
+        <dt>Só validados (vão quando a validação for desligada)</dt>
+        <dd>{status.validated}</dd>
         <dt>Na fila</dt>
         <dd>{status.pending}</dd>
         <dt>Falharam</dt>
@@ -229,7 +231,11 @@ export function AdConversionsPage() {
               ? formatDateTime(panel.data.since)
               : '— não definida (CRM_CONVERSIONS_SINCE): nada é enviado'}
             . E-mail e telefone com hash: {panel.data.hashedEnabled ? 'ligado' : 'desligado'}.
-            Google: {panel.data.googleValidateOnly ? 'só valida, nada é gravado' : 'grava'}.
+            Google: {panel.data.googleValidateOnly ? 'só valida, nada é gravado' : 'grava'}. Meta:{' '}
+            {panel.data.metaTestEvents
+              ? 'código de "Testar eventos" ligado (a Meta grava esses eventos e eles não são reenviados)'
+              : 'grava'}
+            .
           </p>
           <div className="grid-2">
             {panel.data.platforms.map((status) => (

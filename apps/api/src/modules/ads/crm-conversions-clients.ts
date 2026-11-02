@@ -53,6 +53,11 @@ export interface BuiltEvent {
   /** Names of the user fields, never values. */
   fields: string[];
   body: string;
+  /**
+   * Sent to Google with `validateOnly`: a 200 records nothing. Meta's test event code is not one:
+   * "Events sent with test_event_code are not dropped" (they count), so it is a real send.
+   */
+  rehearsal: boolean;
 }
 
 export type SendOutcome =
@@ -60,7 +65,12 @@ export type SendOutcome =
   /** The platform did not take it and a new try is safe. */
   | { kind: 'retry'; code: string; shape?: unknown }
   /** Refused, or it may have arrived and a new try could count it twice. */
-  | { kind: 'failed'; code: string; shape?: unknown };
+  | { kind: 'failed'; code: string; shape?: unknown }
+  /** The token or its permission was refused: nothing of the batch was taken, it all waits. */
+  | { kind: 'auth'; code: string; shape?: unknown };
+
+/** Meta's lead id is digits only; anything else is not used (it would also break the JSON below). */
+const META_LEAD_ID = /^\d{5,25}$/;
 
 /**
  * Meta. With the instant form's lead id, the CRM integration's event (the id unhashed, as a
@@ -74,8 +84,9 @@ export function metaEventOf(
 ): BuiltEvent | null {
   const userData: Record<string, unknown> = {};
   let identifierKind: IdentifierKind;
-  if (keys.metaLeadId) {
-    userData.lead_id = keys.metaLeadId;
+  const metaLeadId = keys.metaLeadId && META_LEAD_ID.test(keys.metaLeadId) ? keys.metaLeadId : null;
+  if (metaLeadId) {
+    userData.lead_id = metaLeadId;
     identifierKind = 'meta_lead_id';
   } else {
     if (keys.fbc) userData.fbc = keys.fbc;
@@ -106,10 +117,15 @@ export function metaEventOf(
   };
   let json = JSON.stringify(body);
   // Meta's lead id is an integer of 15-17 digits, past what a JS number holds exactly.
-  if (keys.metaLeadId) {
-    json = json.replace(`"lead_id":"${keys.metaLeadId}"`, `"lead_id":${keys.metaLeadId}`);
+  if (metaLeadId) {
+    json = json.replace(`"lead_id":"${metaLeadId}"`, `"lead_id":${metaLeadId}`);
   }
-  return { identifierKind, fields: Object.keys(userData), body: json };
+  return {
+    identifierKind,
+    fields: Object.keys(userData),
+    body: json,
+    rehearsal: false,
+  };
 }
 
 /**
@@ -162,6 +178,7 @@ export function googleEventOf(
     identifierKind: clicks.length ? 'click_id' : 'hashed',
     fields: [...clicks, ...userIdentifiers.flatMap((id) => Object.keys(id))],
     body: JSON.stringify(body),
+    rehearsal: options.validateOnly,
   };
 }
 
@@ -177,8 +194,12 @@ function thrownOutcome(error: unknown, retryWhenUnsure: boolean): SendOutcome {
   return retryWhenUnsure ? { kind: 'retry', code } : { kind: 'failed', code };
 }
 
+/** Meta answers an expired or revoked token with error code 190 (OAuthException), often as a 400. */
 function answeredOutcome(status: number, code: string, shape: unknown): SendOutcome {
   const full = code ? `http_${status}:${code}` : `http_${status}`;
+  if (status === 401 || status === 403 || code === '190' || code.startsWith('190.')) {
+    return { kind: 'auth', code: full, shape };
+  }
   return status === 429 || status >= 500
     ? { kind: 'retry', code: full, shape }
     : { kind: 'failed', code: full, shape };

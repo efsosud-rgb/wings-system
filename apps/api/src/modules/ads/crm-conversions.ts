@@ -25,6 +25,10 @@ import {
  *    hashes e-mail and phone in memory when allowed, sends one event per call
  *    and writes the outcome: sent, back to the queue with a delay (a failure a
  *    new try cannot double), failed (refused, or may have arrived), or skipped.
+ *    A 200 to Google's validateOnly is `validated`, never sent: those rows go
+ *    back to the queue once validation is off. (Meta's test event code is not a
+ *    rehearsal: Meta keeps those events, so they are sent, and never again.)
+ *    A refused token puts the whole batch back, no try spent.
  *
  * Each platform has its own switch and nothing is queued or sent while it is
  * off, before CRM_CONVERSIONS_SINCE, or without its credentials. Logs carry
@@ -84,6 +88,31 @@ export function missingConfig(env: Env, platform: ConversionPlatform): string[] 
 
 const ready = (env: Env, platform: ConversionPlatform) =>
   platformEnabled(env, platform) && missingConfig(env, platform).length === 0;
+
+/**
+ * The platform takes the events to check them and records nothing: Google's validateOnly, the
+ * default. Never Meta: its test event code still records the event ("not dropped", docs 02/11).
+ */
+export function rehearsing(env: Env, platform: ConversionPlatform): boolean {
+  return platform === 'google' && env.CRM_CONVERSIONS_GOOGLE_VALIDATE_ONLY !== 'false';
+}
+
+/** Rehearsal off: what only a rehearsal took goes back to the queue, its tries counted afresh. */
+async function requeueValidated(db: Database, platform: ConversionPlatform, now: Date) {
+  await db
+    .update(adConversionSends)
+    .set({ state: 'pending', attempts: 0, nextAttemptAt: now, updatedAt: now })
+    .where(and(eq(adConversionSends.platform, platform), eq(adConversionSends.state, 'validated')));
+}
+
+/** Rows claimed and not sent go back as they were: the try they were given is undone. */
+async function release(db: Database, ids: string[], now: Date) {
+  if (ids.length === 0) return;
+  await db
+    .update(adConversionSends)
+    .set({ state: 'pending', attempts: sql`${adConversionSends.attempts} - 1`, updatedAt: now })
+    .where(and(inArray(adConversionSends.id, ids), eq(adConversionSends.state, 'sending')));
+}
 
 /** Writes the outbox rows owed for one platform; answers how many are new. */
 export async function enqueueStageEvents(
@@ -290,7 +319,7 @@ async function decide(db: Database, env: Env, row: SendRow, now: Date): Promise<
     const built = metaEventOf(
       { sendId: row.id, eventName: row.eventName, eventTime: row.eventTime },
       matchKeysOf(lead, found, row.eventTime, () => true),
-      { hashed, testEventCode: env.CRM_CONVERSIONS_META_TEST_EVENT_CODE ?? null },
+      { hashed, testEventCode: env.CRM_CONVERSIONS_META_TEST_EVENT_CODE || null },
     );
     return built ? { kind: 'send', built } : { kind: 'skip', reason: 'no_identifier' };
   }
@@ -307,7 +336,7 @@ async function decide(db: Database, env: Env, row: SendRow, now: Date): Promise<
     { customerId: env.GOOGLE_ADS_CUSTOMER_ID ?? '', conversionActionId: row.destination ?? '' },
     {
       hashed: hashed && age(lead.enteredAt) <= GOOGLE_HASHED_MS,
-      validateOnly: env.CRM_CONVERSIONS_GOOGLE_VALIDATE_ONLY !== 'false',
+      validateOnly: rehearsing(env, 'google'),
     },
   );
   if (built) return { kind: 'send', built };
@@ -323,7 +352,7 @@ export const retryDelayMs = (attempts: number) =>
 async function settle(
   db: Database,
   row: SendRow,
-  outcome: SendOutcome | { kind: 'skip'; reason: ConversionSkipReason },
+  outcome: Exclude<SendOutcome, { kind: 'auth' }> | { kind: 'skip'; reason: ConversionSkipReason },
   built: BuiltEvent | null,
   now: Date,
 ) {
@@ -335,29 +364,37 @@ async function settle(
   const set =
     outcome.kind === 'skip'
       ? { ...base, state: 'skipped', skipReason: outcome.reason }
-      : outcome.kind === 'sent'
+      : outcome.kind === 'sent' && built?.rehearsal
         ? {
             ...base,
-            state: 'sent',
-            sentAt: now,
+            state: 'validated',
             lastError: null,
             platformRequestId: outcome.requestId,
             responseShape: outcome.shape,
           }
-        : outcome.kind === 'retry' && row.attempts < MAX_ATTEMPTS
+        : outcome.kind === 'sent'
           ? {
               ...base,
-              state: 'pending',
-              lastError: outcome.code,
-              nextAttemptAt: new Date(now.getTime() + retryDelayMs(row.attempts)),
-              responseShape: outcome.shape ?? null,
+              state: 'sent',
+              sentAt: now,
+              lastError: null,
+              platformRequestId: outcome.requestId,
+              responseShape: outcome.shape,
             }
-          : {
-              ...base,
-              state: 'failed',
-              lastError: outcome.code,
-              responseShape: outcome.shape ?? null,
-            };
+          : outcome.kind === 'retry' && row.attempts < MAX_ATTEMPTS
+            ? {
+                ...base,
+                state: 'pending',
+                lastError: outcome.code,
+                nextAttemptAt: new Date(now.getTime() + retryDelayMs(row.attempts)),
+                responseShape: outcome.shape ?? null,
+              }
+            : {
+                ...base,
+                state: 'failed',
+                lastError: outcome.code,
+                responseShape: outcome.shape ?? null,
+              };
   // Only this claim's row: a stale settle never overwrites what came after it.
   await db
     .update(adConversionSends)
@@ -371,6 +408,7 @@ export interface DispatchResult {
   retried: number;
   failed: number;
   skipped: number;
+  validated: number;
   authError?: string;
 }
 
@@ -380,7 +418,7 @@ export async function dispatchDue(
   platform: ConversionPlatform,
   now: Date,
 ): Promise<DispatchResult> {
-  const result: DispatchResult = { sent: 0, retried: 0, failed: 0, skipped: 0 };
+  const result: DispatchResult = { sent: 0, retried: 0, failed: 0, skipped: 0, validated: 0 };
   if (!ready(deps.env, platform)) return result;
   const { db, env } = deps;
   let googleToken: string | null = null;
@@ -395,7 +433,9 @@ export async function dispatchDue(
     googleToken = auth.token;
   }
   await settleStale(db, platform, now);
-  for (const row of await claimDue(db, platform, now)) {
+  if (!rehearsing(env, platform)) await requeueValidated(db, platform, now);
+  const claimed = await claimDue(db, platform, now);
+  for (const [index, row] of claimed.entries()) {
     const decision = await decide(db, env, row, now);
     if (decision.kind === 'skip') {
       await settle(db, row, decision, null, now);
@@ -413,8 +453,18 @@ export async function dispatchDue(
             decision.built,
           )
         : await sendGoogleEvent(deps.fetchImpl, googleToken ?? '', decision.built);
+    if (outcome.kind === 'auth') {
+      // A refused token refuses every row alike: none is spent, they wait for a person to fix it.
+      await release(
+        db,
+        claimed.slice(index).map((r) => r.id),
+        now,
+      );
+      return { ...result, authError: outcome.code };
+    }
     const state = await settle(db, row, outcome, decision.built, now);
     if (state === 'sent') result.sent += 1;
+    else if (state === 'validated') result.validated += 1;
     else if (state === 'pending') result.retried += 1;
     else result.failed += 1;
   }
