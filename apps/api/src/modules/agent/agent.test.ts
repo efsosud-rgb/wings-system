@@ -7,7 +7,7 @@ import {
 } from '@wings/shared';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
 import {
@@ -90,6 +90,16 @@ const use =
   () => ({ toolCalls: calls });
 
 // --- setup -------------------------------------------------------------------
+
+// Today and this month are read once, at load, and the code reads its own clock: stopped at that
+// instant, a midnight or a month turning during the run cannot set the two apart.
+beforeAll(() => {
+  vi.useFakeTimers({ toFake: ['Date'], now: NOW });
+});
+
+afterAll(() => {
+  vi.useRealTimers();
+});
 
 beforeAll(async () => {
   harness = await createTestDatabase();

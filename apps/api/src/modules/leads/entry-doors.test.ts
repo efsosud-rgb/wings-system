@@ -1,7 +1,7 @@
 import { addBusinessHours, WINGS_CLIENT_ID } from '@wings/shared';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
 import {
@@ -13,6 +13,7 @@ import {
 } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { loadHolidays } from '../../lib/holidays.js';
+import { freezeClockAtMinuteEnd, WORKING_MINUTE } from '../../test/clock.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
 
@@ -83,9 +84,13 @@ afterAll(async () => {
   await harness?.drop();
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 async function expectWorkedLead(
   lead: typeof leads.$inferSelect | undefined,
-  expected: { pipeline: string; stage: string; owner: string },
+  expected: { pipeline: string; stage: string; owner: string; arrivedAt: Date },
 ) {
   expect(lead).toMatchObject({
     pipeline: expected.pipeline,
@@ -98,7 +103,9 @@ async function expectWorkedLead(
   const tasks = await db.select().from(leadTasks).where(eq(leadTasks.leadId, lead!.id));
   expect(tasks).toHaveLength(1);
   expect(tasks[0]).toMatchObject({ kind: 'first_contact', assigneeEmployeeId: expected.owner });
-  expect(tasks[0]!.dueAt).toEqual(addBusinessHours(tasks[0]!.createdAt, 1, await loadHolidays(db)));
+  // From the instant the door read, not from created_at: the database stamps that at the start of
+  // its transaction, a moment earlier, and the deadline is rounded to the minute.
+  expect(tasks[0]!.dueAt).toEqual(addBusinessHours(expected.arrivedAt, 1, await loadHolidays(db)));
 }
 
 describe('the doors a new lead comes through', () => {
@@ -114,6 +121,7 @@ describe('the doors a new lead comes through', () => {
         },
       }),
     ).toString('base64')}`;
+    const arrivedAt = freezeClockAtMinuteEnd(WORKING_MINUTE);
     const delivered = await app.inject({
       method: 'POST',
       url: '/integrations/rd-station/webhook',
@@ -136,6 +144,7 @@ describe('the doors a new lead comes through', () => {
       pipeline: 'expansao',
       stage: 'Novo Contato',
       owner: expansionSeller,
+      arrivedAt,
     });
     // The campaign it came from, by the platform's ids.
     expect(lead).toMatchObject({
@@ -154,6 +163,7 @@ describe('the doors a new lead comes through', () => {
       { pipeline: 'formatacao', name: 'Reativar - 01/2026', position: 1 },
       { pipeline: 'formatacao', name: 'Sem contato', position: 1 },
     ]);
+    const arrivedAt = freezeClockAtMinuteEnd(WORKING_MINUTE);
     const sent = await app.inject({
       method: 'POST',
       url: '/public/site-forms/lp-porta-fmt',
@@ -174,6 +184,7 @@ describe('the doors a new lead comes through', () => {
       pipeline: 'formatacao',
       stage: 'Sem contato',
       owner: formatSeller,
+      arrivedAt,
     });
     expect(lead).toMatchObject({
       source: 'site_form',

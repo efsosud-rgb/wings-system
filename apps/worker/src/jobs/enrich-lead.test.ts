@@ -302,9 +302,11 @@ describe('the enrich_lead job', () => {
     expect(start.toISOString()).toBe('2026-09-22T03:00:00.000Z');
     const leadId = await insertLead({ client_id: WINGS_CLIENT_ID, name: 'Teto', phone: '5511933334444', source: 'manual' });
     const job = await insertJob(leadId);
-    const before = await spentTodayUsdMicro(database.pool, new Date());
-    const ok = await reserveSpend(database.pool, { leadId, jobId: job.id, step: 'web_search', usdMicro: 1000, dailyUsd: 100, now: new Date() });
+    // One instant for the three calls: a midnight between two new Date() would sum another day.
+    const now = new Date();
+    const before = await spentTodayUsdMicro(database.pool, now);
+    const ok = await reserveSpend(database.pool, { leadId, jobId: job.id, step: 'web_search', usdMicro: 1000, dailyUsd: 100, now });
     expect(ok).toBe(true);
-    expect(await spentTodayUsdMicro(database.pool, new Date())).toBe(before + 1000);
+    expect(await spentTodayUsdMicro(database.pool, now)).toBe(before + 1000);
   });
 });
