@@ -99,10 +99,17 @@ entre 1% e 40%, envio ao menos 1×/dia). Os caminhos 2 e 3 medem e alimentam pú
 
 - `event_time` precisa ser depois da entrada do lead, senão a Meta pode descartar: a linha fica
   `skipped` com `before_lead`.
-- `test_event_code` (`CRM_CONVERSIONS_META_TEST_EVENT_CODE`) mostra os eventos só em "Testar eventos".
-- A Meta **não documenta** que descarta um evento de servidor repetido com o mesmo `event_id`. Por
-  isso, um pedido que pode ter chegado (tempo esgotado, conexão perdida no meio) **não** é repetido:
-  fica `failed` com o código, para uma pessoa conferir no Gerenciador de Eventos.
+- `test_event_code` (`CRM_CONVERSIONS_META_TEST_EVENT_CODE`) mostra os eventos em "Testar eventos",
+  mas **não é ensaio**: "Events sent with `test_event_code` are not dropped. They flow into Events
+  Manager and are used for targeting and ads measurement purposes" (página de uso da API, lida em
+  02/11/2026). Por isso um evento com o código fica `sent` e **nunca é reenviado** sem ele (reenviar
+  poderia contar a etapa duas vezes). O painel avisa quando o código está ligado. Use-o só numa etapa
+  e num evento de teste (seção 10).
+- Repetição com o mesmo `event_id`: a página de uso da API diz "if we receive the same `event_id`
+  and `event_name` more than once, we keep only the first copy"; a de deduplicação limita isso a
+  48 horas. Como a garantia tem prazo e não foi conferida na conta, seguimos no lado seguro: um pedido
+  que pode ter chegado (tempo esgotado, conexão perdida no meio) **não** é repetido; fica `failed`
+  com o código, para uma pessoa conferir no Gerenciador de Eventos.
 - O pixel do site já manda `Lead` do navegador; o servidor não manda `Lead` (as etapas são outros
   eventos e não colidem).
 
@@ -139,7 +146,10 @@ campo obrigatório inválido derruba o pedido inteiro). Escopo OAuth
 - `transactionId` = id da linha. O Google **deduplica por `transactionId`** dentro da ação: repetir é
   seguro, então falha temporária e tempo esgotado voltam para a fila.
 - `validateOnly` fica `true` até `CRM_CONVERSIONS_GOOGLE_VALIDATE_ONLY=false`: o Google confere o
-  formato e não grava nada.
+  formato e não grava nada. A linha validada fica `validated` (não conta como enviada nem como
+  "último envio"). Quando a validação é desligada, as linhas `validated` voltam para a fila
+  (`pending`, tentativas zeradas) e vão de verdade com o mesmo `transactionId`, desde que ainda no
+  prazo de 90 dias.
 - `eventSource`: obrigatório para conversão offline; a documentação não diz qual valor serve para
   etapa de CRM. Usamos `OTHER` (**não verificado**). `accountType: GOOGLE_ADS`: **não verificado**.
 - Consentimento (`consent`): **não enviamos** enquanto o texto de consentimento não cobrir anúncio.
@@ -181,14 +191,23 @@ das chaves estiver ligada; o token não sai da API.
    prazo (`expired`), sem identificador (`no_identifier`).
 3. **Resultado:**
    - `sent`: guarda o id do pedido (`fbtrace_id` / `requestId`) e o formato da resposta (`shapeOf`).
+   - `validated`: o Google respondeu 200 a um pedido com `validateOnly`. Nada foi gravado; volta para
+     a fila quando `CRM_CONVERSIONS_GOOGLE_VALIDATE_ONLY=false`.
    - **volta para a fila** (`pending`, com espera de 5 min dobrando até 6 h): HTTP 429 ou 5xx, rede
      que nem chegou a conectar; no Google também tempo esgotado. Até **6 tentativas**, depois `failed`.
    - `failed`: recusa da plataforma (4xx), ou, na Meta, um pedido que pode ter chegado.
    - Uma linha presa em `sending` por mais de 15 min (processo caiu): Google volta para a fila, Meta
      fica `failed` com `worker_lost`.
    - Sem token do Google, nenhuma linha é pega e nenhuma tentativa é gasta.
-4. **Registro:** a linha nunca é apagada. Guarda tentativas, último código de erro, motivo do
-   descarte, nomes dos campos, id do pedido. Logs: só contagens e códigos.
+   - **Credencial recusada** no meio do lote (HTTP 401 ou 403, ou o código 190 da Meta, de token
+     vencido ou revogado): o lote inteiro volta para a fila como estava, sem gastar tentativa, e o
+     ciclo para. As linhas esperam alguém trocar o token; as que passarem do prazo viram `expired`.
+4. **Registro:** a linha nunca é apagada pelo ciclo. Guarda tentativas, último código de erro, motivo
+   do descarte, nomes dos campos, id do pedido. Logs: só contagens e códigos.
+5. **Apagar um lead (expurgo LGPD, futuro):** `ad_conversion_sends` e `lead_ad_identifiers` apontam
+   para `leads` (e a fila para `lead_stage_history`) sem `ON DELETE`. Quem apagar um lead precisa
+   apagar antes as linhas dessas duas tabelas. Hoje só o desfazer da importação do RD apaga leads, e
+   ele já limpa `lead_ad_identifiers` (lead de importação nunca entra na fila).
 
 Leads nunca enviados: origem `manual`, `csv_import`, `google_places`, `instagram_colagem` e qualquer
 lead de importação (`import_batch_id`).
@@ -276,7 +295,7 @@ dentro da plataforma.
 
 Marketing → Agente de Tráfego Pago — Wings → **Etapas do CRM** (`/marketing/trafego-pago-wings/conversoes`).
 
-- Quem tem `ads.read` vê, por plataforma e nos últimos 30 dias: enviados, na fila, falharam,
+- Quem tem `ads.read` vê, por plataforma e nos últimos 30 dias: enviados, só validados (Google), na fila, falharam,
   não enviados; falhas por código (`http_400:100`, `timeout`…); descartes por motivo; o último envio;
   e o que falta configurar, pelo nome da variável. Só contagens e códigos: nenhum lead, nenhum id,
   nenhum hash (`GET /ads/conversions`).
@@ -288,12 +307,13 @@ Marketing → Agente de Tráfego Pago — Wings → **Etapas do CRM** (`/marketi
 
 Não há conta de teste. **Todo teste real toca a conta real** e só acontece com ordem do Eric.
 
-- **Nosso código:** `crm-conversions.test.ts`, `crm-conversions-hash.test.ts`,
+- **Nosso código:** `crm-conversions.test.ts`, `crm-conversions-guards.test.ts` (cada trava sozinha,
+  validação do Google seguida de gravação, credencial recusada), `crm-conversions-hash.test.ts`,
   `crm-conversions-routes.test.ts`, `ad-identifiers.test.ts`, `site-forms.test.ts` (captura),
   `tracking.test.ts` (landing) e `AdConversionsPage.test.tsx`, com plataformas falsas e a trava sem rede.
 - **Meta:** "Testar eventos" com `CRM_CONVERSIONS_META_TEST_EVENT_CODE`. A Meta diz que esses eventos
   entram no Gerenciador para público e medição: usar um evento só de teste (ex.: `teste_wings`) numa
-  etapa de teste. Um `lead_id` inventado é recusado; o caminho é um funcionário preencher um
+  etapa de teste. O que sai com o código conta como enviado e não é reenviado depois. Um `lead_id` inventado é recusado; o caminho é um funcionário preencher um
   formulário real, com o consentimento dele.
 - **Google:** primeiro com `validateOnly` (o padrão). Depois, uma ação de conversão **de teste,
   secundária** (não entra nos lances), com um GCLID real; conferir pelo `RetrieveRequestStatus` e no
@@ -353,7 +373,7 @@ ligadas.
 Lidas em **02/11/2026** (as de 13/10 foram conferidas de novo).
 
 - Meta, integração de CRM: [visão geral e requisitos de otimização](https://developers.facebook.com/docs/marketing-api/conversions-api/conversion-leads-integration), [passo 3, campos e 7 dias](https://developers.facebook.com/documentation/ads-commerce/conversions-api/conversion-leads-integration/crm-integration/3-implementing-the-crm-integration)
-- Meta, [uso da API](https://developers.facebook.com/docs/marketing-api/conversions-api/using-the-api) (endpoint, até 1.000 eventos, lote recusado por evento velho, `test_event_code`)
+- Meta, [uso da API](https://developers.facebook.com/docs/marketing-api/conversions-api/using-the-api) (endpoint, até 1.000 eventos, lote recusado por evento velho, `test_event_code` não descartado, "keep only the first copy" do mesmo `event_id`; relida em 02/11/2026 na revisão), [deduplicação](https://developers.facebook.com/documentation/ads-commerce/conversions-api/deduplicate-pixel-and-server-events) (48 horas)
 - Meta, [dados do cliente](https://developers.facebook.com/docs/marketing-api/conversions-api/parameters/customer-information-parameters) (normalização de `em` e `ph`, `lead_id` sem hash, `fbc`/`fbp` sem hash)
 - Meta, [fbp e fbc](https://developers.facebook.com/docs/marketing-api/conversions-api/parameters/fbp-and-fbc) (formato, `creationTime` em ms, fbclid sensível a maiúsculas)
 - Meta, [parâmetros do evento](https://developers.facebook.com/docs/marketing-api/conversions-api/parameters/server-event) (`action_source`, `system_generated`)
