@@ -1,0 +1,452 @@
+import { randomBytes } from 'node:crypto';
+import { eq } from 'drizzle-orm';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { Database } from '../../db/client.js';
+import {
+  adConversionSends,
+  adConversionStageEvents,
+  crmStages,
+  leadAdIdentifiers,
+  leads,
+  leadStageHistory,
+} from '../../db/schema/index.js';
+import { loadEnv } from '../../env.js';
+import { createTestDatabase, type TestDatabase } from '../../test/db.js';
+import { TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
+import { recordContactOptOut } from '../leads/contact-block.js';
+import { metaEmail, metaPhone, sha256Hex } from './crm-conversions-hash.js';
+import { MAX_ATTEMPTS, runConversionsCycle } from './crm-conversions.js';
+
+let harness: TestDatabase;
+let db: Database;
+
+beforeAll(async () => {
+  harness = await createTestDatabase();
+  db = harness.db;
+}, 60_000);
+
+afterAll(async () => {
+  await harness?.drop();
+});
+
+// A fixed clock (lição 2): the stage change is a day old, the lead three.
+const NOW = new Date('2026-11-02T12:00:00.000Z');
+const STAGE_AT = new Date('2026-11-01T10:00:00.000Z');
+const ENTERED = new Date('2026-10-30T09:00:00.000Z');
+const HOUR = 3_600_000;
+
+const envOf = (extra: Record<string, string> = {}) =>
+  loadEnv({
+    NODE_ENV: 'test',
+    DATABASE_URL: harness.url,
+    SESSION_SECRET: 'x'.repeat(48),
+    CPF_ENCRYPTION_KEY: TEST_CPF_KEY,
+    CPF_INDEX_KEY: TEST_INDEX_KEY,
+    CRM_CONVERSIONS_SINCE: '2026-10-20',
+    CRM_CONVERSIONS_META_DATASET_ID: '123456789012345',
+    META_CAPI_TOKEN: 'token-de-teste-meta',
+    GOOGLE_ADS_CUSTOMER_ID: '111-222-3333',
+    GOOGLE_ADS_CLIENT_ID: 'cliente-de-teste',
+    GOOGLE_ADS_CLIENT_SECRET: 'segredo-de-teste',
+    CRM_CONVERSIONS_GOOGLE_REFRESH_TOKEN: 'refresh-de-teste',
+    ...extra,
+  });
+const META_ON = { CRM_CONVERSIONS_META_ENABLED: 'true' };
+const GOOGLE_ON = { CRM_CONVERSIONS_GOOGLE_ENABLED: 'true' };
+
+interface Call {
+  url: string;
+  body: string;
+  authorization: string | null;
+}
+type Answer = Response | Error;
+
+/** Meta and Google simulated: every call kept; `answers` decides the next ones (200 when empty). */
+function platforms(answers: { meta?: Answer[]; google?: Answer[] } = {}) {
+  const calls: Call[] = [];
+  const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+    const href = String(url);
+    const headers = new Headers(init?.headers);
+    calls.push({
+      url: href,
+      body: String(init?.body ?? ''),
+      authorization: headers.get('authorization'),
+    });
+    if (href.startsWith('https://oauth2.googleapis.com/token')) {
+      return Response.json({ access_token: 'acesso-de-teste', expires_in: 3600 });
+    }
+    const queue = href.startsWith('https://graph.facebook.com') ? answers.meta : answers.google;
+    const next = queue?.shift();
+    if (next instanceof Error) throw next;
+    if (next) return next;
+    return href.startsWith('https://graph.facebook.com')
+      ? Response.json({ events_received: 1, fbtrace_id: 'trace-de-teste' })
+      : Response.json({ requestId: 'pedido-de-teste' });
+  }) as typeof fetch;
+  const events = () => calls.filter((call) => !call.url.includes('oauth2'));
+  return { calls, events, fetchImpl };
+}
+
+const cycle = (env: ReturnType<typeof envOf>, fetchImpl: typeof fetch, now = NOW) =>
+  runConversionsCycle({ db, env, fetchImpl, log: () => {} }, now);
+
+async function stage(): Promise<string> {
+  const [row] = await db
+    .insert(crmStages)
+    .values({
+      pipeline: 'expansao',
+      name: `Reunião agendada ${randomBytes(4).toString('hex')}`,
+      position: 3,
+    })
+    .returning({ id: crmStages.id });
+  return row!.id;
+}
+
+async function mapStage(stageId: string, platform: 'meta' | 'google', active = true) {
+  await db.insert(adConversionStageEvents).values({
+    stageId,
+    platform,
+    eventName: 'reuniao_agendada',
+    googleConversionActionId: platform === 'google' ? '987654321' : null,
+    active,
+  });
+}
+
+/** A made-up lead: a Meta instant-form lead by default. */
+async function lead(values: Partial<typeof leads.$inferInsert> = {}) {
+  const [row] = await db
+    .insert(leads)
+    .values({
+      source: 'meta_lead_ads',
+      externalId: `9${Math.floor(Math.random() * 1e15)}`.padEnd(16, '0'),
+      phone: `55119${Math.floor(10_000_000 + Math.random() * 89_999_999)}`,
+      email: `pessoa-${randomBytes(3).toString('hex')}@exemplo.com.br`,
+      legalBasis: 'consent',
+      enteredAt: ENTERED,
+      ...values,
+    })
+    .returning();
+  return row!;
+}
+
+async function enter(leadId: string, stageId: string, at = STAGE_AT, source = 'wings') {
+  await db.insert(leadStageHistory).values({ leadId, toStageId: stageId, at, source });
+}
+
+const sendsOf = (leadId: string) =>
+  db.select().from(adConversionSends).where(eq(adConversionSends.leadId, leadId));
+
+/** A mapped stage, and a lead that entered it a day ago. */
+async function setup(platform: 'meta' | 'google', values: Partial<typeof leads.$inferInsert> = {}) {
+  const stageId = await stage();
+  await mapStage(stageId, platform);
+  const row = await lead(values);
+  await enter(row.id, stageId);
+  return { stageId, lead: row };
+}
+
+describe('flags', () => {
+  it('sends nothing and queues nothing while the platform is off', async () => {
+    const { lead: row } = await setup('meta');
+    const sim = platforms();
+    const result = await cycle(envOf(), sim.fetchImpl);
+    expect(result).toEqual({ ran: true, platforms: {} });
+    expect(sim.calls).toHaveLength(0);
+    expect(await sendsOf(row.id)).toHaveLength(0);
+  });
+
+  it('sends nothing without the cut-off day, even with the switch on', async () => {
+    const { lead: row } = await setup('meta');
+    const sim = platforms();
+    await cycle(envOf({ ...META_ON, CRM_CONVERSIONS_SINCE: '' }), sim.fetchImpl);
+    expect(sim.calls).toHaveLength(0);
+    expect(await sendsOf(row.id)).toHaveLength(0);
+  });
+});
+
+describe('Meta, instant form lead (CRM integration)', () => {
+  it('sends one event with the lead id, unhashed, and nothing personal', async () => {
+    const { lead: row } = await setup('meta');
+    const sim = platforms();
+    await cycle(envOf(META_ON), sim.fetchImpl);
+
+    const [send] = await sendsOf(row.id);
+    expect(send).toMatchObject({ state: 'sent', identifierKind: 'meta_lead_id', attempts: 1 });
+    expect(send!.fieldsSent).toEqual(['lead_id']);
+    const call = sim.events().find((c) => c.body.includes(send!.id));
+    expect(call?.url).toBe('https://graph.facebook.com/v26.0/123456789012345/events');
+    expect(call?.authorization).toBe('Bearer token-de-teste-meta');
+    expect(call?.url).not.toContain('token');
+    // The lead id travels as a number, exactly.
+    expect(call?.body).toContain(`"lead_id":${row.externalId}`);
+    const event = JSON.parse(call!.body).data[0];
+    expect(event).toMatchObject({
+      event_name: 'reuniao_agendada',
+      event_time: STAGE_AT.getTime() / 1000,
+      event_id: send!.id,
+      action_source: 'system_generated',
+      custom_data: { event_source: 'crm', lead_event_source: 'Wings System' },
+    });
+    expect(call?.body).not.toContain(row.email!);
+    expect(call?.body).not.toContain(row.phone!);
+  });
+
+  it('sends once per stage: a second cycle and a second entry into the stage add nothing', async () => {
+    const { stageId, lead: row } = await setup('meta');
+    const sim = platforms();
+    await cycle(envOf(META_ON), sim.fetchImpl);
+    await enter(row.id, stageId, new Date(STAGE_AT.getTime() + 5 * HOUR));
+    await cycle(envOf(META_ON), sim.fetchImpl, new Date(NOW.getTime() + HOUR));
+
+    const sends = await sendsOf(row.id);
+    expect(sends).toHaveLength(1);
+    expect(sim.events().filter((c) => c.body.includes(sends[0]!.id))).toHaveLength(1);
+  });
+
+  it('a platform failure goes back to the queue and the next try carries the same event id', async () => {
+    const { lead: row } = await setup('meta');
+    const sim = platforms({ meta: [Response.json({ error: { code: 2 } }, { status: 500 })] });
+    await cycle(envOf(META_ON), sim.fetchImpl);
+
+    const [waiting] = await sendsOf(row.id);
+    expect(waiting).toMatchObject({ state: 'pending', lastError: 'http_500:2', attempts: 1 });
+    expect(waiting!.nextAttemptAt.getTime()).toBeGreaterThan(NOW.getTime());
+    // Not due yet: nothing goes.
+    await cycle(envOf(META_ON), sim.fetchImpl);
+    expect(sim.events().filter((c) => c.body.includes(waiting!.id))).toHaveLength(1);
+
+    await cycle(envOf(META_ON), sim.fetchImpl, new Date(NOW.getTime() + HOUR));
+    const [sent] = await sendsOf(row.id);
+    expect(sent).toMatchObject({ state: 'sent', attempts: 2, lastError: null });
+    expect(sim.events().filter((c) => c.body.includes(waiting!.id))).toHaveLength(2);
+  });
+
+  it(`gives up after ${MAX_ATTEMPTS} failed tries`, async () => {
+    const { lead: row } = await setup('meta');
+    const failing = Array.from({ length: MAX_ATTEMPTS }, () => new Response('{}', { status: 503 }));
+    const sim = platforms({ meta: failing });
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
+      await cycle(envOf(META_ON), sim.fetchImpl, new Date(NOW.getTime() + i * 7 * HOUR));
+    }
+    const [send] = await sendsOf(row.id);
+    expect(send).toMatchObject({ state: 'failed', lastError: 'http_503', attempts: MAX_ATTEMPTS });
+  });
+
+  it('a refusal is failed for good, and a timeout is not tried again (it may have arrived)', async () => {
+    const refused = await setup('meta');
+    const timedOut = await setup('meta');
+    const timeout = Object.assign(new Error('timed out'), { name: 'TimeoutError' });
+    const sim = platforms({
+      meta: [
+        Response.json({ error: { code: 100, error_subcode: 2804003 } }, { status: 400 }),
+        timeout,
+      ],
+    });
+    await cycle(envOf(META_ON), sim.fetchImpl);
+    await cycle(envOf(META_ON), sim.fetchImpl, new Date(NOW.getTime() + 7 * HOUR));
+    const states = [(await sendsOf(refused.lead.id))[0], (await sendsOf(timedOut.lead.id))[0]];
+    expect(states.map((s) => s?.state)).toEqual(['failed', 'failed']);
+    expect(states.map((s) => s?.lastError).sort()).toEqual(['http_400:100.2804003', 'timeout']);
+    expect(states.map((s) => s?.attempts)).toEqual([1, 1]);
+  });
+});
+
+describe('a lead without a platform id', () => {
+  it('is skipped while the hashed path is off', async () => {
+    const { lead: row } = await setup('meta', { source: 'site_form', externalId: null });
+    const sim = platforms();
+    await cycle(envOf(META_ON), sim.fetchImpl);
+    expect((await sendsOf(row.id))[0]).toMatchObject({
+      state: 'skipped',
+      skipReason: 'no_identifier',
+    });
+    expect(sim.events()).toHaveLength(0);
+  });
+
+  it('goes by the hashed path when it is on: e-mail and phone hashed, never in clear', async () => {
+    const { lead: row } = await setup('meta', { source: 'site_form', externalId: null });
+    const sim = platforms();
+    await cycle(envOf({ ...META_ON, CRM_CONVERSIONS_HASHED_ENABLED: 'true' }), sim.fetchImpl);
+    const [send] = await sendsOf(row.id);
+    expect(send).toMatchObject({ state: 'sent', identifierKind: 'hashed' });
+    expect(send!.fieldsSent).toEqual(['em', 'ph', 'external_id']);
+    const call = sim.events().find((c) => c.body.includes(send!.id))!;
+    const userData = JSON.parse(call.body).data[0].user_data;
+    expect(userData.em).toEqual([sha256Hex(metaEmail(row.email)!)]);
+    expect(userData.ph).toEqual([sha256Hex(metaPhone(row.phone)!)]);
+    expect(call.body).not.toContain(row.email!);
+    expect(call.body).not.toContain(row.phone!);
+    // Nothing of the hash is kept in our tables.
+    expect(JSON.stringify(send)).not.toContain(userData.em[0]);
+  });
+
+  it('with a click id from the site, sends fbc (built from the fbclid) without hashing anything', async () => {
+    const { lead: row } = await setup('meta', { source: 'site_form', externalId: null });
+    const seen = new Date('2026-10-30T08:59:00.000Z');
+    await db
+      .insert(leadAdIdentifiers)
+      .values({
+        leadId: row.id,
+        kind: 'fbclid',
+        value: 'IwAR-teste',
+        source: 'site_form',
+        capturedAt: seen,
+      });
+    const sim = platforms();
+    await cycle(envOf(META_ON), sim.fetchImpl);
+    const [send] = await sendsOf(row.id);
+    expect(send).toMatchObject({ state: 'sent', identifierKind: 'click_id', fieldsSent: ['fbc'] });
+    const call = sim.events().find((c) => c.body.includes(send!.id))!;
+    expect(JSON.parse(call.body).data[0].user_data).toEqual({
+      fbc: `fb.1.${seen.getTime()}.IwAR-teste`,
+    });
+  });
+});
+
+describe('what never goes', () => {
+  it('a person who asked "não me contate" (by any key)', async () => {
+    const { lead: row } = await setup('meta');
+    await recordContactOptOut(db, {
+      leadId: row.id,
+      channels: ['email'],
+      origin: 'crm',
+      reason: null,
+      createdBy: null,
+    });
+    const sim = platforms();
+    await cycle(envOf(META_ON), sim.fetchImpl);
+    expect((await sendsOf(row.id))[0]).toMatchObject({ state: 'skipped', skipReason: 'opt_out' });
+    expect(sim.events()).toHaveLength(0);
+  });
+
+  it('a stage change from an import or the RD mirror, a stage not mapped, an inactive mapping', async () => {
+    const stageId = await stage();
+    await mapStage(stageId, 'meta');
+    const imported = await lead();
+    await enter(imported.id, stageId, STAGE_AT, 'import');
+    const mirrored = await lead();
+    await enter(mirrored.id, stageId, STAGE_AT, 'rd');
+    const unmapped = await lead();
+    await enter(unmapped.id, await stage());
+    const inactiveStage = await stage();
+    await mapStage(inactiveStage, 'meta', false);
+    const inactive = await lead();
+    await enter(inactive.id, inactiveStage);
+    await cycle(envOf(META_ON), platforms().fetchImpl);
+    for (const row of [imported, mirrored, unmapped, inactive]) {
+      expect(await sendsOf(row.id)).toHaveLength(0);
+    }
+  });
+
+  it('a first entry before the cut-off day, even when the lead comes back to the stage later', async () => {
+    const stageId = await stage();
+    await mapStage(stageId, 'meta');
+    const row = await lead({ enteredAt: new Date('2026-10-01T09:00:00.000Z') });
+    await enter(row.id, stageId, new Date('2026-10-10T09:00:00.000Z'));
+    await enter(row.id, stageId);
+    await cycle(envOf(META_ON), platforms().fetchImpl);
+    expect(await sendsOf(row.id)).toHaveLength(0);
+  });
+
+  it('a Meta event older than 7 days when its turn comes', async () => {
+    const { lead: row } = await setup('meta');
+    const sim = platforms({ meta: [new Response('{}', { status: 503 })] });
+    await cycle(envOf(META_ON), sim.fetchImpl);
+    await cycle(envOf(META_ON), sim.fetchImpl, new Date(STAGE_AT.getTime() + 8 * 24 * HOUR));
+    expect((await sendsOf(row.id))[0]).toMatchObject({ state: 'skipped', skipReason: 'expired' });
+  });
+});
+
+describe('Google (Data Manager)', () => {
+  async function withGclid() {
+    const setupResult = await setup('google', { source: 'site_form', externalId: null });
+    await db.insert(leadAdIdentifiers).values({
+      leadId: setupResult.lead.id,
+      kind: 'gclid',
+      value: 'Cj0KCQ-teste',
+      source: 'site_form',
+      capturedAt: ENTERED,
+    });
+    return setupResult;
+  }
+
+  it('sends the gclid to the conversion action, only validating by default', async () => {
+    const { lead: row } = await withGclid();
+    const sim = platforms();
+    await cycle(envOf(GOOGLE_ON), sim.fetchImpl);
+    const [send] = await sendsOf(row.id);
+    expect(send).toMatchObject({
+      state: 'sent',
+      identifierKind: 'click_id',
+      destination: '987654321',
+      platformRequestId: 'pedido-de-teste',
+    });
+    const call = sim.events().find((c) => c.body.includes(send!.id))!;
+    expect(call.url).toBe('https://datamanager.googleapis.com/v1/events:ingest');
+    expect(call.authorization).toBe('Bearer acesso-de-teste');
+    const body = JSON.parse(call.body);
+    expect(body).toMatchObject({
+      destinations: [
+        {
+          operatingAccount: { accountType: 'GOOGLE_ADS', accountId: '1112223333' },
+          productDestinationId: '987654321',
+        },
+      ],
+      encoding: 'HEX',
+      validateOnly: true,
+      events: [
+        {
+          transactionId: send!.id,
+          eventTimestamp: STAGE_AT.toISOString(),
+          adIdentifiers: { gclid: 'Cj0KCQ-teste' },
+        },
+      ],
+    });
+    expect(body.events[0].userData).toBeUndefined();
+  });
+
+  it('a 503 goes back to the queue and is sent again with the same transactionId', async () => {
+    const { lead: row } = await withGclid();
+    const sim = platforms({ google: [new Response('{}', { status: 503 })] });
+    await cycle(
+      envOf({ ...GOOGLE_ON, CRM_CONVERSIONS_GOOGLE_VALIDATE_ONLY: 'false' }),
+      sim.fetchImpl,
+    );
+    const [waiting] = await sendsOf(row.id);
+    expect(waiting).toMatchObject({ state: 'pending', lastError: 'http_503' });
+    await cycle(
+      envOf({ ...GOOGLE_ON, CRM_CONVERSIONS_GOOGLE_VALIDATE_ONLY: 'false' }),
+      sim.fetchImpl,
+      new Date(NOW.getTime() + HOUR),
+    );
+    const [sent] = await sendsOf(row.id);
+    expect(sent).toMatchObject({ state: 'sent', attempts: 2 });
+    const calls = sim.events().filter((c) => c.body.includes(waiting!.id));
+    expect(calls).toHaveLength(2);
+    expect(JSON.parse(calls[1]!.body).validateOnly).toBe(false);
+  });
+
+  it('a gclid older than 90 days is out of the window', async () => {
+    const { lead: row } = await setup('google', { source: 'site_form', externalId: null });
+    await db.insert(leadAdIdentifiers).values({
+      leadId: row.id,
+      kind: 'gclid',
+      value: 'Cj0KCQ-velho',
+      source: 'site_form',
+      capturedAt: new Date(NOW.getTime() - 91 * 24 * HOUR),
+    });
+    const sim = platforms();
+    await cycle(envOf(GOOGLE_ON), sim.fetchImpl);
+    expect((await sendsOf(row.id))[0]).toMatchObject({ state: 'skipped', skipReason: 'expired' });
+    expect(sim.events()).toHaveLength(0);
+  });
+
+  it('without a token from Google, nothing is claimed and no try is spent', async () => {
+    const { lead: row } = await withGclid();
+    const fetchImpl = (async () =>
+      Response.json({ error: 'invalid_grant' }, { status: 400 })) as unknown as typeof fetch;
+    const result = await cycle(envOf(GOOGLE_ON), fetchImpl);
+    expect(result.ran && result.platforms.google?.authError).toBe('google_auth_400:invalid_grant');
+    expect((await sendsOf(row.id))[0]).toMatchObject({ state: 'pending', attempts: 0 });
+  });
+});
