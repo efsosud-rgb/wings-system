@@ -40,12 +40,12 @@ quer — e merece decisão própria.
 
 ### Quem aciona
 
-| Gatilho                                                         | Onde                     |
-| --------------------------------------------------------------- | ------------------------ |
-| Gasto reportado atingiu o teto, ou comeu o que estava reservado | `applyReportedSpend`     |
-| Orçamentos na plataforma somam mais que o permitido no mês      | `reconcileAccount`       |
-| Execução com resultado desconhecido                             | `executeApprovedChange`  |
-| Reconciliação parada há mais de 120 min (dead-man)              | fim do ciclo de ingestão |
+| Gatilho                                                                                                                                                              | Onde                     |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| Gasto reportado atingiu o teto, ou não deixa espaço para o que roda (espelho + alterações em execução ou desconhecidas); aumento só pedido ou aprovado nunca congela | `applyReportedSpend`     |
+| Orçamentos na plataforma somam mais que o permitido no mês                                                                                                           | `reconcileAccount`       |
+| Execução com resultado desconhecido                                                                                                                                  | `executeApprovedChange`  |
+| Reconciliação parada há mais de 120 min (dead-man)                                                                                                                   | fim do ciclo de ingestão |
 
 ### Quem libera
 
@@ -283,14 +283,14 @@ executada, pelo espelho, porque até lá a campanha continua gastando.
 **Quem usa o número, e onde.** Sempre sob a trava da linha do período
 (`FOR UPDATE`), na mesma ordem de antes (período → pedido → aprovação):
 
-| Etapa                                 | O que confere                                               | Se não cabe                                                                     |
-| ------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Pedido (`reserveChange`)              | número + delta do aumento nos três tetos (`ceilingRefusal`) | recusado, como antes                                                            |
-| Criação de campanha                   | número + custo dela como se ligada                          | recusada, como antes                                                            |
-| **Aprovação** (nova)                  | número sem ela + o próprio delta (`approveWithinCeiling`)   | **continua pendente**; a tela recebe 409 com o motivo                           |
-| Execução (`claimWithinCeiling`)       | número sem ela + o próprio delta                            | recusada (`cap_no_longer_allows`), continua aprovada, nada enviado              |
-| Devolução (rejeitar, expirar, falhar) | recalcula o número sem ela                                  | —                                                                               |
-| Reconciliação                         | grava o gasto e o número **numa transação só**              | congela **só** se a exposição da própria plataforma passa do plano (como antes) |
+| Etapa                                 | O que confere                                               | Se não cabe                                                                                                                                                                  |
+| ------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pedido (`reserveChange`)              | número + delta do aumento nos três tetos (`ceilingRefusal`) | recusado, como antes                                                                                                                                                         |
+| Criação de campanha                   | número + custo dela como se ligada                          | recusada, como antes                                                                                                                                                         |
+| **Aprovação** (nova)                  | número sem ela + o próprio delta (`approveWithinCeiling`)   | **continua pendente**; a tela recebe 409 com o motivo                                                                                                                        |
+| Execução (`claimWithinCeiling`)       | número sem ela + o próprio delta                            | recusada (`cap_no_longer_allows`), continua aprovada, nada enviado                                                                                                           |
+| Devolução (rejeitar, expirar, falhar) | recalcula o número sem ela                                  | —                                                                                                                                                                            |
+| Reconciliação                         | grava o gasto e o número **numa transação só**              | congela **só** pelo que roda: a exposição da própria plataforma passa do plano, ou o gasto não deixa espaço para ela e as alterações em voo; aumento esperando nunca congela |
 
 Redução nunca é barrada pelo teto em nenhuma etapa: pedir para gastar menos
 tem de ser sempre possível.
@@ -398,7 +398,9 @@ Testes novos (todos contra banco descartável, cliente falso):
   desconhecido continua contando; aprovação e execução recusadas quando o mês
   encolheu, e a outra sai depois que a primeira expira; redução pedida e
   aprovada em mês que encolheu; a reconciliação congela só pela exposição da
-  plataforma.
+  plataforma; gasto que chega com um aumento só pedido não congela (a pausa
+  continua possível e a aprovação recusa o aumento), e gasto que come o que
+  roda congela.
 - `commitment-races.test.ts` (parte 2) — com os concorrentes parados numa
   linha conhecida: pedido feito enquanto a reconciliação lê a plataforma;
   reconciliação na fila logo atrás de um pedido na trava do período; dois
