@@ -7,6 +7,7 @@ import {
   adAccounts,
   adApprovalRequests,
   adCampaigns,
+  adSpendSnapshots,
   budgetPeriods,
 } from '../../db/schema/index.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
@@ -18,6 +19,7 @@ import {
   reserveChange,
 } from './budget-guard.js';
 import { expireStaleChanges } from './expiry.js';
+import { simulateChange } from './simulate.js';
 import { at, CAP, guardFixtures, NOW, USABLE, type World } from './write-time-guard-fixtures.js';
 
 /**
@@ -272,7 +274,51 @@ describe('reconciliation', () => {
     await platformCapDropsTo(w, 50_000, at(1)); // now the running campaigns themselves do not fit
     expect((await accountOf(w)).killSwitchEngaged).toBe(true);
   });
+
+  it('spend never freezes on an increase still waiting, only on what is running', async () => {
+    const w = await world({ a: 1000, b: 1000 }); // 52_500
+    await spendReported(w, '2026-11-05', 100_000);
+    await w.reconcile(at(0.1)); // room 200_000
+    const a = await requested(w, 'a', { kind: 'set_daily_budget', to: 6000 }, at(0.2)); // +131_250
+    await w.reconcile(at(0.3));
+    expect(await w.committed()).toBe(183_750);
+
+    // Spend shrinks the room to 180_000: A no longer fits, the mirror does.
+    await spendReported(w, '2026-11-09', 20_000);
+    await w.reconcile(at(0.4));
+    expect((await accountOf(w)).killSwitchEngaged).toBe(false);
+    // The column is cut at that room; the approval screen still shows the month
+    // without A from the full figure (the mirror), not from the cut column.
+    expect(await w.committed()).toBe(180_000);
+    const simulation = await simulateChange(db, a.changeId, { now: at(0.4) });
+    expect(simulation?.period.committedWithoutRequestCents).toBe(52_500);
+    // A is refused where it is judged, and asking to spend less still works.
+    expect(await decide(a.approvalId, 'approved', at(0.5))).toMatchObject({
+      ok: false,
+      reason: 'cap_would_be_exceeded',
+    });
+    expect(await changeRow(a.changeId)).toMatchObject({ status: 'pending_approval' });
+    const pause = await reserveChange(db, {
+      adAccountId: w.accountId,
+      campaignId: await w.campaign('b'),
+      kind: 'pause_campaign',
+      now: at(0.5),
+    });
+    expect(pause.ok).toBe(true);
+
+    // Spend that leaves no room for the running campaigns does freeze.
+    await spendReported(w, '2026-11-10', 140_000); // room 40_000 < 52_500
+    await w.reconcile(at(0.6));
+    expect((await accountOf(w)).killSwitchEngaged).toBe(true);
+  });
 });
+
+/** Spend the platform reported for one day, the way reconciliation stores it. */
+async function spendReported(w: World, spendDate: string, spendCents: number) {
+  await db
+    .insert(adSpendSnapshots)
+    .values({ adAccountId: w.accountId, spendDate, spendCents, asOf: NOW });
+}
 
 function draftOf(overrides: Partial<CampaignDraft> = {}): CampaignDraft {
   const today = '2026-11-10';

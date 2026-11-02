@@ -207,23 +207,28 @@ export async function mirroredExposureCents(
  * earlier month can no longer run and expires. A change in flight
  * (`executing`, `unknown`) counts whatever its period, because it may already
  * be on the platform. Read it under the period lock, or it is a guess.
+ *
+ * `runningOnly` leaves out the increases still waiting: what can be spending
+ * now. Reported spend freezes an account on that alone (`applyReportedSpend`).
  */
 export async function commitmentCents(
   db: Database | Transaction,
   account: { id: string; platform: string; timezone: string },
   periodId: string,
   now: Date,
-  options: { excluding?: string } = {},
+  options: { excluding?: string; runningOnly?: boolean } = {},
 ): Promise<Cents> {
+  const waiting = options.runningOnly
+    ? sql``
+    : sql`or (reservation_active
+                and status in ('pending_approval', 'approved')
+                and budget_period_id = ${periodId})`;
   const reserved = await db.execute<{ total: string } & Record<string, unknown>>(sql`
     select coalesce(sum(exposure_delta_cents), 0)::text as total
       from ad_change_requests
      where ad_account_id = ${account.id}
        and exposure_delta_cents > 0
-       and (status in ('executing', 'unknown')
-            or (reservation_active
-                and status in ('pending_approval', 'approved')
-                and budget_period_id = ${periodId}))
+       and (status in ('executing', 'unknown') ${waiting})
        ${options.excluding ? sql`and id <> ${options.excluding}` : sql``}
   `);
   return (await mirroredExposureCents(db, account, now)) + Number(reserved.rows[0]?.total ?? 0);
@@ -1311,9 +1316,12 @@ export async function claimWithinCeiling(
 /**
  * Records spend reported by the platform.
  *
- * Truth is always recordable: if real spend has eaten into the reserve, the
- * commitment is trimmed to fit and the kill switch is engaged, rather than the
- * write being refused.
+ * Truth is always recordable: the stored commitment is trimmed to what the
+ * month still holds rather than the write being refused. The kill switch is
+ * engaged when spend reaches the cap or leaves no room for what is running
+ * (the mirror plus changes in flight). An increase still waiting does not
+ * freeze: approval and execution refuse it, and a frozen account could not
+ * even ask for a pause.
  */
 export async function applyReportedSpend(
   db: Database | Transaction,
@@ -1336,11 +1344,19 @@ export async function applyReportedSpend(
     const row = locked.rows[0];
     if (!row) throw new Error('budget period not found');
 
+    const account = await tx.query.adAccounts.findFirst({
+      where: eq(adAccounts.id, String(row.ad_account_id)),
+    });
+    if (!account) throw new Error('ad account not found');
+
     const capCents = Number(row.cap_cents);
     const committed = Number(row.committed_cents);
     const room = Math.max(0, capCents - input.spentCents);
     const trimmed = Math.min(committed, room);
-    const needsKillSwitch = input.spentCents >= capCents || trimmed < committed;
+    const runningCents = await commitmentCents(tx, account, input.periodId, now, {
+      runningOnly: true,
+    });
+    const needsKillSwitch = input.spentCents >= capCents || runningCents > room;
 
     await tx
       .update(budgetPeriods)
@@ -1360,7 +1376,13 @@ export async function applyReportedSpend(
       await tx.insert(adGuardrailEvents).values({
         adAccountId: String(row.ad_account_id),
         kind: 'kill_switch_engaged',
-        detail: { spentCents: input.spentCents, capCents, committedBefore: committed, trimmed },
+        detail: {
+          spentCents: input.spentCents,
+          capCents,
+          committedBefore: committed,
+          trimmed,
+          runningCents,
+        },
       });
     }
 
