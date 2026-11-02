@@ -3,6 +3,7 @@ import { and, eq, ne } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Database } from '../../db/client.js';
 import { crmNotifications, employees, leadTasks, leads } from '../../db/schema/index.js';
+import { loadHolidays } from '../../lib/holidays.js';
 import type { Mail, Mailer } from '../../lib/mailer.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee } from '../../test/factories.js';
@@ -70,8 +71,8 @@ const noticesOf = (leadId: string, kind?: string) =>
         : eq(crmNotifications.leadId, leadId),
     );
 
-/** A Saturday 15h in São Paulo at least three days from now, and the working instant after it (Monday 9h). */
-function weekendAndMonday(): { saturday: Date; monday: Date } {
+/** A Saturday 15h in São Paulo at least three days from now, and the working instant after it (Monday 9h, or later after a holiday). */
+async function weekendAndMonday(): Promise<{ saturday: Date; monday: Date }> {
   const day = new Date(Date.now() + 3 * 86_400_000);
   for (let i = 0; i < 8; i += 1) {
     const weekday = new Intl.DateTimeFormat('en-US', {
@@ -83,7 +84,7 @@ function weekendAndMonday(): { saturday: Date; monday: Date } {
   }
   const ymd = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(day);
   const saturday = new Date(`${ymd}T15:00:00-03:00`);
-  return { saturday, monday: nextBusinessInstant(saturday) };
+  return { saturday, monday: nextBusinessInstant(saturday, await loadHolidays(db)) };
 }
 
 describe('noticeMailOf', () => {
@@ -294,7 +295,7 @@ describe('sendPendingNoticeMails: the overdue first contact', () => {
       .update(leadTasks)
       .set({ doneAt: new Date() })
       .where(ne(leadTasks.leadId, born.lead.id));
-    const { saturday, monday } = weekendAndMonday();
+    const { saturday, monday } = await weekendAndMonday();
     const written = await runCrmAlerts(db, { stageStuckDays: 0 }, saturday);
     expect(written.written).toBeGreaterThanOrEqual(2);
     // The seller is the only one told of the first step; the manager hears at the end of the day (own notice kind).
@@ -384,7 +385,7 @@ describe('sendPendingNoticeMails: the manager at the end of the day', () => {
       .update(leadTasks)
       .set({ doneAt: new Date() })
       .where(ne(leadTasks.leadId, born.lead.id));
-    const { saturday, monday } = weekendAndMonday();
+    const { saturday, monday } = await weekendAndMonday();
     await runCrmAlerts(db, { stageStuckDays: 0 }, saturday);
     const mine = () =>
       db

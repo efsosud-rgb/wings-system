@@ -757,6 +757,13 @@
       "when": 1793501109748,
       "tag": "0109_ads_approval_expired",
       "breakpoints": true
+    },
+    {
+      "idx": 110,
+      "version": "7",
+      "when": 1793578175887,
+      "tag": "0110_crm_holidays_rj_2026_2027",
+      "breakpoints": true
     }
   ]
 }

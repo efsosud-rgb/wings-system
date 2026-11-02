@@ -35,5 +35,7 @@
    pode ser considerado marcação de ponto).
 2. Logout não é confiável (fechar a aba não gera logout): a sessão expira por
    inatividade e o fechamento usa o último instante de atividade registrado.
-3. Calendário de feriados: nacionais, estaduais e municipais a definir.
+3. Calendário de feriados: a tabela `holidays` já tem 2026 e 2027 (nacionais, estado do RJ e cidade do
+   Rio, migração 0110), usada hoje só pelos prazos do CRM (`docs/crm/prazos-horas-uteis.md`); o
+   cálculo do ponto ainda não a lê.
 4. Formato de exportação (AFD ou equivalente) a definir após a validação legal.

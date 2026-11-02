@@ -14,6 +14,7 @@ import {
   WA_MEDIA_KINDS,
   WA_WINDOW_HOURS,
   type BrandArticle,
+  type HolidaySet,
   type SofiaCloseReason,
   type SofiaHandoffReason,
   type SofiaQuestion,
@@ -36,6 +37,7 @@ import {
   sql,
 } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
+import { loadHolidays } from '../../lib/holidays.js';
 import {
   clients,
   crmNotifications,
@@ -131,8 +133,9 @@ export function nameFrom(text: string): string | null {
   return cleaned;
 }
 
-/** Mon–Fri 9h–18h in São Paulo (the CRM's working hours, to the minute). */
-const inHours = (now: Date) => nextBusinessInstant(now).getTime() <= now.getTime();
+/** Mon–Fri 9h–18h in São Paulo, holidays off (the CRM's working hours, to the minute). */
+const inHours = (now: Date, holidays: HolidaySet) =>
+  nextBusinessInstant(now, holidays).getTime() <= now.getTime();
 
 type Step =
   | { kind: 'objective' }
@@ -229,6 +232,7 @@ class Turn {
   private brandClientId: string | null;
   private misses: number;
   private settings!: SofiaSettings;
+  private holidays!: HolidaySet;
   private contact!: Contact;
   private newIds: string[] = [];
   /** This turn's own SAIR, left out of the "não me contate" check so it gets its confirmation. */
@@ -266,6 +270,7 @@ class Turn {
   async run() {
     const { db } = this;
     this.settings = await loadSofiaSettings(db);
+    this.holidays = await loadHolidays(db);
     const contact = await db.query.waContacts.findFirst({
       where: eq(waContacts.id, this.conversation.contactId),
     });
@@ -768,7 +773,7 @@ class Turn {
   // --- endings ------------------------------------------------------------------------------
 
   private withHours(text: string) {
-    return inHours(this.now) ? text : `${text}\n\n${this.settings.texts.outOfHours}`;
+    return inHours(this.now, this.holidays) ? text : `${text}\n\n${this.settings.texts.outOfHours}`;
   }
 
   /** Her first words always say who she is, even when they are a handover. */

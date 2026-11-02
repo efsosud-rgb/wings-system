@@ -2,6 +2,7 @@ import { LEAD_SOURCE_LABELS, isBusinessInstant, type LeadSource } from '@wings/s
 import { and, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { crmNotifications, employees, leadTasks, leads } from '../../db/schema/index.js';
+import { loadHolidays } from '../../lib/holidays.js';
 import type { Mailer } from '../../lib/mailer.js';
 import { isEntryStageName } from './crm.js';
 
@@ -213,6 +214,7 @@ export async function sendPendingNoticeMails(
   const result: NoticeMailResult = { sent: 0, skipped: 0, failed: 0 };
   const claimed = await claim(db, now);
   if (claimed.length === 0) return result;
+  const inHours = isBusinessInstant(now, await loadHolidays(db));
   const skip = async (id: string, reason: string) => {
     await settle(db, id, 'skipped', now, reason);
     result.skipped += 1;
@@ -280,7 +282,7 @@ export async function sendPendingNoticeMails(
         await skip(notice.id, 'contact_made');
         continue;
       }
-      if (!isBusinessInstant(now)) {
+      if (!inHours) {
         // Outside working hours the warning waits; the next pass inside them sends it.
         await settle(db, notice.id, 'pending', now);
         continue;
