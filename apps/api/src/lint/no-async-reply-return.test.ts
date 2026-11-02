@@ -78,6 +78,9 @@ tester.run('no-async-reply-return', noAsyncReplyReturn, {
      const sent = await notify(mailer);`,
     `async function wasSent(reply) { await flush(); return reply.sent; }
      const sent = await wasSent(reply);`,
+    // The right side of `??` is handed on: here it goes straight back to Fastify.
+    `async function sendRecord(request, reply) { return reply.status(404).send({}); }
+     app.get('/x', async (request, reply) => (await cached(request)) ?? sendRecord(request, reply));`,
   ],
   invalid: [
     // PR #66: the 429 was awaited into undefined and the request went on to Meta.
@@ -143,6 +146,39 @@ tester.run('no-async-reply-return', noAsyncReplyReturn, {
     {
       code: `const check = async (reply, ok: boolean) => (ok ? null : await reply.code(400).send({}));
              const bad = await check(reply, false);`,
+      errors: [error],
+    },
+    // The left side of `||`, `??` and `&&` is read: undefined there runs the right side.
+    {
+      code: `async function overLimit(reply) { return reply.status(429).send({ error: 'limit' }); }
+             app.post('/x', async (request, reply) => (await overLimit(reply)) || sendToMeta());`,
+      errors: [error],
+    },
+    {
+      code: `async function overLimit(reply) { return reply.status(429).send({ error: 'limit' }); }
+             app.post('/x', async (request, reply) => (await overLimit(reply)) ?? sendToMeta());`,
+      errors: [error],
+    },
+    {
+      code: `async function allowed(reply) { return reply.status(403).send({}); }
+             app.post('/x', async (request, reply) => (await allowed(reply)) && audit());`,
+      errors: [error],
+    },
+    // The reply kept in a constant, or returned before `send`, is the same thenable.
+    {
+      code: `async function refuse(reply) { const res = reply.code(429).send({}); return res; }
+             const refused = await refuse(reply);`,
+      errors: [error],
+    },
+    {
+      code: `async function limit(reply) { await audit(); return reply.status(429); }
+             const limited = await limit(reply);`,
+      errors: [error],
+    },
+    // A callback given to a function received as a parameter: what that function does is unknown.
+    {
+      code: `async function run(reply, wrap) { return wrap(reply, async () => reply.status(429).send({})); }
+             app.post('/x', async (request, reply) => run(reply, guard));`,
       errors: [error],
     },
   ],

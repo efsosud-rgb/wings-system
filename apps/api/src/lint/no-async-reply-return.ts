@@ -45,8 +45,17 @@ const ROUTE_KEYS = new Set([
   'onError',
   'onTimeout',
 ]);
-/** The calls that end a reply chain (`reply.status(4xx).send(...)`, `reply.redirect(...)`). */
-const ENDS = new Set(['send', 'redirect']);
+/** Reply methods that return the reply itself (`reply.status(4xx).send(...)`, `reply.code(429)`). */
+const ENDS = new Set([
+  'send',
+  'redirect',
+  'code',
+  'status',
+  'header',
+  'headers',
+  'type',
+  'removeHeader',
+]);
 /** Expressions that hand their operand's value on unchanged (or settle it, for `await`). */
 const PASS = new Set([
   'AwaitExpression',
@@ -149,8 +158,10 @@ export const noAsyncReplyReturn: Rule.RuleModule = {
       let at = node;
       while (PASS.has(up(at).type)) {
         const parent = up(at);
-        // A ternary's test and a sequence's leading items are read, not passed on.
+        // A ternary's test, the left of `||`/`??`/`&&` and a sequence's leading items are read,
+        // not passed on: `(await refuse(reply)) || sendToMeta()` goes on after the refusal.
         if (parent.type === 'ConditionalExpression' && parent.test === at) break;
+        if (parent.type === 'LogicalExpression' && parent.left === at) break;
         if (parent.type === 'SequenceExpression' && parent.expressions.at(-1) !== at) break;
         at = parent;
       }
@@ -240,10 +251,11 @@ export const noAsyncReplyReturn: Rule.RuleModule = {
       const call = up(fn);
       if (call.type !== 'CallExpression' || call.callee.type !== 'Identifier') return false;
       const index = call.arguments.indexOf(fn as never);
-      const helper = variableOf(call.callee as Node & { name: string })?.defs[0]?.node as
-        Node | undefined;
-      const body =
-        helper?.type === 'VariableDeclarator' ? (helper.init as Node | null) : (helper ?? null);
+      // A helper declared in this file; a parameter's def is the function that receives it.
+      const def = variableOf(call.callee as Node & { name: string })?.defs[0];
+      if (def?.type !== 'FunctionName' && def?.type !== 'Variable') return false;
+      const helper = def.node as Node;
+      const body = helper.type === 'VariableDeclarator' ? (helper.init as Node | null) : helper;
       if (!body || !isFunction(body)) return false;
       const param = (body as Fn & { params: Node[] }).params[index];
       if (param?.type !== 'Identifier') return false;
@@ -260,7 +272,9 @@ export const noAsyncReplyReturn: Rule.RuleModule = {
       );
     };
 
-    /** Is this name a Fastify reply: called `reply`, or a parameter typed `FastifyReply`? */
+    /** Is this name a Fastify reply: called `reply`, or a parameter typed `FastifyReply`?
+     * shortcut: an untyped parameter with another name (`async (res) => res.code(429).send()`)
+     * is not seen; use type-aware linting if the code starts naming the reply otherwise. */
     const isReplyName = (node: Node & { name: string }): boolean => {
       if (node.name === 'reply') return true;
       const def = variableOf(node)?.defs[0];
@@ -274,7 +288,13 @@ export const noAsyncReplyReturn: Rule.RuleModule = {
 
     /** Can the value of `node` be the reply itself? */
     const isReply = (node: Node): boolean => {
-      if (node.type === 'Identifier') return isReplyName(node);
+      if (node.type === 'Identifier') {
+        if (isReplyName(node)) return true;
+        // A constant holding the reply: `const res = reply.code(429).send(); return res;`.
+        const def = variableOf(node)?.defs[0];
+        const init = def?.type === 'Variable' && def.parent.kind === 'const' ? def.node.init : null;
+        return init ? once('reply', init as Node, () => isReply(init as Node)) : false;
+      }
       if (node.type === 'ConditionalExpression')
         return isReply(node.consequent as Node) || isReply(node.alternate as Node);
       if (node.type === 'LogicalExpression')
