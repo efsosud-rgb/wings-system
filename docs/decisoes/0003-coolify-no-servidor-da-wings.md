@@ -29,7 +29,8 @@ rodada dos agentes, e mexe no painel que gerencia a produção (31/10, 13:15 UTC
 ## Consequências
 
 - Segredos ficam nas variáveis do Coolify (ver [0014](0014-segredos-so-no-coolify.md)).
-- Tarefas agendadas usam a tarefa agendada do Coolify (`docs/roadmap.md`, `docs/deploy.md`), não um serviço novo.
+- As tarefas agendadas de hoje (ingestão de anúncios e reconciliação) usam a tarefa agendada do Coolify
+  (`docs/deploy.md`, `docs/roadmap.md`), sem serviço novo.
 - Um contêiner que publique 80 ou 443 por conta própria já derrubou todos os sites do servidor uma vez.
 - Divergência conhecida: `docs/deploy.md` diz que um push em `develop` dispara o deploy do staging e que a produção ainda
   roda num contêiner manual; o `AGENTS.md`, mais novo, diz que o repositório não tem webhook e que o deploy é sempre pelo

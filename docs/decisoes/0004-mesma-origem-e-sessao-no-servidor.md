@@ -28,4 +28,5 @@ Registrado no `AGENTS.md`: sem CORS e com cookie simples; e sessão no banco per
 
 - Rotas da API são registradas sem `/api`; o proxy do Vite faz o mesmo em desenvolvimento.
 - Método inseguro com `Origin` de fora é recusado (CSRF), além do `SameSite=Lax`.
-- As landing pages ficam em hosts próprios e chamam só as rotas públicas `/public/site-forms/:slug`.
+- Exceção conhecida: as landing pages ficam em hosts próprios e chamam a API de outra origem, pelas rotas públicas
+  `/public/site-forms/:slug`.
