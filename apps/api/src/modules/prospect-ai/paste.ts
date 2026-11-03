@@ -399,6 +399,14 @@ export async function confirmPaste(
         recordedBy: actor.employeeId,
         createdAt: deps.now,
       };
+      // A "não me contate" written since crossBase (the AI can take seconds) keeps the @ out.
+      const optedOut = await optOutsAmong(tx, {
+        placeIds: [],
+        phones: [],
+        instagramUsers: [comment.username],
+        channels: ['instagram'],
+      });
+      if (optedOut.size > 0) return 'blocked';
       const open = await openOpportunityOf(tx, comment.username);
       if (open) {
         const joined = await tx
@@ -473,6 +481,7 @@ export async function confirmPaste(
     });
     if (outcome === 'joined') result.joined += 1;
     else if (outcome === 'repeated') result.repeated += 1;
+    else if (outcome === 'blocked') result.skippedKnown += 1;
     else {
       result.created += 1;
       if (outcome.state === 'nova') result.lists.querComprar += 1;
@@ -490,7 +499,7 @@ export async function confirmPaste(
       created: result.created,
       joined: result.joined,
       repeated: result.repeated,
-      skippedKnown: known,
+      skippedKnown: result.skippedKnown,
       querComprar: result.lists.querComprar,
       revisar: result.lists.revisar,
       aiEnabled: deps.aiEnabled,

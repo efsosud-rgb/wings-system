@@ -162,6 +162,13 @@ describe('"não me contate" at the moment of the action', () => {
     });
   });
 
+  it('"Copiar mensagem" answers only for an open prospect, as the screen shows it', async () => {
+    const p = await prospectOf('usuario.fechado1');
+    await call(seller, 'POST', `/prospects/${p.id}/discard`, { reason: 'sem perfil' });
+    const message = await call(seller, 'GET', `/prospects/${p.id}/message`);
+    expect([message.statusCode, message.json().error]).toEqual([409, 'prospect_fechado']);
+  });
+
   it('a register written after the paste refuses the message and "Abordei", and closes the prospect', async () => {
     const p = await prospectOf('usuario.optout2');
     await optOut('usuario.optout2', ['all']);

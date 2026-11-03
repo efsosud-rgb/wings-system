@@ -54,9 +54,12 @@ const env = (extra: Record<string, string>) =>
   });
 
 /** Buys whatever says "quero", praises the rest; the phrase is always the whole text. */
+/** What happens elsewhere while the model answers (a test of a race sets it). */
+let duringAi: (() => Promise<void>) | null = null;
 const scriptedLlm: AgentLlm = {
   async complete(request) {
     llmSeen.push(request);
+    if (duringAi) await duringAi();
     const user = request.messages.find((m) => m.role === 'user')!.content;
     const { comentarios } = JSON.parse(user) as { comentarios: { i: number; texto: string }[] };
     const itens = comentarios.map(({ i, texto }) => ({
@@ -382,6 +385,31 @@ describe('confirm (§1.2 step 4)', () => {
     expect((await call(seller, 'GET', '/status')).json()).toMatchObject({ pastesToday: 1 });
     const next = await paste(seller, '@usuario.vazio2: quero abrir');
     expect(next.json<PasteConfirmResponse>()).toMatchObject({ created: 1 });
+  });
+
+  it('a "não me contate" written while the AI runs keeps the @ out of the list', async () => {
+    duringAi = async () => {
+      await recordContactOptOut(db, {
+        instagramUser: 'usuario.corrida',
+        channels: ['instagram'],
+        origin: 'crm',
+        reason: 'teste',
+        createdBy: null,
+      });
+    };
+    try {
+      // A text no other test classifies: not in the cache, so the model runs.
+      const res = await paste(sellerA, '@usuario.corrida: quero levar a marca para minha cidade');
+      expect(res.json<PasteConfirmResponse>()).toMatchObject({ created: 0, skippedKnown: 1 });
+    } finally {
+      duringAi = null;
+    }
+    expect(
+      await db
+        .select()
+        .from(prospectEvidence)
+        .where(eq(prospectEvidence.authorUsername, 'usuario.corrida')),
+    ).toHaveLength(0);
   });
 
   it('a second comment of an open prospect joins it, without the AI', async () => {
