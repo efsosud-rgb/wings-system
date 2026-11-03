@@ -11,6 +11,11 @@ export default defineConfig({
     exclude: ['**/node_modules/**', '**/dist/**'],
     globals: false,
     // Same network kill switch as the API and shared packages.
-    setupFiles: [resolve(import.meta.dirname, '../api/src/test/no-network.ts')],
+    setupFiles: [
+      resolve(import.meta.dirname, '../api/src/test/no-network.ts'),
+      resolve(import.meta.dirname, 'src/test/timing.ts'),
+    ],
+    // Room for findBy/waitFor (src/test/timing.ts) on a busy CI runner.
+    testTimeout: 15_000,
   },
 });
