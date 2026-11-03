@@ -140,10 +140,10 @@ export const instagramBusinessSnapshots = pgTable(
 );
 
 /**
- * Append-only: one row per call to Business Discovery, written (under a lock)
+ * Insert-only: one row per call to Business Discovery, written (under a lock)
  * before the call goes, as the Google quota (`prospect_calls`). The daily
  * ceiling `discovery.porDia` counts these rows; a call that failed still counts.
- * Who asked and when, never the @.
+ * Who asked and when, never the @; deleted after 30 days (prospect-ai housekeeping).
  */
 export const instagramDiscoveryCalls = pgTable(
   'instagram_discovery_calls',
