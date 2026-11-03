@@ -175,7 +175,7 @@ describe('RD webhook: the echo of RD Station CRM', () => {
       expect(events.filter((event) => event.kind === 'lead.received.rd_station')).toHaveLength(1);
     });
 
-    it("does not tie a deal the intake made for another page to the lead (the echo names no page)", async () => {
+    it('does not tie a deal the intake made for another page to the lead (the echo names no page)', async () => {
       const lead = await importedLead(3);
       await db.insert(expansionIntakeLedger).values({
         conversionKey: `${personOf(3).uuid}|lp-outra-pagina|2026-10-30`,

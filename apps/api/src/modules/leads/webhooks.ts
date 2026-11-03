@@ -449,11 +449,11 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
         const linkedDeal =
           conversion.externalId && !isEcho
             ? await linkIntakeDealToLead(db, {
-              leadId: result.lead.id,
-              contactUuid: conversion.externalId,
-              identifier,
-            })
-          : null;
+                leadId: result.lead.id,
+                contactUuid: conversion.externalId,
+                identifier,
+              })
+            : null;
         await writeAudit(db, {
           action: result.created ? 'lead.received' : 'lead.merged',
           entity: 'lead',

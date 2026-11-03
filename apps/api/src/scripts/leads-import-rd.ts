@@ -7,6 +7,7 @@ import {
   importRdDeals,
   rdCrmReader,
   rdOwnerAllowlist,
+  type RdImportPlan,
   type RdImportResult,
 } from '../modules/leads/rd-import.js';
 
@@ -28,6 +29,28 @@ import {
  *
  * The output is counts, brand names and RD field shapes — never a person.
  */
+/**
+ * The simulation's projection, one line per funnel and brand (or employee id), each starting with
+ * `plano:` so a script can keep exactly these lines. Counts, brand names and employee ids only.
+ */
+export function formatPlan(plan: RdImportPlan): string[] {
+  const rows = (title: string, byFunnel: RdImportPlan['create']) => {
+    const lines = LEAD_PIPELINES.flatMap((funnel) =>
+      Object.entries(byFunnel[funnel])
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .map(([key, count]) => `plano:   ${funnel} · ${key}: ${count}`),
+    );
+    return [`plano: ${title}`, ...(lines.length ? lines : ['plano:   nenhum'])];
+  };
+  const out = plan.outsideRotation;
+  return [
+    ...rows('leads a criar, por funil e marca', plan.create),
+    ...rows('ligados a um lead que já existia, por funil e marca', plan.link),
+    ...rows('rodízio previsto para os leads a criar, por funil e id do funcionário', plan.rotation),
+    `plano: fora do rodízio: dono do RD ${out.ownerFromRd}, fechado ${out.closed}, arquivo ${out.archive}, antigo demais ${out.tooOld}, rodízio desligado ${out.rotationOff}, outro funil ${out.otherFunnel}`,
+  ];
+}
+
 export function formatImport(result: RdImportResult, ownerAllowlist = false): string {
   const brands = Object.entries(result.brands).sort((a, b) => b[1] - a[1]);
   return [
@@ -50,6 +73,7 @@ export function formatImport(result: RdImportResult, ownerAllowlist = false): st
     ...brands.map(([brand, count]) => `  ${brand}: ${count}`),
     `marcas sem cliente: ${result.unmatchedBrands.length === 0 ? 'nenhuma' : result.unmatchedBrands.join(', ')}`,
     `falhas: ${result.failed}`,
+    ...(result.applied ? [] : formatPlan(result.plan)),
   ].join('\n');
 }
 

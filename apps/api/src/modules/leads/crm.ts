@@ -904,18 +904,9 @@ export async function ensureReturnTask(
 
 // --- distribution --------------------------------------------------------------------
 
-/**
- * The next seller of a funnel, round-robin: the active member who waited
- * longest (never assigned first). Locks the funnel's rotation so two leads
- * arriving together go to two people. Null when the rotation is empty.
- */
-export async function nextInRotation(
-  tx: Executor,
-  pipeline: LeadPipeline,
-  now = new Date(),
-): Promise<string | null> {
-  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`crm:rotation:${pipeline}`}))`);
-  const [member] = await tx
+/** The funnel's active rotation members in the order they are served: the longest without a lead first. */
+function rotationMembers(tx: Executor, pipeline: LeadPipeline) {
+  return tx
     .select({ id: crmDistributionMembers.id, employeeId: crmDistributionMembers.employeeId })
     .from(crmDistributionMembers)
     .innerJoin(employees, eq(employees.id, crmDistributionMembers.employeeId))
@@ -929,8 +920,29 @@ export async function nextInRotation(
     .orderBy(
       sql`${crmDistributionMembers.lastAssignedAt} asc nulls first`,
       asc(crmDistributionMembers.updatedAt),
-    )
-    .limit(1);
+    );
+}
+
+/**
+ * Who the rotation would serve next, in order, without taking a turn or locking: the preview a
+ * simulation cycles through (each lead served goes to the back, so the order repeats).
+ */
+export async function rotationOrder(tx: Executor, pipeline: LeadPipeline): Promise<string[]> {
+  return (await rotationMembers(tx, pipeline)).map((member) => member.employeeId);
+}
+
+/**
+ * The next seller of a funnel, round-robin: the active member who waited
+ * longest (never assigned first). Locks the funnel's rotation so two leads
+ * arriving together go to two people. Null when the rotation is empty.
+ */
+export async function nextInRotation(
+  tx: Executor,
+  pipeline: LeadPipeline,
+  now = new Date(),
+): Promise<string | null> {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`crm:rotation:${pipeline}`}))`);
+  const [member] = await rotationMembers(tx, pipeline).limit(1);
   if (!member) return null;
   await tx
     .update(crmDistributionMembers)
