@@ -81,7 +81,12 @@ Uma exceção: o eco do RD Station CRM. Cada vez que o CRM muda um negócio, o R
 uma conversão no contato ("Negociação atualizada no RD Station CRM", "RD Station CRM"). Isso não é
 página nenhuma: de uma pessoa que a Wings ainda não tem (nem por id do RD, telefone ou e-mail) o
 webhook responde 200, não cria lead e conta em `ignoredEcho` (`RD_CRM_ECHO_IDENTIFIERS` em
-`webhooks.ts`). De uma pessoa que já existe, o eco continua se juntando ao lead dela.
+`webhooks.ts`). De uma pessoa que já existe, o eco continua se juntando ao lead dela e aparece na linha do
+tempo (`crmEcho` no evento), mas **não é uma página em que a pessoa converteu** (03/11/2026): não enfileira a
+pesquisa paga (cada mudança de negócio no CRM gera um eco, e um lead importado do RD CRM nunca foi pesquisado),
+não grava o nome do eco como `landing_page` nem `conversion_identifier` do lead e não liga negócio do intake
+(sem identificador, a chave do registro casaria com qualquer negócio do contato). Teste:
+`apps/api/src/modules/leads/rd-webhook-echo.test.ts`.
 
 ## Data de entrada (`leads.entered_at`)
 
