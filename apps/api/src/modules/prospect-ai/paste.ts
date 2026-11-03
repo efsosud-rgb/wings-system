@@ -267,8 +267,34 @@ async function openOpportunityOf(db: Pick<Database, 'select'>, username: string)
   return row?.id ?? null;
 }
 
+const emptyResult = (
+  batchId: string | null,
+  repeated: number,
+  skippedKnown: number,
+): PasteConfirmResponse => ({
+  batchId,
+  created: 0,
+  joined: 0,
+  repeated,
+  skippedKnown,
+  lists: {
+    querComprar: 0,
+    revisar: 0,
+    outros: {
+      quer_comprar: 0,
+      pediu_preco: 0,
+      duvida: 0,
+      elogio: 0,
+      reclamacao: 0,
+      spam: 0,
+      sem_sinal: 0,
+    },
+  },
+});
+
 /**
- * Confirms the paste (§1.2 step 4): the day's limit is counted and the batch written under one
+ * Confirms the paste (§1.2 step 4): a paste with no new comment (all known or repeated) writes
+ * nothing and is not counted; otherwise the day's limit is counted and the batch written under one
  * lock per seller; then the rules and the AI; then, per comment and under a lock on its @, the
  * evidence and the opportunity (or the evidence joined to the @'s open opportunity).
  */
@@ -281,6 +307,31 @@ export async function confirmPaste(
   const { reading, postUrl, postOwner } = read;
   const tags = await crossBase(db, actor, [...new Set(reading.comments.map((c) => c.username))]);
   const known = reading.comments.filter((c) => isKnown(tags.get(c.username))).length;
+  const usable = reading.comments
+    .filter((c) => !isKnown(tags.get(c.username)))
+    .map((c) => ({ ...c, externalId: evidenceExternalId(postUrl, c.username, c.text) }));
+  const existing = new Set(
+    usable.length === 0
+      ? []
+      : (
+          await db
+            .select({ id: prospectEvidence.externalId })
+            .from(prospectEvidence)
+            .where(
+              and(
+                eq(prospectEvidence.tenantId, WINGS_TENANT_ID),
+                eq(prospectEvidence.source, 'instagram_colagem'),
+                inArray(
+                  prospectEvidence.externalId,
+                  usable.map((c) => c.externalId),
+                ),
+              ),
+            )
+        ).map((row) => row.id),
+  );
+  const fresh = usable.filter((c) => !existing.has(c.externalId));
+  // A paste without one new comment writes nothing and does not count toward the day's limit.
+  if (fresh.length === 0) return emptyResult(null, usable.length, known);
   const batchId = await db.transaction(async (tx) => {
     await tx.execute(
       sql`select pg_advisory_xact_lock(hashtext(${`ig_paste:${actor.employeeId}`}))`,
@@ -320,29 +371,6 @@ export async function confirmPaste(
       `Você já fez as ${deps.settings.paste.perSellerPerDay} colagens de hoje. Volte amanhã.`,
     );
 
-  const usable = reading.comments
-    .filter((c) => !isKnown(tags.get(c.username)))
-    .map((c) => ({ ...c, externalId: evidenceExternalId(postUrl, c.username, c.text) }));
-  const existing = new Set(
-    usable.length === 0
-      ? []
-      : (
-          await db
-            .select({ id: prospectEvidence.externalId })
-            .from(prospectEvidence)
-            .where(
-              and(
-                eq(prospectEvidence.tenantId, WINGS_TENANT_ID),
-                eq(prospectEvidence.source, 'instagram_colagem'),
-                inArray(
-                  prospectEvidence.externalId,
-                  usable.map((c) => c.externalId),
-                ),
-              ),
-            )
-        ).map((row) => row.id),
-  );
-  const fresh = usable.filter((c) => !existing.has(c.externalId));
   // Only who has no open prospect goes to the AI: a joined comment costs nothing.
   const toClassify = fresh.filter((c) => tags.get(c.username)?.kind !== 'prospect');
   const classified = await classifyComments(
@@ -352,26 +380,7 @@ export async function confirmPaste(
   const classOf = new Map(toClassify.map((c, i) => [c.externalId, classified[i]!]));
 
   const days = deps.settings.retention.instagramSemLeadDias;
-  const result: PasteConfirmResponse = {
-    batchId,
-    created: 0,
-    joined: 0,
-    repeated: usable.length - fresh.length,
-    skippedKnown: known,
-    lists: {
-      querComprar: 0,
-      revisar: 0,
-      outros: {
-        quer_comprar: 0,
-        pediu_preco: 0,
-        duvida: 0,
-        elogio: 0,
-        reclamacao: 0,
-        spam: 0,
-        sem_sinal: 0,
-      },
-    },
-  };
+  const result = emptyResult(batchId, usable.length - fresh.length, known);
   for (const comment of fresh) {
     const outcome = await db.transaction(async (tx) => {
       await tx.execute(

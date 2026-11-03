@@ -228,9 +228,19 @@ function PasteForm({
             {done.lists.revisar} em "Revisar"), {done.joined} juntados a um prospect que já estava
             aberto, {done.repeated} repetidos e {done.skippedKnown} já conhecidos.
           </p>
-          <button type="button" className="crm-btn is-primary" onClick={() => onDone(done.batchId)}>
-            Ver a lista desta colagem
-          </button>
+          {done.batchId === null ? (
+            <p className="crm-sub">
+              Nenhum comentário novo: esta colagem não contou no limite de hoje.
+            </p>
+          ) : (
+            <button
+              type="button"
+              className="crm-btn is-primary"
+              onClick={() => onDone(done.batchId!)}
+            >
+              Ver a lista desta colagem
+            </button>
+          )}
         </div>
       )}
     </div>

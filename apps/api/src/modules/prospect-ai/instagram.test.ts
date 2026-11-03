@@ -359,6 +359,31 @@ describe('confirm (§1.2 step 4)', () => {
     ).toHaveLength(0);
   });
 
+  it('a paste with no new comment (known people or repeated) writes no batch and is not counted', async () => {
+    const seller = await loginAs('vendedor_formatacao');
+    const link = newPost();
+    expect((await paste(seller, '@usuario.vazio1: quero abrir', link)).statusCode).toBe(200);
+    // 12 pastes with nothing new: more than the 10 of the day, and none is refused.
+    for (let i = 0; i < 12; i += 1) {
+      const empty =
+        i % 2 === 0
+          ? await paste(seller, '@usuario.vazio1: quero abrir', link)
+          : await paste(seller, '@pessoa.cliente: quero\n@pessoa.bloqueada: quero');
+      expect(empty.statusCode).toBe(200);
+      expect(empty.json<PasteConfirmResponse>()).toMatchObject({
+        batchId: null,
+        created: 0,
+        joined: 0,
+      });
+    }
+    expect(
+      await db.select().from(igPasteBatches).where(eq(igPasteBatches.createdBy, seller.id)),
+    ).toHaveLength(1);
+    expect((await call(seller, 'GET', '/status')).json()).toMatchObject({ pastesToday: 1 });
+    const next = await paste(seller, '@usuario.vazio2: quero abrir');
+    expect(next.json<PasteConfirmResponse>()).toMatchObject({ created: 1 });
+  });
+
   it('a second comment of an open prospect joins it, without the AI', async () => {
     await paste(sellerA, '@usuario.junta: quero saber mais');
     const calls = llmSeen.length;

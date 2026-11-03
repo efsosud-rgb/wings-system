@@ -270,7 +270,8 @@ export interface PastePreviewResponse {
 }
 
 export interface PasteConfirmResponse {
-  batchId: string;
+  /** Null: no new comment, so nothing was written and the paste did not count toward the day. */
+  batchId: string | null;
   created: number;
   /** A comment already on an open prospect: joined to it. */
   joined: number;
