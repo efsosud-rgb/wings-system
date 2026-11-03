@@ -257,8 +257,11 @@ async function move(
       and(
         eq(prospectOpportunities.id, found.row.id),
         inArray(prospectOpportunities.state, from),
-        // decided_at on an open state marks a "Criar lead" in progress.
-        found.row.state === 'rejeitada' ? undefined : isNull(prospectOpportunities.decidedAt),
+        // A reopening never undoes a "Não contatar" written since the read; decided_at on an open
+        // state marks a "Criar lead" in progress.
+        found.row.state === 'rejeitada'
+          ? sql`${prospectOpportunities.decisionReason} is distinct from ${DO_NOT_CONTACT_REASON}`
+          : isNull(prospectOpportunities.decidedAt),
       ),
     )
     .returning({ id: prospectOpportunities.id });
