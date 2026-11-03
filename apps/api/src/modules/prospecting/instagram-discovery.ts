@@ -11,7 +11,7 @@ import { and, eq, gte, inArray, lt, ne, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { WINGS_TENANT_ID } from '../../db/schema/ads.js';
 import { instagramBusinessSnapshots, instagramDiscoveryCalls } from '../../db/schema/index.js';
-import { periodStarts } from '../media/providers/quota.js';
+import { startOfDaySaoPaulo } from '../prospect-ai/classifier.js';
 import { loadInstagramSettings } from '../prospect-ai/settings.js';
 import {
   GRAPH_API_VERSION,
@@ -79,7 +79,7 @@ async function callsToday(db: Pick<Database, 'select'>, now: Date): Promise<numb
     .where(
       and(
         eq(instagramDiscoveryCalls.tenantId, WINGS_TENANT_ID),
-        gte(instagramDiscoveryCalls.createdAt, periodStarts(now).day),
+        gte(instagramDiscoveryCalls.createdAt, startOfDaySaoPaulo(now)),
       ),
     );
   return row?.total ?? 0;

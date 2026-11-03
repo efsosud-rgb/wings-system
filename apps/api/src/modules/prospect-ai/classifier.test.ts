@@ -8,6 +8,7 @@ import {
   BATCH_SIZE,
   classifyComments,
   ruleFor,
+  startOfDaySaoPaulo,
   textForAi,
   type ClassifierDeps,
 } from './classifier.js';
@@ -271,5 +272,25 @@ describe('the model, in batches of 20', () => {
       .from(prospectClassifierCache)
       .where(eq(prospectClassifierCache.tenantId, run!.tenantId));
     expect(cache).toHaveLength(0);
+  });
+});
+
+describe('the day of the ceilings (São Paulo)', () => {
+  it("starts at the zone's midnight, with the offset of that day", () => {
+    // 23:59 of 02/11 in São Paulo is still 02/11.
+    expect(startOfDaySaoPaulo(new Date('2026-11-03T02:59:00Z')).toISOString()).toBe(
+      '2026-11-02T03:00:00.000Z',
+    );
+    expect(startOfDaySaoPaulo(new Date('2026-11-03T03:00:00Z')).toISOString()).toBe(
+      '2026-11-03T03:00:00.000Z',
+    );
+    // Under the old daylight saving time (-02:00), as if it came back.
+    expect(startOfDaySaoPaulo(new Date('2018-12-15T12:00:00Z')).toISOString()).toBe(
+      '2018-12-15T02:00:00.000Z',
+    );
+    // The day it began, midnight was skipped: the day started at 01:00 (-02:00).
+    expect(startOfDaySaoPaulo(new Date('2018-11-04T12:00:00Z')).toISOString()).toBe(
+      '2018-11-04T03:00:00.000Z',
+    );
   });
 });

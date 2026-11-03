@@ -61,8 +61,9 @@ Ajustes → Instagram (`prospect_ai_settings.settings.instagram.discovery`, `pro
 
 ## Limites
 
-- **Cache:** um @ lido há menos de `cacheDias` não gasta outra chamada, para nenhum vendedor. Leitura com erro não fica no cache.
-- **Teto do dia** (São Paulo): cada chamada grava uma linha em `instagram_discovery_calls` sob trava **antes** de sair; a 501ª (padrão) não chama a Meta e responde "limite de consultas do dia". Uma chamada que falhou conta.
+- **Cache:** um @ lido há menos de `cacheDias` não gasta outra chamada, para nenhum vendedor; uma conta pessoal servida do cache volta com o mesmo motivo da primeira leitura. Leitura com erro não fica no cache: depois da espera, o mesmo @ vai à Meta de novo (teste no `instagram-discovery.test.ts`, "error 10…").
+- **Tela:** um @ que voltou sem números (espera, limite do dia, erro) é perguntado de novo na busca seguinte, e mostra "lendo…" até a resposta; o que voltou com números ou como conta pessoal não é perguntado de novo enquanto a página estiver aberta.
+- **Teto do dia** (São Paulo, pelo fuso `America/Sao_Paulo` e não por -03:00 fixo, `startOfDaySaoPaulo`): cada chamada grava uma linha em `instagram_discovery_calls` sob trava **antes** de sair; a 501ª (padrão) não chama a Meta e responde "limite de consultas do dia". Uma chamada que falhou conta.
 - **Espera:** cabeçalho `X-App-Usage` ou `X-Business-Use-Case-Usage` em 80% ou mais, erro de limite (4, 17, 32, 613, 80002) ou de permissão (10, 190, 200) param as chamadas pelo tempo que a Meta der (`estimated_time_to_regain_access`) ou por 60 minutos; a tela mostra "Instagram em espera até HH:MM".
 - **Erros:** 110, 24, subcódigo 2207013 e 100 "invalid user id" = `nao_comercial` ("a Meta só mostra conta comercial; esta é pessoal, privada ou não existe"); 10, 190, 200 = "a Meta recusou a consulta"; o resto = "a Meta não respondeu". O mapa é o mesmo da conferência do lead do site (agora em `shared`).
 
@@ -70,7 +71,7 @@ Ajustes → Instagram (`prospect_ai_settings.settings.instagram.discovery`, `pro
 
 - **Só empresa vai à Meta:** a busca assina cada @ para o vendedor que buscou (HMAC derivado do `SESSION_SECRET`, 12 horas); a rota recusa @ sem esse tíquete ("este @ não veio da busca do Google") e não chama a Meta. O @ de quem comentou (partes 1 e 2) nunca tem tíquete.
 - **O que fica:** `instagram_business_snapshots` guarda o @ da empresa, números, `source = meta_business_discovery`, `api_version` e `fetched_at`. Nunca nome, bio, site, foto, legendas, ids de mídia nem `place_id`. Apagada 30 dias depois de `fetched_at`.
-- `instagram_discovery_calls` guarda quem pediu e quando, nunca o @.
+- `instagram_discovery_calls` guarda quem pediu (o id do funcionário) e quando, nunca o @. Apagada 30 dias depois de `created_at`, pelo mesmo expurgo de hora em hora: o teto só conta as linhas do dia.
 - Sem `GRANT` para `wings_ro` e nada no `dw`.
 
 ## O que ficou diferente da especificação (opção mais segura; perguntas no relatório da ig03)

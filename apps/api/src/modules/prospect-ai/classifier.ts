@@ -204,10 +204,26 @@ const answerSchema = z.object({ itens: z.array(z.unknown()).max(BATCH_SIZE * 2) 
 const reserveOf = (items: number) =>
   estimateAgentCostMicroUsd(CLASSIFIER_MODEL, 1_500 + 120 * items, 100 * items);
 
-/** Midnight of today in São Paulo: the ceiling is the team's working day (spec PA, annex 2 §4.8). */
+const SAO_PAULO = 'America/Sao_Paulo';
+const dayInSaoPaulo = (at: Date) =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: SAO_PAULO }).format(at);
+
+/**
+ * The start of today in São Paulo: the ceiling is the team's working day (spec PA, annex 2 §4.8).
+ * The zone's own offset of that day, not a fixed -03:00, so a return of daylight saving time keeps
+ * it right; on a day whose midnight is skipped, the day starts at 01:00.
+ */
 export function startOfDaySaoPaulo(now: Date): Date {
-  const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(now);
-  return new Date(`${day}T00:00:00-03:00`);
+  const day = dayInSaoPaulo(now);
+  const offset = new Intl.DateTimeFormat('en-US', {
+    timeZone: SAO_PAULO,
+    timeZoneName: 'longOffset',
+  })
+    .formatToParts(new Date(`${day}T12:00:00Z`))
+    .find((part) => part.type === 'timeZoneName')!
+    .value.replace('GMT', '');
+  const midnight = new Date(`${day}T00:00:00${offset || 'Z'}`);
+  return dayInSaoPaulo(midnight) === day ? midnight : new Date(midnight.getTime() + 3_600_000);
 }
 
 /** One batch call under PROSPECT_AI_DAILY_USD, checked and written under one lock; null over it. */
