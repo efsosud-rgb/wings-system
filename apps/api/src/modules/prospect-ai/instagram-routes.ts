@@ -22,6 +22,7 @@ import { createOpenRouterLlm, type AgentLlm } from '../agent/llm.js';
 import { confirmPaste, pastesToday, previewPaste, readPaste, type Refusal } from './paste.js';
 import {
   attachToLead,
+  closedRefusal,
   createLead,
   discard,
   doNotContact,
@@ -159,6 +160,8 @@ export const instagramProspectingRoutes: FastifyPluginAsync = async (app) => {
     if (!params.success) return notFound(reply);
     const found = await instagramProspectInReach(db, request.session.actor, params.data.id);
     if (!found) return notFound(reply);
+    const closed = closedRefusal(found);
+    if (closed) return refused(reply, closed);
     const blocked = await instagramOptOut(db, request.session.actor, found, now());
     if (blocked) return refused(reply, blocked);
     const me = await db.query.employees.findFirst({

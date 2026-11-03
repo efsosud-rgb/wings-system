@@ -11,7 +11,7 @@ import { and, eq, gte, inArray, lt, ne, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { WINGS_TENANT_ID } from '../../db/schema/ads.js';
 import { instagramBusinessSnapshots, instagramDiscoveryCalls } from '../../db/schema/index.js';
-import { periodStarts } from '../media/providers/quota.js';
+import { startOfDaySaoPaulo } from '../prospect-ai/classifier.js';
 import { loadInstagramSettings } from '../prospect-ai/settings.js';
 import {
   GRAPH_API_VERSION,
@@ -30,6 +30,7 @@ import {
  */
 
 const SNAPSHOT_DAYS = 30;
+const CALLS_DAYS = 30;
 const DAY_MS = 86_400_000;
 const USAGE_HOLD_PCT = 80;
 const DEFAULT_HOLD_MINUTES = 60;
@@ -78,7 +79,7 @@ async function callsToday(db: Pick<Database, 'select'>, now: Date): Promise<numb
     .where(
       and(
         eq(instagramDiscoveryCalls.tenantId, WINGS_TENANT_ID),
-        gte(instagramDiscoveryCalls.createdAt, periodStarts(now).day),
+        gte(instagramDiscoveryCalls.createdAt, startOfDaySaoPaulo(now)),
       ),
     );
   return row?.total ?? 0;
@@ -179,7 +180,7 @@ export async function discoverInstagram(
     byName.set(row.username, {
       username: row.username,
       snapshot: toSnapshotView(row),
-      reason: null,
+      reason: row.status === 'nao_comercial' ? REASONS.notBusiness : null,
     });
 
   let ceiling = false;
@@ -249,5 +250,17 @@ export async function purgeInstagramSnapshots(
       lt(instagramBusinessSnapshots.fetchedAt, new Date(now.getTime() - SNAPSHOT_DAYS * DAY_MS)),
     )
     .returning({ id: instagramBusinessSnapshots.id });
+  return gone.length;
+}
+
+/** §8.4: a call of the daily ceiling holds who asked (an employee id); deleted after 30 days. */
+export async function purgeDiscoveryCalls(
+  db: Pick<Database, 'delete'>,
+  now: Date,
+): Promise<number> {
+  const gone = await db
+    .delete(instagramDiscoveryCalls)
+    .where(lt(instagramDiscoveryCalls.createdAt, new Date(now.getTime() - CALLS_DAYS * DAY_MS)))
+    .returning({ id: instagramDiscoveryCalls.id });
   return gone.length;
 }

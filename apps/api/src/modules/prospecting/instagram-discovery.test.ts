@@ -348,6 +348,14 @@ describe('Business Discovery in the score', () => {
       expect(item.snapshot?.status).toBe('nao_comercial');
       expect(instagramMetricsOf(item.snapshot)).toBeNull();
     }
+    // Asked again, the answer comes from the cache with the same reason (not a bare "lendo…").
+    graph.length = 0;
+    const cached = await itemsOf(seller, [refOf(body, 2)!]);
+    expect(graph).toHaveLength(0);
+    expect(cached.items[0]).toMatchObject({
+      reason: REASONS.notBusiness,
+      snapshot: { status: 'nao_comercial' },
+    });
   });
 
   it('hidden likes take out only the engagement criterion', async () => {
@@ -432,6 +440,18 @@ describe('Business Discovery in the score', () => {
 });
 
 describe("limits: the daily ceiling and Meta's hold", () => {
+  it("a row of the daily ceiling is deleted 30 days after the call; today's stay counted", async () => {
+    await db.insert(instagramDiscoveryCalls).values([
+      { employeeId: other.id, createdAt: new Date(T0.getTime() - 31 * DAY) },
+      { employeeId: other.id, createdAt: T0 },
+    ]);
+    const before = (await db.select().from(instagramDiscoveryCalls)).length;
+    expect(await runInstagramHousekeeping(db, T0)).toMatchObject({ ran: true, calls: 1 });
+    const left = await db.select().from(instagramDiscoveryCalls);
+    expect(left).toHaveLength(before - 1);
+    expect(left.every((row) => row.createdAt >= new Date(T0.getTime() - 30 * DAY))).toBe(true);
+  });
+
   it('the 501st call of the day does not reach Meta', async () => {
     const ref = refOf(await search(seller), 1)!;
     const today = await db.select().from(instagramDiscoveryCalls);
@@ -476,6 +496,11 @@ describe("limits: the daily ceiling and Meta's hold", () => {
         .from(instagramBusinessSnapshots)
         .where(eq(instagramBusinessSnapshots.username, IG.refused));
       expect(row).toMatchObject({ status: 'erro', errorCode: 10 });
+      // After the hold the same @ goes to Meta again: a reading with an error is never cached.
+      clock = new Date(clock.getTime() + 61 * 60_000);
+      const later = await itemsOf(seller, [refOf(await search(seller), 4)!]);
+      expect(later.items[0]!.reason).toBe(REASONS.refused);
+      expect(graph.map((g) => g.username)).toEqual([IG.refused, IG.refused]);
     } finally {
       clock = T0;
     }

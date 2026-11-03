@@ -54,9 +54,12 @@ const env = (extra: Record<string, string>) =>
   });
 
 /** Buys whatever says "quero", praises the rest; the phrase is always the whole text. */
+/** What happens elsewhere while the model answers (a test of a race sets it). */
+let duringAi: (() => Promise<void>) | null = null;
 const scriptedLlm: AgentLlm = {
   async complete(request) {
     llmSeen.push(request);
+    if (duringAi) await duringAi();
     const user = request.messages.find((m) => m.role === 'user')!.content;
     const { comentarios } = JSON.parse(user) as { comentarios: { i: number; texto: string }[] };
     const itens = comentarios.map(({ i, texto }) => ({
@@ -359,6 +362,56 @@ describe('confirm (§1.2 step 4)', () => {
     ).toHaveLength(0);
   });
 
+  it('a paste with no new comment (known people or repeated) writes no batch and is not counted', async () => {
+    const seller = await loginAs('vendedor_formatacao');
+    const link = newPost();
+    expect((await paste(seller, '@usuario.vazio1: quero abrir', link)).statusCode).toBe(200);
+    // 12 pastes with nothing new: more than the 10 of the day, and none is refused.
+    for (let i = 0; i < 12; i += 1) {
+      const empty =
+        i % 2 === 0
+          ? await paste(seller, '@usuario.vazio1: quero abrir', link)
+          : await paste(seller, '@pessoa.cliente: quero\n@pessoa.bloqueada: quero');
+      expect(empty.statusCode).toBe(200);
+      expect(empty.json<PasteConfirmResponse>()).toMatchObject({
+        batchId: null,
+        created: 0,
+        joined: 0,
+      });
+    }
+    expect(
+      await db.select().from(igPasteBatches).where(eq(igPasteBatches.createdBy, seller.id)),
+    ).toHaveLength(1);
+    expect((await call(seller, 'GET', '/status')).json()).toMatchObject({ pastesToday: 1 });
+    const next = await paste(seller, '@usuario.vazio2: quero abrir');
+    expect(next.json<PasteConfirmResponse>()).toMatchObject({ created: 1 });
+  });
+
+  it('a "não me contate" written while the AI runs keeps the @ out of the list', async () => {
+    duringAi = async () => {
+      await recordContactOptOut(db, {
+        instagramUser: 'usuario.corrida',
+        channels: ['instagram'],
+        origin: 'crm',
+        reason: 'teste',
+        createdBy: null,
+      });
+    };
+    try {
+      // A text no other test classifies: not in the cache, so the model runs.
+      const res = await paste(sellerA, '@usuario.corrida: quero levar a marca para minha cidade');
+      expect(res.json<PasteConfirmResponse>()).toMatchObject({ created: 0, skippedKnown: 1 });
+    } finally {
+      duringAi = null;
+    }
+    expect(
+      await db
+        .select()
+        .from(prospectEvidence)
+        .where(eq(prospectEvidence.authorUsername, 'usuario.corrida')),
+    ).toHaveLength(0);
+  });
+
   it('a second comment of an open prospect joins it, without the AI', async () => {
     await paste(sellerA, '@usuario.junta: quero saber mais');
     const calls = llmSeen.length;
@@ -434,6 +487,14 @@ describe('working a prospect (§1.2 step 5)', () => {
       .from(prospectEvidence)
       .where(eq(prospectEvidence.authorUsername, 'usuario.lead1'));
     expect(ev!.retentionUntil).toBeNull();
+  });
+
+  it("an approved prospect's lead is not deleted from under it (no action, never set null)", async () => {
+    // Set null could never clear it: the approved CHECK requires lead_id (revisão do PR #70).
+    const fk = await db.execute<{ action: string }>(
+      sql`select confdeltype as action from pg_constraint where conname = 'prospect_opportunities_lead_id_leads_id_fk'`,
+    );
+    expect(fk.rows).toEqual([{ action: 'a' }]);
   });
 
   it('Criar lead with a phone under "não me contate" is refused and writes nothing', async () => {

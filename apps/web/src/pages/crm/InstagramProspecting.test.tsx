@@ -1,10 +1,12 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import {
+  BUY_SIGNALS,
   DEFAULT_INSTAGRAM_PROSPECTING_SETTINGS,
   PASTE_DISCARD_KINDS,
   PASTE_IGNORED_KINDS,
   type InstagramProspect,
   type InstagramStatus,
+  type PasteConfirmResponse,
   type PastePreviewResponse,
 } from '@wings/shared';
 import type { ReactNode } from 'react';
@@ -87,6 +89,38 @@ const prospect = (extra: Partial<InstagramProspect>): InstagramProspect => ({
   ...extra,
 });
 
+const PREVIEW: PastePreviewResponse = {
+  postUrl: 'https://www.instagram.com/p/PostTeste0001/',
+  postOwner: null,
+  format: 'manual',
+  comments: [
+    {
+      username: 'usuario.teste06',
+      excerpt: 'qual o investimento?',
+      when: null,
+      occurredAt: new Date().toISOString(),
+      tag: null,
+    },
+    {
+      username: 'pessoa.bloqueada',
+      excerpt: 'quero',
+      when: null,
+      occurredAt: new Date().toISOString(),
+      tag: { kind: 'nao_contatar' },
+    },
+  ],
+  usable: 1,
+  linesTotal: 3,
+  linesIgnored: 0,
+  ignored: zero(PASTE_IGNORED_KINDS),
+  discarded: zero(PASTE_DISCARD_KINDS),
+  unrecognized: ['frase solta'],
+  linesUnrecognized: 1,
+  alreadyKnown: { naoContatar: 1, cliente: 0, lead: 0, prospect: 0 },
+  estimatedCostMicroUsd: null,
+  aiEnabled: false,
+};
+
 describe('InstagramTab', () => {
   it('off: says why with "—", never an empty list', () => {
     status.data = { ...status.data, enabled: false };
@@ -113,43 +147,39 @@ describe('InstagramTab', () => {
   });
 
   it('the preview shows the counts and the known people, and nothing is kept yet', () => {
-    preview.data = {
-      postUrl: 'https://www.instagram.com/p/PostTeste0001/',
-      postOwner: null,
-      format: 'manual',
-      comments: [
-        {
-          username: 'usuario.teste06',
-          excerpt: 'qual o investimento?',
-          when: null,
-          occurredAt: new Date().toISOString(),
-          tag: null,
-        },
-        {
-          username: 'pessoa.bloqueada',
-          excerpt: 'quero',
-          when: null,
-          occurredAt: new Date().toISOString(),
-          tag: { kind: 'nao_contatar' },
-        },
-      ],
-      usable: 1,
-      linesTotal: 3,
-      linesIgnored: 0,
-      ignored: zero(PASTE_IGNORED_KINDS),
-      discarded: zero(PASTE_DISCARD_KINDS),
-      unrecognized: ['frase solta'],
-      linesUnrecognized: 1,
-      alreadyKnown: { naoContatar: 1, cliente: 0, lead: 0, prospect: 0 },
-      estimatedCostMicroUsd: null,
-      aiEnabled: false,
-    };
+    preview.data = PREVIEW;
     wrap(<InstagramTab canPaste canManage={false} canConfigure={false} />);
     expect(screen.getByText(/Nada foi gravado ainda/)).toBeTruthy();
     expect(screen.getByText('não contatar')).toBeTruthy();
     expect(
       screen.getByRole('button', { name: 'Separar quem quer comprar (1 comentários)' }),
     ).toBeTruthy();
+  });
+
+  it('a paste with no new comment says it did not count, with no list to open', () => {
+    preview.data = PREVIEW;
+    confirmMutate.mockImplementationOnce(
+      (_input: unknown, options: { onSuccess: (answer: PasteConfirmResponse) => void }) =>
+        options.onSuccess({
+          batchId: null,
+          created: 0,
+          joined: 0,
+          repeated: 1,
+          skippedKnown: 1,
+          lists: { querComprar: 0, revisar: 0, outros: zero([...BUY_SIGNALS, 'sem_sinal']) },
+        }),
+    );
+    wrap(<InstagramTab canPaste canManage={false} canConfigure={false} />);
+    fireEvent.change(screen.getByLabelText('Comentários colados'), {
+      target: { value: '@usuario.teste06: qual o investimento?' },
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Separar quem quer comprar (1 comentários)' }),
+    );
+    expect(
+      screen.getByText('Nenhum comentário novo: esta colagem não contou no limite de hoje.'),
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Ver a lista desta colagem' })).toBeNull();
   });
 
   it('a card: "Não contatar" asks on the card (no browser dialog); "Copiar mensagem" says why not', async () => {

@@ -1,14 +1,21 @@
-import { SESSION_COOKIE, type InstagramProspect, type PastePreviewResponse } from '@wings/shared';
-import { eq } from 'drizzle-orm';
+import {
+  DO_NOT_CONTACT_REASON,
+  SESSION_COOKIE,
+  type Actor,
+  type InstagramProspect,
+  type PastePreviewResponse,
+} from '@wings/shared';
+import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance, InjectOptions } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
-import { prospectOpportunities } from '../../db/schema/index.js';
+import { contactOptOuts, prospectOpportunities } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
 import { recordContactOptOut } from '../leads/contact-block.js';
+import { instagramProspectInReach, promote } from './prospects.js';
 
 /**
  * "Não me contate" at the moment of each action, not only at the paste (revisão do PR #70, lições
@@ -109,6 +116,57 @@ describe('"não me contate" at the moment of the action', () => {
     expect([reopened.statusCode, reopened.json().error]).toEqual([409, 'contact_blocked']);
     expect((await stateOf('usuario.optout1')).state).toBe('rejeitada');
     expect((await call(seller, 'GET', `/prospects/${p.id}/message`)).statusCode).toBe(409);
+  });
+
+  it('closed by "Não contatar", it stays closed even after the register is revoked', async () => {
+    const p = await prospectOf('usuario.optout7');
+    await call(seller, 'POST', `/prospects/${p.id}/do-not-contact`, {});
+    // Only the prospect's own reason holds now: the register no longer blocks the @.
+    await db
+      .update(contactOptOuts)
+      .set({ revokedAt: clock, revokedReason: 'teste' })
+      .where(
+        and(
+          eq(contactOptOuts.keyKind, 'instagram_user'),
+          eq(contactOptOuts.keyValue, 'usuario.optout7'),
+        ),
+      );
+    const reopened = await call(gerente, 'POST', `/prospects/${p.id}/promote`);
+    expect([reopened.statusCode, reopened.json().error]).toEqual([409, 'contact_blocked']);
+    expect(await stateOf('usuario.optout7')).toMatchObject({
+      state: 'rejeitada',
+      decisionReason: DO_NOT_CONTACT_REASON,
+    });
+  });
+
+  it('a "Não contatar" written while the manager reopens a discarded prospect is not undone', async () => {
+    const p = await prospectOf('usuario.optout8');
+    await call(seller, 'POST', `/prospects/${p.id}/discard`, { reason: 'sem perfil' });
+    const manager: Actor = {
+      employeeId: gerente.id,
+      role: 'gerente_comercial',
+      sector: 'comercial',
+      isSectorManager: false,
+    };
+    const read = (await instagramProspectInReach(db, manager, p.id))!;
+    // Between the read and the update: closed by "Não contatar" (register since revoked).
+    await db
+      .update(prospectOpportunities)
+      .set({ decisionReason: DO_NOT_CONTACT_REASON })
+      .where(eq(prospectOpportunities.id, p.id));
+    const reopened = await promote(db, manager, read, clock);
+    expect(reopened).toMatchObject({ ok: false, status: 409, error: 'prospect_mudou' });
+    expect(await stateOf('usuario.optout8')).toMatchObject({
+      state: 'rejeitada',
+      decisionReason: DO_NOT_CONTACT_REASON,
+    });
+  });
+
+  it('"Copiar mensagem" answers only for an open prospect, as the screen shows it', async () => {
+    const p = await prospectOf('usuario.fechado1');
+    await call(seller, 'POST', `/prospects/${p.id}/discard`, { reason: 'sem perfil' });
+    const message = await call(seller, 'GET', `/prospects/${p.id}/message`);
+    expect([message.statusCode, message.json().error]).toEqual([409, 'prospect_fechado']);
   });
 
   it('a register written after the paste refuses the message and "Abordei", and closes the prospect', async () => {

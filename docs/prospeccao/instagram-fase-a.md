@@ -30,22 +30,22 @@ CRM Vendas → Prospecção → aba **Instagram** (quem tem `prospecting.instagr
 | ------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `PROSPECT_AI_INSTAGRAM_PASTE_ENABLED` | `false` | Desligada, toda rota menos `/status` responde 503 e a aba diz por quê                                                                   |
 | `PROSPECT_AI_CLASSIFIER_ENABLED`      | `false` | A IA (Haiku 4.5 pelo OpenRouter, sem coleta de dados). Desligada, as regras fixas rodam e o resto vai para "Revisar" com "IA desligada" |
-| `PROSPECT_AI_DAILY_USD`               | `1`     | Teto da IA por dia (São Paulo), reservado sob trava antes de cada chamada                                                               |
+| `PROSPECT_AI_DAILY_USD`               | `1`     | Teto da IA por dia (São Paulo, fuso `America/Sao_Paulo`), reservado sob trava antes de cada chamada                                     |
 
 Ajustes → Instagram (`prospect_ai.configure`: Gerente Comercial e Admin Master): limites da colagem, limiares, dias até apagar, o texto da primeira mensagem e o **link da política**. Sem o link, "Copiar mensagem" não copia nada e diz por quê.
 
 ## Rotas
 
-| Rota                                                                                                  | Permissão                     | O quê                                                                              |
-| ----------------------------------------------------------------------------------------------------- | ----------------------------- | ---------------------------------------------------------------------------------- |
-| `GET /prospect-ai/instagram/status`                                                                   | `prospecting.instagram_paste` | ligada?, IA ligada?, configuração, colagens de hoje                                |
-| `POST /prospect-ai/instagram/pastes/preview`                                                          | + `leads.write`               | lê e cruza; não grava; sem IA. 400 link, 413 tamanho, 422 comentários demais       |
-| `POST /prospect-ai/instagram/pastes`                                                                  | + `leads.write`               | grava e classifica; 429 `colagem_limite_dia`                                       |
-| `POST /prospect-ai/instagram/pastes/attach`                                                           | + `leads.write`               | anexa o comentário (mascarado) à linha do tempo de um lead que a vendedora alcança |
-| `GET /prospect-ai/instagram/pastes`, `/prospects`, `/owners`                                          | `prospecting.instagram_paste` | colagens, prospects (próprios ou todos), quem recebe transferência                 |
-| `GET /prospect-ai/instagram/prospects/:id/message`                                                    | + `leads.write`               | o texto para copiar, com o primeiro nome da vendedora                              |
-| `POST /prospect-ai/instagram/prospects/:id/{approached,promote,discard,do-not-contact,lead,transfer}` | + `leads.write`               | as ações; `transfer` e reabrir descartado só gerência                              |
-| `PUT /prospect-ai/instagram/settings`                                                                 | `prospect_ai.configure`       | Ajustes, auditado com antes e depois                                               |
+| Rota                                                                                                  | Permissão                     | O quê                                                                                                                    |
+| ----------------------------------------------------------------------------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `GET /prospect-ai/instagram/status`                                                                   | `prospecting.instagram_paste` | ligada?, IA ligada?, configuração, colagens de hoje                                                                      |
+| `POST /prospect-ai/instagram/pastes/preview`                                                          | + `leads.write`               | lê e cruza; não grava; sem IA. 400 link, 413 tamanho, 422 comentários demais                                             |
+| `POST /prospect-ai/instagram/pastes`                                                                  | + `leads.write`               | grava e classifica; 429 `colagem_limite_dia`; sem comentário novo não grava nada e não conta no limite (`batchId: null`) |
+| `POST /prospect-ai/instagram/pastes/attach`                                                           | + `leads.write`               | anexa o comentário (mascarado) à linha do tempo de um lead que a vendedora alcança                                       |
+| `GET /prospect-ai/instagram/pastes`, `/prospects`, `/owners`                                          | `prospecting.instagram_paste` | colagens, prospects (próprios ou todos), quem recebe transferência                                                       |
+| `GET /prospect-ai/instagram/prospects/:id/message`                                                    | + `leads.write`               | o texto para copiar, com o primeiro nome da vendedora                                                                    |
+| `POST /prospect-ai/instagram/prospects/:id/{approached,promote,discard,do-not-contact,lead,transfer}` | + `leads.write`               | as ações; `transfer` e reabrir descartado só gerência                                                                    |
+| `PUT /prospect-ai/instagram/settings`                                                                 | `prospect_ai.configure`       | Ajustes, auditado com antes e depois                                                                                     |
 
 ## O que ficou diferente da especificação (opção mais segura; perguntas no relatório da ig02)
 

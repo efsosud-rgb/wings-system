@@ -178,6 +178,12 @@ export type InstagramFound = NonNullable<Awaited<ReturnType<typeof instagramPros
 
 type Change = Partial<typeof prospectOpportunities.$inferInsert>;
 
+/** "Copiar mensagem" and "Criar lead" only on an open prospect (the screen shows them only there). */
+export const closedRefusal = (found: InstagramFound): Refusal | null =>
+  PROSPECT_OPEN_STATES.includes(found.row.state as ProspectOpportunityState)
+    ? null
+    : refusal(409, 'prospect_fechado', 'Este prospect não está mais aberto.');
+
 /** Closes every open prospect of this @ (whoever holds it) as "Não contatar"; returns how many. */
 async function closeOpenOf(db: Database, actor: Actor, username: string, now: Date) {
   const closed = await db
@@ -257,8 +263,11 @@ async function move(
       and(
         eq(prospectOpportunities.id, found.row.id),
         inArray(prospectOpportunities.state, from),
-        // decided_at on an open state marks a "Criar lead" in progress.
-        found.row.state === 'rejeitada' ? undefined : isNull(prospectOpportunities.decidedAt),
+        // A reopening never undoes a "Não contatar" written since the read; decided_at on an open
+        // state marks a "Criar lead" in progress.
+        found.row.state === 'rejeitada'
+          ? sql`${prospectOpportunities.decisionReason} is distinct from ${DO_NOT_CONTACT_REASON}`
+          : isNull(prospectOpportunities.decidedAt),
       ),
     )
     .returning({ id: prospectOpportunities.id });
@@ -445,8 +454,8 @@ export async function createLead(
   now: Date,
 ): Promise<{ ok: true; leadId: string; created: boolean } | Refusal> {
   const { row, evidence } = found;
-  if (!PROSPECT_OPEN_STATES.includes(row.state as ProspectOpportunityState))
-    return refusal(409, 'prospect_fechado', 'Este prospect não está mais aberto.');
+  const closed = closedRefusal(found);
+  if (closed) return closed;
   const pipeline = input.pipeline ?? pipelineOfCategory(row.category);
   if (!pipeline) return refusal(400, 'invalid', 'Escolha o funil do lead.');
   const block = await contactBlock(db, ['instagram', 'phone', 'email', 'whatsapp'], {

@@ -25,7 +25,11 @@ export interface InstagramNumbers {
   holdUntil: string | null;
 }
 
-/** Asks once per @ of the answer; a new search (other items) asks only for the new ones. */
+/**
+ * Asks once per @ of the answer; a new search asks for the new ones and again for those that came
+ * back without numbers (Meta's hold, the day's limit, an error): the server answers them from its
+ * cache, or without calling Meta while the hold lasts.
+ */
 export function useInstagramNumbers(
   items: ProspectSearchItem[],
   enabled: boolean,
@@ -44,6 +48,12 @@ export function useInstagramNumbers(
     const fresh = [...new Map(refs.map((ref) => [ref.username, ref])).values()];
     if (fresh.length === 0) return;
     for (const ref of fresh) asked.current.add(ref.username);
+    // The old reason is not shown as the answer to this search: "lendo…" until it comes.
+    setByUsername((current) => {
+      const next = new Map(current);
+      for (const ref of fresh) next.delete(ref.username);
+      return next;
+    });
     void (async () => {
       for (let i = 0; i < fresh.length; i += INSTAGRAM_DISCOVERY_MAX) {
         const chunk = fresh.slice(i, i + INSTAGRAM_DISCOVERY_MAX);
@@ -52,6 +62,8 @@ export function useInstagramNumbers(
             '/prospecting/instagram/discovery',
             { items: chunk.map(({ username, ticket }) => ({ username, ticket })) },
           );
+          for (const entry of answer.items)
+            if (!entry.snapshot) asked.current.delete(entry.username);
           setByUsername((current) => {
             const next = new Map(current);
             for (const entry of answer.items) next.set(entry.username, entry);

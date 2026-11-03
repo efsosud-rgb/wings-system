@@ -7,7 +7,10 @@ import {
   prospectOpportunities,
 } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
-import { purgeInstagramSnapshots } from '../prospecting/instagram-discovery.js';
+import {
+  purgeDiscoveryCalls,
+  purgeInstagramSnapshots,
+} from '../prospecting/instagram-discovery.js';
 import { loadInstagramSettings } from './settings.js';
 
 /**
@@ -15,8 +18,9 @@ import { loadInstagramSettings } from './settings.js';
  * every hour: a prospect that did not become a lead within `retention.instagramSemLeadDias` of its
  * last change (creation, "Abordei", transfer) is deleted with every comment of it (the @, the
  * excerpt, the link) and its classifications; only the count stays, in the audit log. The
- * classifier's cache (a hash and the justifying phrase) goes after 30 days, and so does a Business
- * Discovery reading of a company (parte 3), counted from its `fetched_at`. "Não contatar" is in
+ * classifier's cache (a hash and the justifying phrase) goes after 30 days, and so do a Business
+ * Discovery reading of a company (parte 3), counted from its `fetched_at`, and a row of its daily
+ * ceiling (who asked, never the @). "Não contatar" is in
  * `contact_opt_outs` and is never purged. One run at a time across replicas.
  */
 
@@ -25,7 +29,7 @@ export const HOUSEKEEPING_TICK_MS = 60 * 60_000;
 const CACHE_DAYS = 30;
 
 export type HousekeepingResult =
-  { ran: false } | { ran: true; purged: number; cache: number; snapshots: number };
+  { ran: false } | { ran: true; purged: number; cache: number; snapshots: number; calls: number };
 
 export async function runInstagramHousekeeping(
   db: Database,
@@ -56,13 +60,14 @@ export async function runInstagramHousekeeping(
       )
       .returning({ key: prospectClassifierCache.keyHash });
     const snapshots = await purgeInstagramSnapshots(tx, now);
+    const calls = await purgeDiscoveryCalls(tx, now);
     if (purged.length)
       await writeAudit(tx, {
         action: 'prospect_ai.instagram_purged',
         entity: 'prospect_ai_settings',
         metadata: { count: purged.length, days },
       });
-    return { ran: true, purged: purged.length, cache: cache.length, snapshots };
+    return { ran: true, purged: purged.length, cache: cache.length, snapshots, calls };
   });
 }
 
@@ -77,7 +82,7 @@ export function startInstagramHousekeeping(deps: {
     busy = true;
     try {
       const result = await runInstagramHousekeeping(deps.db);
-      if (result.ran && (result.purged || result.cache || result.snapshots))
+      if (result.ran && (result.purged || result.cache || result.snapshots || result.calls))
         deps.log({ job: 'prospect-ai-housekeeping', ...result });
     } catch (error) {
       deps.log({

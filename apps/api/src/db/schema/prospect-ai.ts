@@ -157,7 +157,9 @@ export const prospectOpportunities = pgTable(
     respondBy: timestamp('respond_by', { withTimezone: true }),
     /** Parte 2: when the seller clicked "Abordei". */
     respondedAt: timestamp('responded_at', { withTimezone: true }),
-    leadId: uuid('lead_id').references(() => leads.id, { onDelete: 'set null' }),
+    // No action, not set null: an approved prospect must keep its lead (the approved CHECK), so a
+    // lead tied to one is not deleted, as with prospects.lead_id of the Google search.
+    leadId: uuid('lead_id').references(() => leads.id),
     duplicateOfOpportunityId: uuid('duplicate_of_opportunity_id').references(
       (): AnyPgColumn => prospectOpportunities.id,
       { onDelete: 'set null' },

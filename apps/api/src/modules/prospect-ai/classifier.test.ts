@@ -8,6 +8,7 @@ import {
   BATCH_SIZE,
   classifyComments,
   ruleFor,
+  startOfDaySaoPaulo,
   textForAi,
   type ClassifierDeps,
 } from './classifier.js';
@@ -228,13 +229,34 @@ describe('the model, in batches of 20', () => {
     expect(seen).toHaveLength(0);
   });
 
-  it('the same text twice is one call: the second comes from the cache, which holds no text', async () => {
+  it('the same text twice is one call: the second comes from the cache, keyed by a hash', async () => {
     await classifyComments(['quero franquear minha marca'], deps());
     const [again] = await classifyComments(['Quero  franquear minha marca'], deps());
     expect(seen).toHaveLength(1);
     expect(again).toMatchObject({ signal: 'quer_comprar', runId: null });
     const [row] = await db.select().from(prospectClassifierCache);
     expect(row!.keyHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('the cache keeps the hash and the masked output: no @, phone, e-mail or link of the comment', async () => {
+    const comment =
+      'quero franquear minha marca, fala com @socio.ficticio no 21 99876-5432, ficticio@example.com ou https://exemplo.invalid/contato';
+    await classifyComments([comment], deps());
+    const rows = await db.select().from(prospectClassifierCache);
+    expect(rows).toHaveLength(1);
+    expect(Object.keys(rows[0]!).sort()).toEqual(['createdAt', 'keyHash', 'result', 'tenantId']);
+    const dump = JSON.stringify(rows);
+    for (const piece of [
+      'socio.ficticio',
+      '99876',
+      '5432',
+      'ficticio@',
+      'example.com',
+      'exemplo.invalid',
+    ])
+      expect(dump).not.toContain(piece);
+    // What stays is the model's phrase, cut from the masked text it was sent.
+    expect((rows[0]!.result as { frase: string }).frase).toBe(textForAi(comment).slice(0, 200));
   });
 
   it('a failed call keeps the reservation as the cost and never retries', async () => {
@@ -250,5 +272,25 @@ describe('the model, in batches of 20', () => {
       .from(prospectClassifierCache)
       .where(eq(prospectClassifierCache.tenantId, run!.tenantId));
     expect(cache).toHaveLength(0);
+  });
+});
+
+describe('the day of the ceilings (São Paulo)', () => {
+  it("starts at the zone's midnight, with the offset of that day", () => {
+    // 23:59 of 02/11 in São Paulo is still 02/11.
+    expect(startOfDaySaoPaulo(new Date('2026-11-03T02:59:00Z')).toISOString()).toBe(
+      '2026-11-02T03:00:00.000Z',
+    );
+    expect(startOfDaySaoPaulo(new Date('2026-11-03T03:00:00Z')).toISOString()).toBe(
+      '2026-11-03T03:00:00.000Z',
+    );
+    // Under the old daylight saving time (-02:00), as if it came back.
+    expect(startOfDaySaoPaulo(new Date('2018-12-15T12:00:00Z')).toISOString()).toBe(
+      '2018-12-15T02:00:00.000Z',
+    );
+    // The day it began, midnight was skipped: the day started at 01:00 (-02:00).
+    expect(startOfDaySaoPaulo(new Date('2018-11-04T12:00:00Z')).toISOString()).toBe(
+      '2018-11-04T03:00:00.000Z',
+    );
   });
 });
