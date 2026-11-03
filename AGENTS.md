@@ -6,6 +6,8 @@ Wings System — the internal system of Wings Company (CRM, RH/DP, marketing aut
 
 The first module under construction is **Cadastro de Funcionários** (employee registration) with role-based access control.
 
+**Before any work, read two paths:** `docs/decisoes/` (the architecture and way-of-working decisions, one file each, indexed in its `README.md`) and `docs/licoes.md` (the lessons notebook: every item came from a real mistake, and repeating one blocks the review). Where this file and a decision disagree, follow the safer of the two and record the question for Eric.
+
 Four sections: [1. Folder structure](#1-folder-structure) · [2. Code standard](#2-code-standard) · [3. What never to do](#3-what-never-to-do) · [4. Ponytail: escrever o mínimo de código](#4-ponytail-escrever-o-mínimo-de-código).
 
 ## 1. Folder structure
