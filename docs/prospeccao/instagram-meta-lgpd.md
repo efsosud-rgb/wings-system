@@ -103,8 +103,9 @@ Rascunho técnico, não parecer. **Tudo a validar pelo Jurídico** (t066 antes d
 - Agendador da spec PA (`prospect-ai:housekeeping`, 1 h): prospect do Instagram que **não virou lead** em `retention.instagramSemLeadDias` (30, decisão do Eric nesta tarefa) desde a última mudança (criação, "Abordei", transferência) é apagado: a evidência inteira (@, trecho, link) e a oportunidade. Fica só a contagem no `dw` e no `audit_log` (`prospect_ai.instagram_purged`, `{ count, days }`).
 - **Divergência:** a spec PA propõe 90 dias para oportunidade sem lead e `ig_people`. Para as origens do Instagram vale 30 (pedido do Eric); a regra de 90 da spec PA fica para as outras origens, se houver.
 - `instagram_business_snapshots`: apagado 30 dias depois de `fetched_at`.
+- `instagram_discovery_calls`: apagado 30 dias depois de `created_at`. Não tem @, mas tem o id da vendedora que pediu (dado de pessoa, ainda que interno); o teto só conta as linhas do dia.
 - `ig_paste_batches`: fica (só contagens e o link do post de uma empresa).
-- O texto colado nunca é gravado (§2.2); o cache do classificador guarda só hash e saída, 30 dias (spec PA).
+- O texto colado nunca é gravado (§2.2); o cache do classificador guarda só hash e saída, 30 dias (spec PA). A saída inclui a `frase` da IA: um trecho de até 200 caracteres do texto **já mascarado** (sem @, telefone, e-mail, link nem 4 dígitos seguidos), que não diz de quem é. Os 30 dias contam da criação e não seguem `retention.instagramSemLeadDias` (dúvida para o Eric em aj03). Teste: `classifier.test.ts`, "the cache keeps the hash and the masked output".
 - Teste: com o relógio adiantado 31 dias, nenhuma linha com o @ fica no banco além de `contact_opt_outs`.
 
 ### 8.5 Sem dado pessoal no `dw` e nos logs
