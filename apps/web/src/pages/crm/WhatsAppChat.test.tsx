@@ -175,6 +175,7 @@ describe('older messages of a long thread', () => {
     expect(screen.queryByRole('button', { name: 'Mostrar mensagens anteriores' })).toBeNull();
   });
 
+  // Two full pages (2 × WA_MESSAGES_PAGE rows) in jsdom: ~2.3 s alone, past 5 s on a busy runner (PR #82).
   it('keeps asking, from the oldest one loaded, while the pages come full', async () => {
     const shown = run('new', WA_MESSAGES_PAGE, Date.parse('2026-10-10T10:00:00.000Z'));
     const page1 = run('mid', WA_MESSAGES_PAGE, Date.parse('2026-10-05T10:00:00.000Z'));
@@ -196,7 +197,7 @@ describe('older messages of a long thread', () => {
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: 'Mostrar mensagens anteriores' })).toBeNull(),
     );
-  });
+  }, 20_000);
 
   it('shows the reason when the older page cannot be read and lets the person try again', async () => {
     fetchMock.mockResolvedValue(
