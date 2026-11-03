@@ -489,6 +489,14 @@ describe('working a prospect (§1.2 step 5)', () => {
     expect(ev!.retentionUntil).toBeNull();
   });
 
+  it("an approved prospect's lead is not deleted from under it (no action, never set null)", async () => {
+    // Set null could never clear it: the approved CHECK requires lead_id (revisão do PR #70).
+    const fk = await db.execute<{ action: string }>(
+      sql`select confdeltype as action from pg_constraint where conname = 'prospect_opportunities_lead_id_leads_id_fk'`,
+    );
+    expect(fk.rows).toEqual([{ action: 'a' }]);
+  });
+
   it('Criar lead with a phone under "não me contate" is refused and writes nothing', async () => {
     await recordContactOptOut(db, {
       phone: '21990007777',
