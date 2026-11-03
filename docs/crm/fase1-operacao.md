@@ -63,6 +63,15 @@ node dist/scripts/leads-import-rd.js --apply [--since=2026-06-30] [--no-historie
   "Novo lead para você"). Negócio fechado, de arquivo ou de teste não entra no
   rodízio. O roteiro de produção é `/root/relatorios/negocios-rd/negocios-rd.sh`
   (estado, simular, aplicar, desfazer LOTE).
+- **O que a simulação projeta (03/11/2026).** Sem `--apply`, a saída traz também linhas `plano:` (só contagens, nomes
+  de marca e ids de funcionário), sem gravar nada, nem a vez do rodízio: leads **a criar** e **ligados a um lead que
+  já existia**, cada um por funil e marca (Formatação não tem marca: `—`); o **rodízio previsto** por funil e id do
+  funcionário (a ordem em que o rodízio serviria hoje, em ciclo; `(rodízio vazio)` quando o funil não tem membro
+  ativo); e quantos ficam **fora do rodízio** e por quê (dono do RD, fechado, arquivo, antigo demais, rodízio
+  desligado, outro funil). Sem `--rotate` o plano diz "rodízio desligado". É uma projeção: se outro lead entrar e
+  pegar a vez antes da aplicação, a divisão muda. O teste `rd-import-plan.test.ts` compara o plano com o que a
+  aplicação faz no mesmo banco. O roteiro `negocios-rd.sh` só mostra as linhas que casam com o seu filtro
+  (`so_contagens`): inclua `^plano:` nele para ver o plano.
 
 - Por negócio: `GET /deals/:id/contacts` (nome, e-mail, telefone do primeiro
   contato) e, sem `--no-histories`, `GET /deals/:id` para
@@ -280,3 +289,14 @@ marca certa. A página da própria Wings usa uma frase com o código no fim, ent
 - `parceiro` e `socio` valem para duas páginas cada (Cervejaria Odin e Circus Trattoria; Rei do Gado Carnes e Full
   House Comida de Festa): o identificador do RD é o mesmo, então `parceiro` leva à Cervejaria Odin e `socio` não
   tem regra.
+
+## Rodadas de ingestão com falha (`ingest_runs`)
+
+`scripts/ingest-falhas.sql` (só leitura: transação `read only`, termina em `rollback`) conta as rodadas com
+`status = 'failed'` por estado, por mês e tipo, por **motivo** (a coluna `error`; senão conta, passo e erro de cada
+conta que falhou; senão o blog) e por conta e passo. Só códigos de erro, datas e contagens. Rodar (troque o
+contêiner do banco; `-v desde=AAAA-MM-DD` limita a janela):
+
+```
+docker exec -i <contêiner-do-banco> psql -X -q -U wings -d wings_system -v ON_ERROR_STOP=1 < scripts/ingest-falhas.sql
+```

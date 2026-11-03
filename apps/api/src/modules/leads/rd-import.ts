@@ -28,7 +28,7 @@ import { rdCrmGetter } from '../ads/funnel-sync.js';
 import { shapeOf } from '../media/kairogen-adapter.js';
 import { brandKey } from './brands.js';
 import { announceLeadArrival } from './crm-alerts.js';
-import { ensureStage } from './crm.js';
+import { ensureStage, rotationOrder } from './crm.js';
 import { isStaleArrival, upsertLead, type LeadRow } from './service.js';
 
 /**
@@ -339,6 +339,47 @@ export function stageTimesOf(
 
 // --- import ------------------------------------------------------------------------
 
+/** Label of the brand column for a funnel that has no brand (Formatação). */
+export const NO_BRAND = '—';
+/** Label for a rotation that is empty, in the plan's rotation preview. */
+export const EMPTY_ROTATION = '(rodízio vazio)';
+
+/**
+ * The simulation's projection, counts and ids only. `create` and `link` are per funnel and brand
+ * (Expansão brand as RD names it; Formatação has none, `NO_BRAND`). `rotation` is who the funnel's
+ * rotation would give the new leads to, by employee id, cycling the order it would serve today;
+ * `outsideRotation` says why the others would not go to the rotation.
+ */
+export interface RdImportPlan {
+  create: Record<LeadPipeline, Record<string, number>>;
+  link: Record<LeadPipeline, Record<string, number>>;
+  rotation: Record<LeadPipeline, Record<string, number>>;
+  outsideRotation: {
+    /** The RD gave the deal an owner we know: it keeps them. */
+    ownerFromRd: number;
+    /** Won or lost deal. */
+    closed: number;
+    /** Filed in an archive funnel of the RD. */
+    archive: number;
+    /** Older than `STALE_ARRIVAL_HOURS` and `rotateOld` is off. */
+    tooOld: number;
+    /** `distributeNew` is off: an import leaves every lead without an owner, as the RD says. */
+    rotationOff: number;
+    /** A funnel the rotation does not serve (Consultoria). */
+    otherFunnel: number;
+  };
+}
+
+const emptyByFunnel = (): Record<LeadPipeline, Record<string, number>> => ({
+  expansao: {},
+  formatacao: {},
+  consultoria: {},
+});
+
+const bump = (counts: Record<string, number>, key: string) => {
+  counts[key] = (counts[key] ?? 0) + 1;
+};
+
 export interface RdImportResult {
   applied: boolean;
   dealsListed: number;
@@ -360,6 +401,8 @@ export interface RdImportResult {
   testDeals: number;
   /** New leads the hourly follow-up gave to the rotation (`distributeNew`): with an owner, or with the rotation empty. */
   rotation: { assigned: number; empty: number };
+  /** What a simulation projects (empty in an applied run, which has the real numbers above). */
+  plan: RdImportPlan;
   owners: { mapped: number; unmapped: number };
   /** Expansão deals per brand as RD names it; "(sem marca)" when neither field nor campaign says. */
   brands: Record<string, number>;
@@ -523,6 +566,19 @@ export async function importRdDeals(
     noContactData: 0,
     testDeals: 0,
     rotation: { assigned: 0, empty: 0 },
+    plan: {
+      create: emptyByFunnel(),
+      link: emptyByFunnel(),
+      rotation: emptyByFunnel(),
+      outsideRotation: {
+        ownerFromRd: 0,
+        closed: 0,
+        archive: 0,
+        tooOld: 0,
+        rotationOff: 0,
+        otherFunnel: 0,
+      },
+    },
     owners: { mapped: 0, unmapped: 0 },
     brands: {},
     unmatchedBrands: [],
@@ -578,6 +634,27 @@ export async function importRdDeals(
   const unmatched = new Set<string>();
   // A simulation writes nothing, so it remembers who it has already counted.
   const seenInRun = new Set<string>();
+  // The rotation order each funnel would serve today; read once, cycled by the simulation.
+  const queues = new Map<LeadPipeline, { order: string[]; next: number }>();
+  // Where a new lead of this deal would go, as the real run decides it (`distribute` below).
+  const planRotation = async (
+    funnel: LeadPipeline,
+    deal: { distribute: boolean; reason: keyof RdImportPlan['outsideRotation'] },
+  ) => {
+    if (!deal.distribute) {
+      result.plan.outsideRotation[deal.reason] += 1;
+      return;
+    }
+    let queue = queues.get(funnel);
+    if (!queue) {
+      queue = { order: await rotationOrder(db, funnel), next: 0 };
+      queues.set(funnel, queue);
+    }
+    const employeeId = queue.order.length
+      ? queue.order[queue.next++ % queue.order.length]!
+      : EMPTY_ROTATION;
+    bump(result.plan.rotation[funnel], employeeId);
+  };
   for (const { deal, id, place } of scoped) {
     options.onProgress?.(done, scoped.length);
     done += 1;
@@ -641,34 +718,6 @@ export async function importRdDeals(
         }
       }
 
-      if (!options.apply) {
-        const seen =
-          (contact.phone && seenInRun.has(contact.phone)) ||
-          (contact.email && seenInRun.has(contact.email));
-        if (contact.phone) seenInRun.add(contact.phone);
-        if (contact.email) seenInRun.add(contact.email);
-        if (already || seen) result.merged += 1;
-        else {
-          const phoneMatch = contact.phone
-            ? await db.query.leads.findFirst({
-                where: eq(leads.phone, contact.phone),
-                columns: { id: true },
-              })
-            : undefined;
-          const emailMatch =
-            !phoneMatch && contact.email
-              ? await db.query.leads.findFirst({
-                  where: eq(leads.email, contact.email),
-                  columns: { id: true },
-                })
-              : undefined;
-          if (phoneMatch || emailMatch) result.merged += 1;
-          else result.created += 1;
-        }
-        continue;
-      }
-
-      const mapped = place.pipeline === 'formatacao' || brandClientId !== null;
       // The follow-up's new, recent, open deals with no owner from RD go to the
       // rotation inside the lead's own transaction (`upsertLead`); an existing
       // lead found by the upsert is never distributed.
@@ -682,6 +731,56 @@ export async function importRdDeals(
         (place.pipeline === 'expansao' || place.pipeline === 'formatacao') &&
         createdAt !== null &&
         (!stale || options.rotateOld === true);
+      // Only read by the simulation's plan: the first thing that keeps the lead out of the rotation.
+      const notDistributedBecause: keyof RdImportPlan['outsideRotation'] = !options.distributeNew
+        ? 'rotationOff'
+        : ownerEmployeeId
+          ? 'ownerFromRd'
+          : outcome.won !== null
+            ? 'closed'
+            : place.archive
+              ? 'archive'
+              : place.pipeline !== 'expansao' && place.pipeline !== 'formatacao'
+                ? 'otherFunnel'
+                : 'tooOld';
+
+      if (!options.apply) {
+        const seen =
+          (contact.phone && seenInRun.has(contact.phone)) ||
+          (contact.email && seenInRun.has(contact.email));
+        if (contact.phone) seenInRun.add(contact.phone);
+        if (contact.email) seenInRun.add(contact.email);
+        const planBrand = brand ?? NO_BRAND;
+        if (already || seen) {
+          result.merged += 1;
+          bump(result.plan.link[place.pipeline], planBrand);
+        } else {
+          const phoneMatch = contact.phone
+            ? await db.query.leads.findFirst({
+                where: eq(leads.phone, contact.phone),
+                columns: { id: true },
+              })
+            : undefined;
+          const emailMatch =
+            !phoneMatch && contact.email
+              ? await db.query.leads.findFirst({
+                  where: eq(leads.email, contact.email),
+                  columns: { id: true },
+                })
+              : undefined;
+          if (phoneMatch || emailMatch) {
+            result.merged += 1;
+            bump(result.plan.link[place.pipeline], planBrand);
+          } else {
+            result.created += 1;
+            bump(result.plan.create[place.pipeline], planBrand);
+            await planRotation(place.pipeline, { distribute, reason: notDistributedBecause });
+          }
+        }
+        continue;
+      }
+
+      const mapped = place.pipeline === 'formatacao' || brandClientId !== null;
       const upserted = await upsertLead(db, {
         source: 'rd_crm',
         name: contact.name,

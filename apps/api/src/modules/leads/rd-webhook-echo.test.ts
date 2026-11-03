@@ -1,12 +1,14 @@
-import { eq } from 'drizzle-orm';
+import { WINGS_CLIENT_ID } from '@wings/shared';
+import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
-import { leadEvents, leads } from '../../db/schema/index.js';
+import { expansionIntakeLedger, jobs, leadEvents, leads } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
+import { upsertLead } from './service.js';
 
 /**
  * RD Marketing records a conversion on a contact every time RD Station CRM
@@ -113,5 +115,88 @@ describe('RD webhook: the echo of RD Station CRM', () => {
     );
     expect(res.statusCode).toBe(200);
     expect(await leadCount()).toBe(before + 1);
+  });
+
+  describe('an echo from a person the Wings has from the RD CRM import', () => {
+    const personOf = (n: number) => ({
+      uuid: `rd-uuid-imported-${n}`,
+      email: `importada.${n}@example.com`,
+      personal_phone: `(11) 97777-020${n}`,
+    });
+    const researchOf = (leadId: string) =>
+      db
+        .select()
+        .from(jobs)
+        .where(and(eq(jobs.type, 'enrich_lead'), eq(jobs.input, { leadId })));
+
+    const eventsOfKind = async (leadId: string, kind: string) =>
+      (await db.select().from(leadEvents).where(eq(leadEvents.leadId, leadId))).filter(
+        (event) => event.kind === kind,
+      );
+
+    // An imported deal (the RD mirror): no research was paid for, none of the page fields is set.
+    const importedLead = async (n: number) => {
+      const imported = await upsertLead(db, {
+        source: 'rd_crm',
+        name: 'Pessoa Importada',
+        email: personOf(n).email,
+        phone: `+551197777020${n}`,
+        clientId: WINGS_CLIENT_ID,
+        clientMapped: true,
+        pipeline: 'formatacao',
+        externalId: `deal-imported-${n}`,
+        importBatchId: 'rd-crm-test-echo',
+        skipResearch: true,
+        event: { kind: 'lead.imported.rd_crm' },
+      });
+      return imported.lead;
+    };
+
+    it('queues no paid research and writes the echo as neither the page nor the conversion', async () => {
+      const lead = await importedLead(1);
+      expect(lead.enrichmentState).toBe('none');
+      expect(lead.landingPage).toBeNull();
+
+      const res = await deliver(contactEvent(ECHO, personOf(1)));
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ leads: [{ leadId: lead.id, created: false }] });
+
+      const after = await db.query.leads.findFirst({ where: eq(leads.id, lead.id) });
+      expect(after).toMatchObject({
+        enrichmentState: 'none',
+        enrichmentJobId: null,
+        landingPage: null,
+        conversionIdentifier: null,
+      });
+      expect(await researchOf(lead.id)).toHaveLength(0);
+      const events = await db.select().from(leadEvents).where(eq(leadEvents.leadId, lead.id));
+      expect(events.filter((event) => event.kind === 'research.queued')).toHaveLength(0);
+      // The echo is still on the timeline, as before.
+      expect(events.filter((event) => event.kind === 'lead.received.rd_station')).toHaveLength(1);
+    });
+
+    it('does not tie a deal the intake made for another page to the lead (the echo names no page)', async () => {
+      const lead = await importedLead(3);
+      await db.insert(expansionIntakeLedger).values({
+        conversionKey: `${personOf(3).uuid}|lp-outra-pagina|2026-10-30`,
+        target: 'formatacao',
+        outcome: 'created',
+        rdDealId: 'deal-from-intake-3',
+      });
+      const res = await deliver(contactEvent(ECHO, personOf(3)));
+      expect(res.statusCode).toBe(200);
+      const after = await db.query.leads.findFirst({ where: eq(leads.id, lead.id) });
+      expect(after!.rdDealId).toBeNull();
+      expect(await eventsOfKind(lead.id, 'rd.deal_linked')).toHaveLength(0);
+    });
+
+    it('still researches the same person when they convert on a real landing page later', async () => {
+      const lead = await importedLead(2);
+      const res = await deliver(contactEvent('lp-eco-real', personOf(2)));
+      expect(res.statusCode).toBe(200);
+      const after = await db.query.leads.findFirst({ where: eq(leads.id, lead.id) });
+      expect(after!.enrichmentState).toBe('pending');
+      expect(await researchOf(lead.id)).toHaveLength(1);
+    });
   });
 });

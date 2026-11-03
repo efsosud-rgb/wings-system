@@ -391,13 +391,18 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
       let echoes = 0;
       for (const conversion of conversions) {
         if (!conversion.email && !conversion.phone) continue;
-        if (isRdCrmEcho(conversion.identifier) && !(await knownLead(db, conversion))) {
+        const isEcho = isRdCrmEcho(conversion.identifier);
+        if (isEcho && !(await knownLead(db, conversion))) {
           echoes += 1;
           continue;
         }
+        // The echo of a person the Wings has is still merged and shown on their timeline, but it is
+        // not a page they converted on: it pays for no research (every deal change in the CRM
+        // echoes, and an imported lead was never researched) and its name is not their page.
+        const identifier = isEcho ? null : conversion.identifier;
         const client = await resolveLandingPage(db, {
           url: conversion.url,
-          identifier: conversion.identifier,
+          identifier,
         });
         const result = await upsertLead(db, {
           source: 'rd_station',
@@ -409,11 +414,12 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
           pipeline: client.pipeline,
           brand: client.brand,
           channel: 'landing_page',
-          landingPage: conversion.url ?? conversion.identifier,
+          landingPage: conversion.url ?? identifier,
           externalId: conversion.externalId,
           attribution: conversion.attribution,
           trafficSource: conversion.trafficSource,
-          conversionIdentifier: conversion.identifier,
+          conversionIdentifier: identifier,
+          skipResearch: isEcho,
           formAnswers: conversion.answers,
           fields: conversion.fields,
           city: conversion.city,
@@ -421,14 +427,15 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
           consentedAt: conversion.at ?? new Date(),
           enteredAt: conversion.at,
           enteredAtSource: 'rd_conversion',
-          consentSource: `rd_station:${conversion.identifier ?? 'conversao'}`,
+          consentSource: `rd_station:${identifier ?? 'conversao'}`,
           consentText: conversion.legalBasisText,
           event: {
             kind: 'lead.received.rd_station',
             detail: {
               ruleId: client.ruleId,
               hasUrl: Boolean(conversion.url),
-              hasIdentifier: Boolean(conversion.identifier),
+              hasIdentifier: Boolean(identifier),
+              ...(isEcho ? { crmEcho: true } : {}),
               pipeline: client.pipeline,
               adPlatform: conversion.attribution?.adPlatform ?? null,
               hasUtm: Boolean(
@@ -437,13 +444,16 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
             },
           },
         });
-        const linkedDeal = conversion.externalId
-          ? await linkIntakeDealToLead(db, {
-              leadId: result.lead.id,
-              contactUuid: conversion.externalId,
-              identifier: conversion.identifier,
-            })
-          : null;
+        // Without an identifier the intake ledger key would match any deal of the contact: an echo
+        // links nothing (it is no page the intake made a deal for).
+        const linkedDeal =
+          conversion.externalId && !isEcho
+            ? await linkIntakeDealToLead(db, {
+                leadId: result.lead.id,
+                contactUuid: conversion.externalId,
+                identifier,
+              })
+            : null;
         await writeAudit(db, {
           action: result.created ? 'lead.received' : 'lead.merged',
           entity: 'lead',
