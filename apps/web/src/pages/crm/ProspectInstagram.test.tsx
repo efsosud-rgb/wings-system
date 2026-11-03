@@ -1,5 +1,7 @@
 import {
   DEFAULT_ICP_WEIGHTS,
+  ICP_INSTAGRAM_KEYS,
+  ICP_WEIGHT_LABELS,
   icpScore,
   type InstagramDiscoveryResponse,
   type InstagramSnapshotView,
@@ -15,13 +17,14 @@ import { ApiError } from '../../api/client.js';
 
 const get = vi.fn();
 const post = vi.fn();
+const put = vi.fn();
 vi.mock('../../api/client.js', async (original) => ({
   ...(await original<typeof import('../../api/client.js')>()),
   api: {
     get: (path: string) => get(path),
     post: (path: string, body?: unknown) => post(path, body),
     patch: vi.fn(),
-    put: vi.fn(),
+    put: (path: string, body?: unknown) => put(path, body),
   },
 }));
 
@@ -110,14 +113,23 @@ const discovery: InstagramDiscoveryResponse = {
   usage: { today: 2, limit: 500 },
 };
 
+const MANAGER: SessionUser = {
+  ...SELLER,
+  employeeId: 'e2',
+  role: 'gerente_comercial',
+  permissions: { 'prospecting.use': 'all', 'prospecting.configure': 'all' },
+};
+
+let me = SELLER;
 let status = { configured: true, aiConfigured: true, instagramDiscovery: true };
 let discover: () => Promise<InstagramDiscoveryResponse> = async () => discovery;
 
 beforeEach(() => {
+  me = SELLER;
   status = { configured: true, aiConfigured: true, instagramDiscovery: true };
   discover = async () => discovery;
   get.mockReset().mockImplementation(async (path: string) => {
-    if (path === '/auth/me') return { user: SELLER };
+    if (path === '/auth/me') return { user: me };
     if (path === '/prospecting/status') return status;
     if (path === '/prospecting/usage') return answer.usage;
     if (path === '/prospecting/settings')
@@ -129,6 +141,7 @@ beforeEach(() => {
       };
     throw new Error(`unexpected GET ${path}`);
   });
+  put.mockReset().mockResolvedValue({});
   post.mockReset().mockImplementation(async (path: string) => {
     if (path === '/prospecting/search') return answer;
     if (path === '/prospecting/instagram/discovery') return discover();
@@ -249,11 +262,76 @@ describe('Instagram column and the 0-100 score', () => {
     expect(await within(row).findByText('— o servidor teve um problema (erro 503)')).toBeTruthy();
   });
 
+  it("a @ that came back without numbers (Meta's hold) is asked again by the next search", async () => {
+    discover = async () => ({
+      items: [
+        discovery.items[0]!,
+        { username: 'empresa.exemplo2', snapshot: null, reason: 'Instagram em espera (até 13:30)' },
+      ],
+      holdUntil: '2026-11-04T16:30:00.000Z',
+      usage: { today: 1, limit: 500 },
+    });
+    const results = await searchOnce();
+    expect(
+      await within(rowOf(results, 'Empresa Exemplo 2')).findByText(
+        '— Instagram em espera (até 13:30)',
+      ),
+    ).toBeTruthy();
+    // After the hold: a new search with the same companies.
+    discover = async () => discovery;
+    post.mockImplementation(async (path: string) => {
+      if (path === '/prospecting/search') return { ...answer, items: ITEMS.map((i) => ({ ...i })) };
+      if (path === '/prospecting/instagram/discovery') return discover();
+      throw new Error(`unexpected POST ${path}`);
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Buscar' }));
+    await waitFor(() => expect(discoveryPosts()).toHaveLength(2));
+    // Only the one without numbers is asked again; the personal account keeps its answer.
+    expect(discoveryPosts()[1]![1]).toEqual({
+      items: [{ username: 'empresa.exemplo2', ticket: 'ticket-2' }],
+    });
+    const row = rowOf(
+      await screen.findByRole('region', { name: 'Resultados' }),
+      'Empresa Exemplo 2',
+    );
+    expect(await within(row).findByText(/12\.000 seguidores/)).toBeTruthy();
+    expect(within(row).queryByText(/em espera/)).toBeNull();
+  });
+
   it('a hold from Meta is said with its hour', async () => {
     discover = async () => ({ ...discovery, holdUntil: '2026-11-04T16:30:00.000Z' });
     const results = await searchOnce();
     expect(
       await within(results).findByText('Instagram em espera até 13:30: a Meta pediu para esperar.'),
     ).toBeTruthy();
+  });
+});
+
+describe('Ajustes → Nota ICP', () => {
+  it('shows the 6 Instagram weights with their values and saves them with the rest', async () => {
+    me = MANAGER;
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <ProspectingPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    fireEvent.click(await screen.findByRole('tab', { name: 'Ajustes' }));
+    const form = await screen.findByRole('form', { name: 'Nota ICP' });
+    expect(ICP_INSTAGRAM_KEYS).toHaveLength(6);
+    for (const key of ICP_INSTAGRAM_KEYS)
+      expect((within(form).getByLabelText(ICP_WEIGHT_LABELS[key]) as HTMLInputElement).value).toBe(
+        String(DEFAULT_ICP_WEIGHTS[key]),
+      );
+    fireEvent.change(within(form).getByLabelText('Instagram: seguidores ≥ 10.000'), {
+      target: { value: '5' },
+    });
+    fireEvent.click(within(form).getByRole('button', { name: 'Salvar' }));
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(1));
+    const [path, body] = put.mock.calls[0]! as [string, { weights: Record<string, number> }];
+    expect(path).toBe('/prospecting/settings/icp');
+    expect(body.weights).toMatchObject({ ...DEFAULT_ICP_WEIGHTS, igFollowers10k: 5 });
   });
 });
