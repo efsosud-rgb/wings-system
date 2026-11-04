@@ -13666,6 +13666,117 @@
       },
       "isRLSEnabled": false
     },
+    "public.lead_contact_changes": {
+      "name": "lead_contact_changes",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "lead_id": {
+          "name": "lead_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "field": {
+          "name": "field",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "old_value": {
+          "name": "old_value",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "new_value": {
+          "name": "new_value",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "actor_employee_id": {
+          "name": "actor_employee_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "at": {
+          "name": "at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "lead_contact_changes_lead_idx": {
+          "name": "lead_contact_changes_lead_idx",
+          "columns": [
+            {
+              "expression": "lead_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "lead_contact_changes_lead_id_leads_id_fk": {
+          "name": "lead_contact_changes_lead_id_leads_id_fk",
+          "tableFrom": "lead_contact_changes",
+          "tableTo": "leads",
+          "columnsFrom": [
+            "lead_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "lead_contact_changes_actor_employee_id_employees_id_fk": {
+          "name": "lead_contact_changes_actor_employee_id_employees_id_fk",
+          "tableFrom": "lead_contact_changes",
+          "tableTo": "employees",
+          "columnsFrom": [
+            "actor_employee_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "lead_contact_changes_field_check": {
+          "name": "lead_contact_changes_field_check",
+          "value": "\"lead_contact_changes\".\"field\" in ('name', 'phone', 'email', 'instagram', 'website')"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.lead_enrichment_ledger": {
       "name": "lead_enrichment_ledger",
       "schema": "",
@@ -23738,117 +23849,6 @@
         "prospect_opportunities_decided_check": {
           "name": "prospect_opportunities_decided_check",
           "value": "\"prospect_opportunities\".\"state\" not in ('aprovada', 'rejeitada', 'duplicada') or \"prospect_opportunities\".\"decided_at\" is not null"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.lead_contact_changes": {
-      "name": "lead_contact_changes",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "lead_id": {
-          "name": "lead_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "field": {
-          "name": "field",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "old_value": {
-          "name": "old_value",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "new_value": {
-          "name": "new_value",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "actor_employee_id": {
-          "name": "actor_employee_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "at": {
-          "name": "at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "lead_contact_changes_lead_idx": {
-          "name": "lead_contact_changes_lead_idx",
-          "columns": [
-            {
-              "expression": "lead_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "lead_contact_changes_lead_id_leads_id_fk": {
-          "name": "lead_contact_changes_lead_id_leads_id_fk",
-          "tableFrom": "lead_contact_changes",
-          "tableTo": "leads",
-          "columnsFrom": [
-            "lead_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "lead_contact_changes_actor_employee_id_employees_id_fk": {
-          "name": "lead_contact_changes_actor_employee_id_employees_id_fk",
-          "tableFrom": "lead_contact_changes",
-          "tableTo": "employees",
-          "columnsFrom": [
-            "actor_employee_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "lead_contact_changes_field_check": {
-          "name": "lead_contact_changes_field_check",
-          "value": "\"lead_contact_changes\".\"field\" in ('name', 'phone', 'email', 'instagram', 'website')"
         }
       },
       "isRLSEnabled": false
