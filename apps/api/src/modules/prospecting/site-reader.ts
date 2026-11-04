@@ -3,11 +3,13 @@ import { readPublicPage, type PageResult, type PageTransport } from '../../lib/p
 
 /**
  * Enriquecer (docs/crm/prospeccao.md): the company's own site, read on the
- * seller's click, one prospect at a time. At most two pages (the one Google
- * listed and one contact page linked from it), robots.txt obeyed, every
- * request through the SSRF guard of `public-probe.ts`. What comes back is the
- * first Instagram, Facebook, LinkedIn, WhatsApp link and e-mail found; the
- * pages and the URL are not kept.
+ * seller's click or by the Instagram finder, one prospect at a time. At most
+ * three pages (the one Google listed, one contact page and one "sobre" page
+ * linked from it; the footer is part of the home page), robots.txt obeyed,
+ * every request through the SSRF guard of `public-probe.ts`. A request that
+ * times out or fails is tried once more (t086: 5 s without a retry made most
+ * sites "not answer"). What comes back is the first Instagram, Facebook,
+ * LinkedIn, WhatsApp link and e-mail found; the pages and the URL are not kept.
  */
 
 const USER_AGENT = 'WingsSystem-Prospeccao/1.0';
@@ -16,7 +18,12 @@ const PAGE_MAX_BYTES = 1_000_000;
 const ROBOTS_MAX_BYTES = 100_000;
 /** Each rule costs up to its length times the path's, so a longer (hostile) path is not tried. */
 const ROBOTS_MAX_PATH = 512;
-const TIMEOUT_MS = 5_000;
+export const SITE_TIMEOUT_MS = 12_000;
+/** One more try after a timeout or a connection failure; never after an answer (404, 503, robots). */
+const RETRIES = 1;
+/** Everything one company's reading may take, retries included. */
+const BUDGET_MS = 40_000;
+const TIMEOUT_SECONDS = SITE_TIMEOUT_MS / 1000;
 
 export type FoundContacts = Partial<Record<ProspectEnrichmentKey, string>>;
 
@@ -25,6 +32,14 @@ export interface SiteReading {
   pagesRead: number;
   /** Why a page was not read, in Portuguese. */
   skipped: string[];
+  /** The home page was asked and the site did not answer in time (the Instagram finder's "timeout"). */
+  timedOut?: boolean;
+}
+
+export interface SiteReadOptions {
+  transport?: PageTransport;
+  /** Stop reading more pages as soon as an Instagram link is found (the finder wants only that). */
+  stopAtInstagram?: boolean;
 }
 
 // --- robots.txt -------------------------------------------------------------------------
@@ -208,6 +223,7 @@ export function extractContacts(html: string): FoundContacts {
 }
 
 const CONTACT = /contato|contact|fale[-_ ]conosco|atendimento/i;
+const ABOUT = /sobre|about|quem[-_ ]somos|nossa[-_ ]hist[oó]ria/i;
 
 /**
  * One contact page linked from the page, on the same host; null when there is none. Anchors are
@@ -215,6 +231,15 @@ const CONTACT = /contato|contact|fale[-_ ]conosco|atendimento/i;
  * page took the server for seconds per click.
  */
 export function contactPageOf(html: string, base: URL): URL | null {
+  return linkedPageOf(html, base, CONTACT);
+}
+
+/** The "sobre" / "quem somos" page linked from the page, same rules as `contactPageOf`. */
+export function aboutPageOf(html: string, base: URL): URL | null {
+  return linkedPageOf(html, base, ABOUT);
+}
+
+function linkedPageOf(html: string, base: URL, wanted: RegExp): URL | null {
   const starts = /<a\b/gi;
   const ends = /<\/a\s*>/gi;
   let close = -1;
@@ -231,7 +256,7 @@ export function contactPageOf(html: string, base: URL): URL | null {
     if (!href) continue;
     const label =
       close - tagEnd <= 2000 ? html.slice(tagEnd + 1, close).replace(/<[^<>]*>/g, ' ') : '';
-    if (!CONTACT.test(href) && !CONTACT.test(label)) continue;
+    if (!wanted.test(href) && !wanted.test(label)) continue;
     let url: URL;
     try {
       url = new URL(href, base);
@@ -248,7 +273,7 @@ export function contactPageOf(html: string, base: URL): URL | null {
 
 // --- reading -------------------------------------------------------------------------------
 
-function failureText(result: Exclude<PageResult, { kind: 'ok' }>): string {
+function failureText(result: Exclude<PageResult, { kind: 'ok' }>, tries = 1): string {
   switch (result.kind) {
     // One answer for both: two would tell the seller which internal names exist.
     case 'blocked':
@@ -257,7 +282,9 @@ function failureText(result: Exclude<PageResult, { kind: 'ok' }>): string {
     case 'disallowed':
       return 'o site redireciona para um endereço que o robots.txt não deixa ler';
     case 'timeout':
-      return 'o site não respondeu em 5 segundos';
+      return tries > 1
+        ? `o site não respondeu em ${TIMEOUT_SECONDS} segundos (${tries} tentativas)`
+        : `o site não respondeu em ${TIMEOUT_SECONDS} segundos`;
     case 'http_error':
       return `o site respondeu com erro ${result.status}`;
     default:
@@ -267,31 +294,52 @@ function failureText(result: Exclude<PageResult, { kind: 'ok' }>): string {
 
 export async function readCompanySite(
   website: string,
-  transport?: PageTransport,
+  options: SiteReadOptions | PageTransport = {},
 ): Promise<SiteReading> {
+  const { transport, stopAtInstagram = false }: SiteReadOptions =
+    typeof options === 'function' ? { transport: options } : options;
   const found: FoundContacts = {};
   const skipped: string[] = [];
   let pagesRead = 0;
+  let timedOut = false;
+  const startedAt = Date.now();
   const robots = new Map<string, Promise<string | { refused: string }>>();
+
+  /** One page, tried again after a timeout or a connection failure while the budget lasts. */
+  const fetchPage = async (
+    url: string,
+    limits: { maxBytes: number; permits?: (hop: URL) => Promise<boolean> },
+  ): Promise<{ result: PageResult; tries: number }> => {
+    let tries = 0;
+    for (;;) {
+      const left = BUDGET_MS - (Date.now() - startedAt);
+      if (left <= 0) return { result: { kind: 'timeout' }, tries: Math.max(tries, 1) };
+      tries += 1;
+      const result = await readPublicPage(url, {
+        ...limits,
+        timeoutMs: Math.min(SITE_TIMEOUT_MS, left),
+        userAgent: USER_AGENT,
+        transport,
+      });
+      if ((result.kind === 'timeout' || result.kind === 'error') && tries <= RETRIES) continue;
+      return { result, tries };
+    }
+  };
 
   /** robots.txt of the page's origin: its text, or why nothing may be read there. */
   const robotsOf = (url: URL) => {
     const robotsUrl = new URL('/robots.txt', url).href;
     let pending = robots.get(robotsUrl);
     if (!pending) {
-      pending = readPublicPage(robotsUrl, {
-        maxBytes: ROBOTS_MAX_BYTES,
-        timeoutMs: TIMEOUT_MS,
-        userAgent: USER_AGENT,
-        transport,
-      }).then((result) => {
+      pending = fetchPage(robotsUrl, { maxBytes: ROBOTS_MAX_BYTES }).then(({ result, tries }) => {
         if (result.kind === 'ok') return result.body;
         // No robots.txt (4xx) allows everything; a server error or no answer allows nothing.
         if (result.kind === 'http_error' && result.status < 500) return '';
         if (result.kind === 'blocked' || result.kind === 'not_found')
           return { refused: failureText(result) };
         return {
-          refused: `o robots.txt não respondeu (${failureText(result)}), então nada foi lido`,
+          refused: `o robots.txt não respondeu (${failureText(result, tries)}), então nada foi lido`,
+          timeout: result.kind === 'timeout',
         };
       });
       robots.set(robotsUrl, pending);
@@ -309,21 +357,20 @@ export async function readCompanySite(
     const rules = await robotsOf(url);
     if (typeof rules !== 'string') {
       skipped.push(`${label}: ${rules.refused}.`);
+      if ('timeout' in rules && rules.timeout) timedOut = true;
       return null;
     }
     if (!robotsAllows(rules, `${url.pathname}${url.search}`)) {
       skipped.push(`${label}: o robots.txt do site não permite a leitura.`);
       return null;
     }
-    const page = await readPublicPage(url.href, {
+    const { result: page, tries } = await fetchPage(url.href, {
       maxBytes: PAGE_MAX_BYTES,
-      timeoutMs: TIMEOUT_MS,
-      userAgent: USER_AGENT,
-      transport,
       permits,
     });
     if (page.kind !== 'ok') {
-      skipped.push(`${label}: ${failureText(page)}.`);
+      skipped.push(`${label}: ${failureText(page, tries)}.`);
+      if (page.kind === 'timeout') timedOut = true;
       return null;
     }
     pagesRead += 1;
@@ -332,6 +379,12 @@ export async function readCompanySite(
     return page;
   };
 
+  const finish = (): SiteReading => ({
+    found,
+    pagesRead,
+    skipped,
+    ...(timedOut ? { timedOut } : {}),
+  });
   let start: URL;
   try {
     start = new URL(website);
@@ -342,8 +395,18 @@ export async function readCompanySite(
     return { found, pagesRead, skipped: [`Página inicial: ${failureText({ kind: 'blocked' })}.`] };
   const home = await read(start, 'Página inicial');
   if (home) {
-    const contact = contactPageOf(home.body, new URL(home.url));
-    if (contact) await read(contact, 'Página de contato');
+    const base = new URL(home.url);
+    const linked: [string, URL | null][] = [
+      ['Página de contato', contactPageOf(home.body, base)],
+      ['Página sobre', aboutPageOf(home.body, base)],
+    ];
+    const seen = new Set([base.href]);
+    for (const [label, url] of linked) {
+      if (stopAtInstagram && found.instagram) break;
+      if (!url || seen.has(url.href)) continue;
+      seen.add(url.href);
+      await read(url, label);
+    }
   }
-  return { found, pagesRead, skipped };
+  return finish();
 }

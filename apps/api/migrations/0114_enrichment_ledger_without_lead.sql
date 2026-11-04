@@ -1,0 +1,1 @@
+ALTER TABLE "lead_enrichment_ledger" ALTER COLUMN "lead_id" DROP NOT NULL;

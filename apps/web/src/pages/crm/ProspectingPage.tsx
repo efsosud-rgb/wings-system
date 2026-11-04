@@ -33,7 +33,7 @@ import {
   type ProspectSearchResponse,
   type ProspectStatus,
 } from '@wings/shared';
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { hasPermission, permissionScope, useSession } from '../../api/auth.js';
 import { useStages } from '../../api/leads.js';
@@ -77,6 +77,7 @@ import {
   useInstagramNumbers,
   type InstagramNumbers,
 } from './ProspectInstagram.js';
+import { useInstagramFinder, withFinds } from './ProspectInstagramFind.js';
 import { ApproachPanel } from './ProspectApproachPanel.js';
 import { HistoryTab, MetricsTab } from './ProspectingHistory.js';
 
@@ -542,15 +543,21 @@ function SearchTab({
     );
 
   const blocked = configured === false ? NO_KEY : null;
-  const numbers = useInstagramNumbers(
-    results?.answer.items ?? NO_ITEMS,
-    instagramDiscovery === true,
+  const finds = useInstagramFinder(results?.answer.items ?? NO_ITEMS);
+  const found = useMemo(
+    () => withFinds(results?.answer.items ?? NO_ITEMS, finds),
+    [results, finds],
   );
+  // Meta's numbers are asked again by a new search or by a new @, not by every finder answer: one
+  // that only says "no Instagram" must not re-ask the @ that came back without numbers (Meta's hold).
+  const refsKey = found.map((item) => item.instagram?.username ?? '').join('|');
+  const forNumbers = useMemo(() => found, [results, refsKey]);
+  const numbers = useInstagramNumbers(forNumbers, instagramDiscovery === true);
   const weights = settings.data?.icp?.weights;
   // The score with the Instagram numbers as they arrive; it orders the list (§6.3).
   const answer = results && {
     ...results.answer,
-    items: results.answer.items
+    items: found
       .map((item) => ({ ...item, icp: scoreWithInstagram(item, numbers, weights) }))
       .sort((a, b) => b.icp.score - a.icp.score || (b.reviews ?? 0) - (a.reviews ?? 0)),
   };
@@ -1028,6 +1035,7 @@ function ResultRow({
               <EnrichButton
                 prospectId={prospect.id}
                 website={site}
+                findTicket={item.enrichTicket ?? undefined}
                 onDone={(answer) => setEnrichment(answer.prospect.enrichment)}
               />
             )}
@@ -1131,10 +1139,13 @@ function EnrichmentList({ enrichment }: { enrichment: ProspectEnrichment }) {
 function EnrichButton({
   prospectId,
   website,
+  findTicket,
   onDone,
 }: {
   prospectId: string;
   website: string;
+  /** The search item's finder ticket: the click then also tries Meta and the web for the @. */
+  findTicket?: string;
   onDone: (answer: { prospect: Prospect }) => void;
 }) {
   const enrich = useEnrichProspect();
@@ -1145,8 +1156,10 @@ function EnrichButton({
         type="button"
         className="crm-btn is-small"
         disabled={enrich.isPending}
-        title="Lê a página inicial e a de contato do site da empresa"
-        onClick={() => enrich.mutate({ id: prospectId, website }, { onSuccess: onDone })}
+        title="Lê a página inicial, a de contato e a de “sobre” do site da empresa"
+        onClick={() =>
+          enrich.mutate({ id: prospectId, website, findTicket }, { onSuccess: onDone })
+        }
       >
         {enrich.isPending ? 'Lendo o site…' : 'Enriquecer'}
       </button>
@@ -1155,6 +1168,8 @@ function EnrichButton({
           {' '}
           {enrich.data.pagesRead} {enrich.data.pagesRead === 1 ? 'página lida' : 'páginas lidas'}
           {skipped.length > 0 && `; ${skipped.join('; ')}`}
+          {enrich.data.instagramReasons &&
+            `; sem Instagram: ${enrich.data.instagramReasons.join(' ')}`}
         </span>
       )}
       {enrich.isError && <span className="crm-error"> — {googleFailure(enrich.error)}</span>}

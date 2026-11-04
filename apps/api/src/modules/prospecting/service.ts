@@ -8,6 +8,7 @@ import {
   icpScore,
   INSTAGRAM_FROM_GOOGLE_SITE,
   instagramOfWebsite,
+  instagramSourceOf,
   missingFields,
   nameKey,
   normalizeBrazilianPhone,
@@ -65,6 +66,7 @@ import {
   type Executor,
 } from '../leads/crm.js';
 import { ForeignLeadError, upsertLead } from '../leads/service.js';
+import { lookupsFor, outcomeOf } from './instagram-finder.js';
 import { PlacesError, type PlacesClient } from './places-client.js';
 
 /**
@@ -361,7 +363,9 @@ function instagramRefOf(
   if (saved)
     return {
       username: saved,
-      source: PROSPECT_ENRICHMENT_SOURCE,
+      // The source saved with the @ (a guess or a web hit says so); a row with no known source
+      // is the older kind, written only by the site reader.
+      source: instagramSourceOf(enrichment.instagram?.source) ?? PROSPECT_ENRICHMENT_SOURCE,
       at: enrichment.instagram?.at ?? null,
       ticket: ticketOf(saved),
     };
@@ -384,6 +388,9 @@ export async function assembleSearch(
   icp: ProspectingIcp,
   /** Signs a company's @ for this seller, so the discovery route takes it (instagram-graph.ts). */
   ticketOf: (username: string) => string,
+  /** t086: signs a company for the Instagram finder; null while the finder is not wired (tests). */
+  findTicketOf: ((place: PlaceResult) => string) | null = null,
+  now: Date = new Date(),
 ): Promise<Pick<ProspectSearchResponse, 'items' | 'hidden'>> {
   const hidden = { excluded: 0, filtered: 0, heldByOthers: 0, repeated: answer.repeated };
   const units = new Map<string, number>();
@@ -445,6 +452,8 @@ export async function assembleSearch(
     if (phone) phoneCount.set(phone, (phoneCount.get(phone) ?? 0) + 1);
   }
 
+  // What the finder kept of these companies: an @ found, or why none was (no second try).
+  const lookups = await lookupsFor(db, ids, now);
   const prospectOf = new Map(saved.map((found) => [found.row.placeId, found]));
   const leadByPlace = new Map<string, (typeof leadRows)[number]>();
   const leadByPhone = new Map<string, (typeof leadRows)[number]>();
@@ -494,6 +503,16 @@ export async function assembleSearch(
         text: 'possível lead: mesmo site de uma negociação',
       });
     const enrichment = (prospect?.row.enrichment ?? {}) as ProspectEnrichment;
+    const known = instagramRefOf(enrichment, place.website, ticketOf);
+    const lookup = lookups.get(place.placeId);
+    const keptOutcome = lookup ? outcomeOf(lookup) : null;
+    const instagram =
+      known ??
+      (keptOutcome?.instagram
+        ? { ...keptOutcome.instagram, ticket: ticketOf(keptOutcome.instagram.username) }
+        : null);
+    const doNotContact = tags.some((tag) => tag.kind === 'do_not_contact');
+    const findTicket = findTicketOf?.(place) ?? null;
     items.push({
       ...place,
       missing: missingFields(place),
@@ -502,12 +521,17 @@ export async function assembleSearch(
           rating: place.rating,
           reviews: place.reviews,
           hasWebsite: Boolean(place.website),
-          hasInstagram: Boolean(enrichment.instagram),
+          // Same rule for a saved @ and a cached one: only what the company's own site showed.
+          hasInstagram: instagram?.source === PROSPECT_ENRICHMENT_SOURCE,
           multiUnit,
         },
         icp.weights,
       ),
-      instagram: instagramRefOf(enrichment, place.website, ticketOf),
+      instagram,
+      instagramFind: instagram || keptOutcome || doNotContact ? null : findTicket,
+      // Kept after the finder answers: the Enriquecer click still needs it to save the @ found.
+      enrichTicket: known || doNotContact ? null : findTicket,
+      instagramMiss: instagram ? null : (keptOutcome?.miss ?? null),
       tags,
       prospect: prospect
         ? {

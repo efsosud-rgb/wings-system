@@ -233,7 +233,7 @@ Worker:
 | `ZAPI_INSTANCE_ID`, `ZAPI_INSTANCE_TOKEN`, `ZAPI_CLIENT_TOKEN` | a mesma instância da API, para o perfil |
 | `BRAVE_SEARCH_API_KEY`         | busca web; sem ela o passo é pulado e o resumo diz "não realizada" |
 | `ENRICH_SEARCH_USD_PER_QUERY`  | custo por consulta (padrão 0,005)                                |
-| `ENRICH_DAILY_USD`             | teto do dia para todos (padrão 2)                                |
+| `ENRICH_DAILY_USD`             | teto do dia para todos (padrão 2); a busca paga do Instagram da Prospecção (API) também entra nele, no mesmo ledger (`web_search`, sem lead): mesmo valor na API e no worker |
 | `BRASILAPI_BASE_URL`           | opcional, padrão `https://brasilapi.com.br`                      |
 
 ## O que o Eric precisa fazer

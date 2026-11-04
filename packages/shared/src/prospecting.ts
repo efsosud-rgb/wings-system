@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ProspectInstagramRef } from './instagram-discovery.js';
+import type { InstagramMiss, ProspectInstagramRef } from './instagram-discovery.js';
 import { LEAD_NAME_MAX } from './leads.js';
 
 /**
@@ -142,7 +142,11 @@ export const prospectUpdateSchema = z
 export type ProspectUpdateInput = z.infer<typeof prospectUpdateSchema>;
 
 /** Enriquecer: the company's site as the live result showed it; the URL itself is never stored. */
-export const prospectEnrichSchema = z.object({ website: z.url().max(2000) });
+export const prospectEnrichSchema = z.object({
+  website: z.url().max(2000),
+  /** t086: the search item's `instagramFind` ticket, so the click can also try Meta and the web. */
+  findTicket: z.string().max(2000).optional(),
+});
 
 /**
  * Criar lead, after the first contact: what the company said, not what Google shows. Phone or
@@ -645,8 +649,10 @@ export function missingFields(place: PlaceResult): ProspectMissingField[] {
 }
 
 /**
- * Hosts that are not the company's own site (a profile, a link page, a delivery app): two
- * companies "sharing" one of these are not the same company, so it never marks a duplicate.
+ * Hosts that are not the company's own site (a profile, a link page, a delivery app, a marketplace,
+ * a booking agenda): two companies "sharing" one of these are not the same company, so it never
+ * marks a duplicate, and nothing is read or guessed from it (t090: the Instagram finder would
+ * otherwise hand back the platform's own @).
  */
 const SHARED_HOSTS = [
   'instagram.com',
@@ -659,6 +665,26 @@ const SHARED_HOSTS = [
   'google.com',
   'business.site',
   'ifood.com.br',
+  'rappi.com.br',
+  'rappi.com',
+  'ubereats.com',
+  'anota.ai',
+  'aiqfome.com',
+  'keeta.com',
+  '99app.com',
+  'doctoralia.com.br',
+  'doctoralia.com',
+  'shopee.com.br',
+  'shopee.com',
+  'mercadolivre.com.br',
+  'mercadolibre.com',
+  'amazon.com.br',
+  'olx.com.br',
+  'booksy.com',
+  'trinks.com',
+  'tripadvisor.com.br',
+  'tripadvisor.com',
+  'booking.com',
   'goo.gl',
   'bit.ly',
   'tiktok.com',
@@ -686,6 +712,12 @@ export interface ProspectSearchItem extends PlaceResult {
   icp: IcpScore;
   /** The company's Instagram when known (its site, or Google's site field), for the discovery. */
   instagram: ProspectInstagramRef | null;
+  /** t086: the ticket of the Instagram finder, while there is no @ and the finder has not tried. */
+  instagramFind: string | null;
+  /** t086: the same ticket kept after the finder answers, so Enriquecer can save the @ it found. */
+  enrichTicket: string | null;
+  /** t086: the finder tried and found no @; why, per path, and when. */
+  instagramMiss: InstagramMiss | null;
   /** Fields Google did not give: an incomplete record, flagged, never filled in. */
   missing: ProspectMissingField[];
   tags: ProspectTag[];
@@ -797,10 +829,12 @@ export type ProspectPlaceResponse =
 
 export interface ProspectEnrichResponse {
   prospect: Prospect;
-  /** Pages actually read (robots.txt allowing), at most 2. */
+  /** Pages actually read (robots.txt allowing), at most 3. */
   pagesRead: number;
   /** Why a page was not read, in Portuguese, when one was not. */
   skipped: string[];
+  /** t086: with a finder ticket and no @ found by any path, why, one sentence per path. */
+  instagramReasons?: string[];
 }
 
 // --- WhatsApp opt-in ----------------------------------------------------------
