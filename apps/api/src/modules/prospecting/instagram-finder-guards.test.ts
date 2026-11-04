@@ -23,7 +23,7 @@ import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factori
 import { recordContactOptOut } from '../leads/contact-block.js';
 import { startOfDaySaoPaulo } from '../prospect-ai/classifier.js';
 import { fakePlace, fakePlacesApi } from './fake-places-api.js';
-import { reserveWebSearch } from './instagram-finder.js';
+import { finderKeyOf, issueFinderTicket, reserveWebSearch } from './instagram-finder.js';
 
 /**
  * t090: the guards of the Instagram finder the review found without a test, and the paid search in
@@ -59,8 +59,12 @@ const google = fakePlacesApi({
 });
 
 const asked: string[] = [];
+/** A typed site that shows an @ links one, with nothing to guess from the name (a test's company). */
+const typedPages: Record<string, string> = {};
 const transport: PageTransport = async (url) => {
   asked.push(url.href);
+  const body = typedPages[url.href];
+  if (body !== undefined) return { status: 200, location: null, body };
   return { status: 404, location: null, body: '' };
 };
 // Confirmed business accounts: the platform's, a section's, a company that opted out, and Omega's.
@@ -83,8 +87,11 @@ const graphFetch = (async (input: unknown) => {
   });
 }) as typeof fetch;
 const braveAsked: string[] = [];
+/** A Brave answer the client cannot read (the paid call happened; the JSON did not come). */
+let braveBroken = false;
 const braveFetch = (async (input: unknown) => {
   braveAsked.push(new URL(String(input)).searchParams.get('q') ?? '');
+  if (braveBroken) return new Response('<html>Bad gateway</html>', { status: 200 });
   return Response.json({ web: { results: [] } });
 }) as typeof fetch;
 const external = () => [asked.length, graphAsked.length, braveAsked.length];
@@ -223,6 +230,39 @@ describe('what the finder never does', () => {
 });
 
 describe('the paid search and the enrichment ledger', () => {
+  it('a Brave answer the client cannot read is a failed search, kept for hours, not "no profile"', async () => {
+    // The call is paid whatever it answered: an unreadable body must say "não respondeu" and be
+    // tried again within hours, or a glitch keeps "nenhum perfil bate" for the week (lição 4).
+    // A site of its own, or the @ the name suggests would stop at Meta before the paid search.
+    const company = {
+      id: 'ChIJ_guards_broken_brave',
+      placeId: 'ChIJ_guards_broken_brave',
+      name: 'Loja Zeta',
+      website: 'https://z-eta.example/',
+    };
+    const key = finderKeyOf('x'.repeat(48));
+    const ticket = issueFinderTicket(key, sellerId, { ...company, address: null }, T0);
+    braveBroken = true;
+    try {
+      const before = braveAsked.length;
+      const res = await app.inject({
+        method: 'POST',
+        url: '/prospecting/instagram/find',
+        cookies,
+        payload: { items: [{ ticket }] },
+      });
+      expect(res.statusCode).toBe(200);
+      const answer = res.json<InstagramFindResponse>().items[0]!;
+      expect(answer.instagram).toBeNull();
+      expect(answer.miss?.reasons.at(-1)).toMatch(/a busca na web não respondeu/);
+      expect(braveAsked.length).toBe(before + 1);
+    } finally {
+      braveBroken = false;
+    }
+    const kept = await lookupOf(company);
+    expect(kept!.reasons.at(-1)).toMatch(/a busca na web não respondeu/);
+    expect(kept!.expiresAt.getTime() - T0.getTime()).toBe(6 * 3_600_000);
+  });
   it('counts in the same ledger and stops at the same dollar ceiling, with no lead', async () => {
     const day = new Date();
     const enrichSpent = async () => {
@@ -332,5 +372,45 @@ describe('the paid search and the enrichment ledger', () => {
     } finally {
       await tight.close();
     }
+  });
+});
+
+describe('the Enriquecer and the site the cache is built from', () => {
+  it("reads the ticket's site, never the one the screen typed: the others see only the company's own", async () => {
+    // The lookup is shared by every seller: a typed site that links an @ would be kept for all.
+    const company = {
+      id: 'ChIJ_guards_typed_site',
+      placeId: 'ChIJ_guards_typed_site',
+      name: 'Loja Theta',
+      website: 'https://theta.example/',
+    };
+    const ticket = issueFinderTicket(
+      finderKeyOf('x'.repeat(48)),
+      sellerId,
+      { placeId: company.placeId, name: company.name, website: company.website, address: null },
+      T0,
+    );
+    const [row] = await db
+      .insert(prospects)
+      .values({ placeId: company.placeId, status: 'reservado', ownerEmployeeId: sellerId })
+      .returning();
+    typedPages['https://typed-fora.example/'] =
+      '<a href="https://www.instagram.com/quemdigitou/">Instagram</a>';
+    const before = asked.length;
+    const res = await app.inject({
+      method: 'POST',
+      url: `/prospecting/prospects/${row!.id}/enrich`,
+      cookies,
+      payload: { website: 'https://typed-fora.example/', findTicket: ticket },
+    });
+    expect(res.statusCode).toBe(200);
+    // The page the typed address shows was never read: the reading went to the ticket's site.
+    expect(asked.slice(before).some((href) => href.startsWith('https://typed-fora.example/'))).toBe(
+      false,
+    );
+    expect(res.json<ProspectEnrichResponse>().prospect.enrichment.instagram).toBeUndefined();
+    await db
+      .delete(prospectInstagramLookups)
+      .where(eq(prospectInstagramLookups.placeId, company.placeId));
   });
 });

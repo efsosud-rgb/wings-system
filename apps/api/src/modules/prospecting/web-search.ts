@@ -16,7 +16,10 @@ export interface WebResult {
 }
 
 export interface WebSearchClient {
-  /** One call, never retried: it is billed even when it fails. */
+  /**
+   * One call, never retried: it is billed even when it fails. Rejects when the answer cannot be
+   * read: an unreadable answer is a failed search, never "no result" (lição 4).
+   */
   search(query: string): Promise<WebResult[]>;
 }
 
@@ -40,9 +43,12 @@ export function createWebSearch(config: {
         signal: AbortSignal.timeout(config.timeoutMs ?? 10_000),
       });
       if (!response.ok) throw new Error(`Web search answered ${response.status}`);
-      const body = (await response.json().catch(() => ({}))) as {
-        web?: { results?: unknown };
-      };
+      let body: { web?: { results?: unknown } };
+      try {
+        body = (await response.json()) as typeof body;
+      } catch {
+        throw new Error('Web search answered with no readable JSON');
+      }
       config.log?.({ module: 'web-search', shape: shapeOf(body) });
       const results = Array.isArray(body.web?.results) ? body.web.results : [];
       return (results as Record<string, unknown>[])

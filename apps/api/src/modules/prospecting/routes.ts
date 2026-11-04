@@ -667,21 +667,20 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
     const actor = request.session.actor;
     const found = await prospectInReach(db, actor, params.data.id);
     if (!found) return notFound(reply);
-    const reading = await readCompanySite(body.data.website, {
-      transport: app.wings.siteTransport,
-    });
     const at = now();
     // t086: with the search's ticket, the click also tries Meta and the web when the site had no link.
     const company = body.data.findTicket
       ? readFinderTicket(finderKey, actor.employeeId, body.data.findTicket, at)
       : null;
-    // The ticket's site, not the screen's: the lookup is cached per place for every seller, so a
-    // typed address must not steer the @ the others see. Only without one does the typed address go.
+    // The ticket's site, not the screen's, for the read too: the lookup and the @ are shared with
+    // every seller, so a typed address must not change what the others see. Without one, the typed.
+    const website = company?.website ?? body.data.website;
+    const reading = await readCompanySite(website, { transport: app.wings.siteTransport });
     const tried =
       company && company.placeId === found.row.placeId
         ? await findInstagram(
             finderDeps(actor.employeeId, at),
-            { ...company, website: company.website ?? body.data.website },
+            { ...company, website },
             { reading },
           )
         : null;
