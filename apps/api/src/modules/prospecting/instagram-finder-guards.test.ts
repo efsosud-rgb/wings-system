@@ -11,6 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
 import {
+  auditLog,
   leadEnrichmentLedger,
   prospectInstagramLookups,
   prospects,
@@ -236,11 +237,13 @@ describe('the paid search and the enrichment ledger', () => {
         );
       return Number(row!.total);
     };
-    // A paid step of the worker counts; the research and the Instagram check have ceilings of their own.
+    // A paid step of the worker counts; the research and the Instagram check have ceilings of their
+    // own, and so does a step that only starts with "ig" (`igx_profile` is no Instagram check).
     await db.insert(leadEnrichmentLedger).values([
       { step: 'zapi_profile', status: 'done', usdMicro: 4000 },
       { step: 'ai_research', status: 'done', usdMicro: 5_000_000 },
       { step: 'ig_meta', status: 'done', usdMicro: 5_000_000 },
+      { step: 'igx_profile', status: 'done', usdMicro: 5_000_000 },
     ]);
     const spent = await enrichSpent();
     const before = (await searchRows()).length;
@@ -261,11 +264,73 @@ describe('the paid search and the enrichment ledger', () => {
 
   it('the 100 searches a day still hold, whatever the dollars', async () => {
     const day = new Date();
-    const budget = { perDay: 1, dailyUsd: 100, usdPerQuery: 0.005 };
+    // The searches the tests above already recorded today count: the ceiling sits just above them,
+    // so exactly one more is reserved with the dollars wide open (lição 7: the guard is the count).
+    const [today] = await db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(auditLog)
+      .where(
+        and(eq(auditLog.action, 'prospect.web_search'), gte(auditLog.at, startOfDaySaoPaulo(day))),
+      );
+    const budget = { perDay: today!.total + 1, dailyUsd: 100, usdPerQuery: 0.005 };
     const reasons = await Promise.all(
       [1, 2, 3].map(() => reserveWebSearch(db, sellerId, budget, day)),
     );
-    expect(reasons.filter((reason) => reason === null).length).toBeLessThanOrEqual(1);
-    expect(reasons.filter(Boolean)).toContain('Web: limite de buscas na web do dia.');
+    expect(reasons.filter((reason) => reason === null)).toHaveLength(1);
+    expect(reasons.filter(Boolean)).toEqual([
+      'Web: limite de buscas na web do dia.',
+      'Web: limite de buscas na web do dia.',
+    ]);
+  });
+
+  it('a ceiling below one search refuses on the route and the Brave is never called', async () => {
+    // ENRICH_DAILY_USD 0.001 against a US$ 0.005 search: the refusal must end the path (lição 4),
+    // and a route that ignores it spends the buyer's dollars without a test noticing.
+    const tight = await buildApp({
+      env: loadEnv({
+        NODE_ENV: 'test',
+        DATABASE_URL: harness.url,
+        SESSION_SECRET: 'x'.repeat(48),
+        CPF_ENCRYPTION_KEY: TEST_CPF_KEY,
+        CPF_INDEX_KEY: TEST_INDEX_KEY,
+        APP_BASE_URL: 'http://localhost:5173',
+        GOOGLE_PLACES_API_KEY: KEY,
+        BRAVE_SEARCH_API_KEY: 'test-brave-key-never-printed',
+        ENRICH_DAILY_USD: '0.001',
+      }),
+      db,
+      placesFetch: ((input: unknown, init?: RequestInit) =>
+        google.fetch(input as string, init)) as typeof fetch,
+      webSearchFetch: braveFetch,
+      siteTransport: transport,
+      now: () => T0,
+    });
+    try {
+      const before = braveAsked.length;
+      const res = await tight.inject({
+        method: 'POST',
+        url: '/prospecting/search',
+        cookies,
+        payload: { segment: 'lanchonetes', places: ['Icaraí'] },
+      });
+      const item = res
+        .json<ProspectSearchResponse>()
+        .items.find((entry) => entry.placeId === OMEGA.id)!;
+      const find = await tight.inject({
+        method: 'POST',
+        url: '/prospecting/instagram/find',
+        cookies,
+        payload: { items: [{ ticket: item.instagramFind }] },
+      });
+      expect(find.statusCode).toBe(200);
+      const answer = find.json<InstagramFindResponse>().items[0]!;
+      expect(answer.instagram).toBeNull();
+      expect(answer.miss?.reasons.at(-1)).toMatch(/teto de gasto do dia da busca paga/);
+      // After the refusal, wait a little and see that nothing reached Brave (lição 4).
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(braveAsked.slice(before)).toEqual([]);
+    } finally {
+      await tight.close();
+    }
   });
 });

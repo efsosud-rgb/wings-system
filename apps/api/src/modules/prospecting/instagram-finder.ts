@@ -345,7 +345,7 @@ export async function reserveWebSearch(
       .where(
         and(
           gte(leadEnrichmentLedger.createdAt, dayStart),
-          sql`${leadEnrichmentLedger.step} <> 'ai_research' and ${leadEnrichmentLedger.step} not like 'ig\_%'`,
+          sql`${leadEnrichmentLedger.step} <> 'ai_research' and ${leadEnrichmentLedger.step} not like 'ig\\_%'`,
         ),
       );
     const total = Number(spent?.total ?? 0);
