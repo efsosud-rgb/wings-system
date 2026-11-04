@@ -222,7 +222,8 @@ describe('the simulation plan of the RD import', () => {
     const lines = formatPlan(result.plan);
     expect(lines.every((line) => line.startsWith('plano:'))).toBe(true);
     expect(lines).toContain('plano:   formatacao · —: 6');
-    expect(lines.join('\n')).not.toMatch(/@|\+?\d{10,}/);
+    // No e-mail (@) or phone (10+ digits on their own): the employee ids of the rotation are not one.
+    expect(lines.join('\n')).not.toMatch(/@|(?<![0-9a-f])[+]?\d{10,}(?![0-9a-f])/);
   });
 
   it('says the rotation is off when the import is not asked to rotate', async () => {
