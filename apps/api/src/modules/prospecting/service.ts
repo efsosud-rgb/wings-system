@@ -8,6 +8,7 @@ import {
   icpScore,
   INSTAGRAM_FROM_GOOGLE_SITE,
   instagramOfWebsite,
+  instagramSourceOf,
   missingFields,
   nameKey,
   normalizeBrazilianPhone,
@@ -352,7 +353,9 @@ function instagramRefOf(
   if (saved)
     return {
       username: saved,
-      source: PROSPECT_ENRICHMENT_SOURCE,
+      // The source saved with the @ (a guess or a web hit says so); a row with no known source
+      // is the older kind, written only by the site reader.
+      source: instagramSourceOf(enrichment.instagram?.source) ?? PROSPECT_ENRICHMENT_SOURCE,
       at: enrichment.instagram?.at ?? null,
       ticket: ticketOf(saved),
     };
@@ -508,9 +511,8 @@ export async function assembleSearch(
           rating: place.rating,
           reviews: place.reviews,
           hasWebsite: Boolean(place.website),
-          hasInstagram:
-            Boolean(enrichment.instagram) ||
-            keptOutcome?.instagram?.source === PROSPECT_ENRICHMENT_SOURCE,
+          // Same rule for a saved @ and a cached one: only what the company's own site showed.
+          hasInstagram: instagram?.source === PROSPECT_ENRICHMENT_SOURCE,
           multiUnit,
         },
         icp.weights,

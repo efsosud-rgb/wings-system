@@ -1,6 +1,7 @@
 import {
   INSTAGRAM_FROM_META_GUESS,
   INSTAGRAM_FROM_WEB,
+  PROSPECT_ENRICHMENT_SOURCE,
   SESSION_COOKIE,
   type InstagramFindResponse,
   type ProspectEnrichResponse,
@@ -516,6 +517,38 @@ describe('Enriquecer with the search ticket', () => {
     expect(body.instagramReasons).toBeUndefined();
     expect((await lookupOf(EPSILON))?.username).toBe('epsilon');
     expect(graphAsked.length).toBe(metaAfterFind);
+    // The next search reads the saved @ back: it keeps the source it was saved with (the seller
+    // still sees "palpite") and earns the score the same @ earned from the cache, never the
+    // "has Instagram" point of a site that showed it.
+    const later = itemOf(await search(seller), EPSILON);
+    expect(later.instagram).toMatchObject({
+      username: 'epsilon',
+      source: INSTAGRAM_FROM_META_GUESS,
+    });
+    expect(later.icp.score).toBe(next.icp.score);
+  });
+
+  it('the same saved @ shown by the site keeps "site da empresa" and earns the Instagram point', async () => {
+    const before = itemOf(await search(seller), EPSILON);
+    expect(before.instagram?.source).toBe(INSTAGRAM_FROM_META_GUESS);
+    await db
+      .update(prospects)
+      .set({
+        enrichment: {
+          instagram: {
+            value: 'https://www.instagram.com/epsilon/',
+            source: PROSPECT_ENRICHMENT_SOURCE,
+            at: '2026-11-01T12:00:00.000Z',
+          },
+        },
+      })
+      .where(eq(prospects.placeId, EPSILON.id));
+    const after = itemOf(await search(seller), EPSILON);
+    expect(after.instagram).toMatchObject({
+      username: 'epsilon',
+      source: PROSPECT_ENRICHMENT_SOURCE,
+    });
+    expect(after.icp.score).toBeGreaterThan(before.icp.score);
   });
 
   it('without a ticket it behaves as before: the site only', async () => {

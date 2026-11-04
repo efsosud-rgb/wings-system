@@ -17,12 +17,21 @@ export const INSTAGRAM_FROM_META_GUESS = 'palpite pelo nome, conta confirmada na
 export const INSTAGRAM_FROM_WEB = 'busca na web, conta confirmada na Meta';
 /** t086: same, while Meta's confirmation is off: the seller must check the profile. */
 export const INSTAGRAM_FROM_WEB_UNCONFIRMED = 'busca na web, não confirmada na Meta';
-export type ProspectInstagramSource =
-  | typeof PROSPECT_ENRICHMENT_SOURCE
-  | typeof INSTAGRAM_FROM_GOOGLE_SITE
-  | typeof INSTAGRAM_FROM_META_GUESS
-  | typeof INSTAGRAM_FROM_WEB
-  | typeof INSTAGRAM_FROM_WEB_UNCONFIRMED;
+export const PROSPECT_INSTAGRAM_SOURCES = [
+  PROSPECT_ENRICHMENT_SOURCE,
+  INSTAGRAM_FROM_GOOGLE_SITE,
+  INSTAGRAM_FROM_META_GUESS,
+  INSTAGRAM_FROM_WEB,
+  INSTAGRAM_FROM_WEB_UNCONFIRMED,
+] as const;
+export type ProspectInstagramSource = (typeof PROSPECT_INSTAGRAM_SOURCES)[number];
+
+/** The source saved with an @, when it is one we know; null for anything else (never guessed). */
+export function instagramSourceOf(
+  saved: string | null | undefined,
+): ProspectInstagramSource | null {
+  return PROSPECT_INSTAGRAM_SOURCES.find((source) => source === saved) ?? null;
+}
 
 /** A search result's known Instagram, with the ticket that lets the screen ask Meta about it. */
 export interface ProspectInstagramRef {
