@@ -42,6 +42,7 @@ permission. Specifics:
 - **New lead or CSV row** whose phone or e-mail already belongs to another owner's lead (or to nobody's) is refused
   (`mergeOnlyIfOwnedBy`); nothing of that lead is read, changed or shown. A "Dono" column naming somebody else is
   skipped for a seller.
+- **Contact data** (`PATCH /leads/:id/contact`, `GET /leads/:id/contact-changes`, `docs/crm/editar-contato.md`): `leads.write` and `leads.read` in the lead's scope; a phone or e-mail that sits on a deal the seller does not see is refused with 409 and no data.
 - **Owner changes** (`PATCH /leads/:id`, naming an owner at creation, the CSV owner, automation rules of the kind
   "mudar o responsável", the RD user map) all require `canChangeLeadOwner`.
 - **Drive**: the deals' folders (`Comercial / Negociações / <deal>`) answer only to who sees every lead; for a seller the
