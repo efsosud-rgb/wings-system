@@ -14,7 +14,7 @@ Cartão **Contatos** da negociação: **Editar dados** abre o formulário no mes
 - **Outra negociação com o mesmo telefone ou e-mail**: um vendedor é recusado com 409 `contact_in_use`, sem dizer nada da outra negociação (mesma regra da criação e da importação, `mergeOnlyIfOwnedBy`). Admin e gerente podem. Também recusa número em atendimento sem negociação (WA-03).
 - **Trilha**: tabela `lead_contact_changes` (migração 0112): lead, campo, valor antes, valor depois, quem, quando. Só é lida por `GET /leads/:id/contact-changes` (`leads.read`, no escopo do lead). **Sem `GRANT` para `wings_ro`, sem view**: nenhum relatório, BI ou consulta de staging lê. Um teste confere que nenhuma migração a expõe. A linha do tempo recebe `lead.contact_changed` e a auditoria `lead.contact_updated`, ambas só com os **nomes** dos campos.
 - **Onde o dado novo passa a valer**: WhatsApp, ligação, e-mail e as automações leem `leads.phone`/`leads.email` na hora de agir, então o número novo é o canal na mesma hora. O contato principal da negociação (`crm_contacts`) acompanha quando tinha o mesmo valor (um segundo contato nunca é tocado; se outra pessoa já tem aquele telefone ou e-mail, o contato fica como estava). As conferências guardadas do campo trocado (`field_checks`: WhatsApp, Instagram, site) saem e a ficha mostra "Não conferido ainda".
-- **"Não me contate" não se perde**: antes de trocar telefone, e-mail ou Instagram, o que estiver ativo para a negociação é gravado também nas chaves novas (origem mantida, motivo "Mantido ao alterar os dados de contato"). Só gerência e diretoria revogam, como sempre.
+- **"Não me contate" não se perde**: antes de trocar telefone, e-mail ou Instagram, o que estiver ativo para a negociação é gravado também nas chaves novas (origem mantida, motivo "Mantido ao alterar os dados de contato"). Só gerência e diretoria revogam, como sempre. Vale para toda origem, inclusive a Prospecção Instagram, o SAIR, a importação e o CRM gravados só por uma chave (testado por origem). Só fica de fora o que a Prospecção deriva da tabela `prospects` (chaves `place_id` e do lead, que não mudam).
 
 ## Limites conhecidos
 
@@ -24,4 +24,4 @@ Cartão **Contatos** da negociação: **Editar dados** abre o formulário no mes
 
 ## Testes
 
-`packages/shared/src/lead-contact.test.ts` (validação), `apps/api/src/modules/leads/contact-edit.test.ts` (validação pela API, permissões, histórico sem valores na linha do tempo e na auditoria, sem `GRANT`, WhatsApp e contato principal, conferência velha, conflito, "não me contate"), `apps/web/src/pages/crm/LeadContactEditor.test.tsx`.
+`packages/shared/src/lead-contact.test.ts` (validação), `apps/api/src/modules/leads/contact-edit.test.ts` (validação pela API, permissões, histórico sem valores na linha do tempo e na auditoria, sem `GRANT`, WhatsApp e contato principal, conferência velha, conflito, "não me contate" por origem e só pela chave que muda), `apps/web/src/pages/crm/LeadContactEditor.test.tsx`.

@@ -180,7 +180,8 @@ export async function changeLeadContact(
       })
       .where(eq(leads.id, lead.id));
     await syncMainContact(tx, lead, edit.patch, now);
-    for (const entry of optOuts.filter((e) => e.origin !== 'prospeccao'))
+    // Only what a prospect row implies (no register row, keyed by place_id or lead) stays out: its keys do not change.
+    for (const entry of optOuts.filter((e) => !(e.id === null && e.origin === 'prospeccao')))
       await recordContactOptOut(tx, {
         tenantId: lead.tenantId,
         leadId: lead.id,

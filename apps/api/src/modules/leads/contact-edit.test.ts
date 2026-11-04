@@ -317,4 +317,48 @@ describe('não me contate follows the new keys', () => {
       .where(eq(contactOptOuts.keyKind, 'phone'));
     expect(keys.map((k) => k.value)).toContain('5521987653002');
   });
+
+  // The block written by one key only (no lead key) must reach the new value of that same key.
+  // Each case has its own keys: the register is shared, so equal keys would let one case cover another.
+  it.each([
+    { origin: 'prospeccao', channel: 'instagram', kind: 'instagram' },
+    { origin: 'instagram', channel: 'instagram', kind: 'instagram' },
+    { origin: 'importacao', channel: 'email', kind: 'email' },
+    { origin: 'crm', channel: 'phone', kind: 'phone' },
+    { origin: 'prospeccao', channel: 'all', kind: 'email' },
+  ] as const)(
+    'keeps a $origin block on $channel written only by the $kind that changes',
+    async (c) => {
+      seq += 1;
+      const tag = `${c.origin}${c.channel}${seq}`;
+      const old = {
+        instagram: `antigo.${tag}`,
+        email: `antigo.${tag}@exemplo.test`,
+        phone: `21 97${String(1000000 + seq)}`,
+      };
+      const lead = await makeLead(owner.id, {
+        phone: c.kind === 'phone' ? old.phone : undefined,
+        email: c.kind === 'email' ? old.email : undefined,
+      });
+      if (c.kind === 'instagram')
+        await db.update(leads).set({ instagram: old.instagram }).where(eq(leads.id, lead.id));
+      await recordContactOptOut(db, {
+        ...(c.kind === 'instagram' ? { instagramUser: old.instagram } : { [c.kind]: old[c.kind] }),
+        channels: [c.channel],
+        origin: c.origin,
+        reason: null,
+        createdBy: null,
+      });
+      const asked = c.channel === 'all' ? c.kind : c.channel;
+      expect((await contactBlock(db, asked, { leadId: lead.id })).blocked).toBe(true);
+
+      const change = {
+        instagram: { instagram: `@novo.${tag}` },
+        email: { email: `novo.${tag}@exemplo.test` },
+        phone: { phone: `(21) 96${String(1000000 + seq)}` },
+      }[c.kind];
+      expect((await patch(owner, lead.id, change)).statusCode).toBe(200);
+      expect((await contactBlock(db, asked, { leadId: lead.id })).blocked).toBe(true);
+    },
+  );
 });
