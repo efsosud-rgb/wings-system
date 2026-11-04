@@ -259,6 +259,35 @@ export const leadEvents = pgTable(
 );
 
 /**
+ * Append-only trail of the edits to a lead's contact data made on the ficha (t089): who, when, field
+ * and the value before and after. Personal data, so it is read only through the lead's own route
+ * (`GET /leads/:id/contact-changes`, in the caller's scope) and has no GRANT to `wings_ro` and no
+ * view: no report, BI or staging query reads it. The timeline event carries field names only.
+ */
+export const leadContactChanges = pgTable(
+  'lead_contact_changes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    leadId: uuid('lead_id')
+      .notNull()
+      .references(() => leads.id),
+    /** A LeadContactField: name | phone | email | instagram | website. */
+    field: text('field').notNull(),
+    oldValue: text('old_value'),
+    newValue: text('new_value'),
+    actorEmployeeId: uuid('actor_employee_id').references(() => employees.id),
+    at: timestamp('at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('lead_contact_changes_lead_idx').on(table.leadId, table.at),
+    check(
+      'lead_contact_changes_field_check',
+      sql`${table.field} in ('name', 'phone', 'email', 'instagram', 'website')`,
+    ),
+  ],
+);
+
+/**
  * The one "não me contate" register (docs/crm/nao-me-contate.md, Eric 29/10). One row per channel
  * and key (`lead` id, phone, e-mail, Instagram user, place_id, CNPJ), the value in the form
  * `normalizeContactKey` gives it. Never updated but to revoke; `contactBlock` reads it together
