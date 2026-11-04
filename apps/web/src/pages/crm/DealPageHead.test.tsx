@@ -156,6 +156,10 @@ const firstContact = (over: Partial<LeadTask> = {}): LeadTask => ({
 });
 
 // The "Não me contate" strip has its own tests (ContactOptOutStrip.test.tsx).
+vi.mock('../../api/lead-contact.js', () => ({
+  useUpdateLeadContact: () => ({ mutate: vi.fn(), isPending: false, error: null, reset: vi.fn() }),
+  useLeadContactChanges: () => ({ isPending: false, isError: false, data: undefined }),
+}));
 vi.mock('../../api/contact-opt-outs.js', () => ({
   useContactOptOuts: () => ({ data: undefined, isError: false }),
   useRecordContactOptOut: () => ({ mutate: vi.fn(), isPending: false }),

@@ -70,6 +70,7 @@ export const EVENT_LABELS: Record<string, string> = {
   'lead.task_done': 'Tarefa concluída',
   'lead.task_updated': 'Tarefa alterada',
   'lead.renamed': 'Nome alterado',
+  'lead.contact_changed': 'Dados de contato alterados',
   'lead.file_added': 'Arquivo adicionado',
   'lead.file_removed': 'Arquivo removido',
   'lead.summary_generated': 'Resumo gerado pela IA',
