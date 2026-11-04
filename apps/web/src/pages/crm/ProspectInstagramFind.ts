@@ -32,6 +32,7 @@ export function useInstagramFinder(items: ProspectSearchItem[]): InstagramFinds 
     // An old failure must not label the companies this search is still asking about.
     setFailure(null);
     void (async () => {
+      const answered = new Set<string>();
       for (let i = 0; i < fresh.length; i += INSTAGRAM_FIND_MAX) {
         const chunk = fresh.slice(i, i + INSTAGRAM_FIND_MAX);
         try {
@@ -43,9 +44,11 @@ export function useInstagramFinder(items: ProspectSearchItem[]): InstagramFinds 
             for (const entry of answer.items) next.set(entry.placeId, entry);
             return next;
           });
+          for (const entry of answer.items) answered.add(entry.placeId);
         } catch (error) {
-          // A new search tries the ones still without an answer.
-          for (const item of chunk) asked.current.delete(item.placeId);
+          // A new search tries every one still without an answer, the chunks not asked yet included.
+          for (const item of fresh)
+            if (!answered.has(item.placeId)) asked.current.delete(item.placeId);
           setFailure(failureReason(error));
           return;
         }
