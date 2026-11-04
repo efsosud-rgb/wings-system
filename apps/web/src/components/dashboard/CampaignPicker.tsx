@@ -91,7 +91,7 @@ export function CampaignPicker({
                 {option.name}{' '}
                 <span className="muted">
                   ({AD_PLATFORM_LABEL[option.platform]}
-                  {option.delivering ? '' : ', parada'})
+                  {option.delivering ? '' : ', sem veiculação'})
                 </span>
               </span>
             </label>

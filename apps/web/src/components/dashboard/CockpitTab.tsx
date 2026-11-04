@@ -11,6 +11,7 @@ import { Chart3D } from '../charts3d/Chart3D.js';
 import { COMPARISON_SLOT, HEAT_EMPTY, HEAT_RAMP, heatStep } from '../charts3d/spec.js';
 import { BRAZIL_STATES, BRAZIL_VIEWBOX } from './brazil-map.js';
 import { ChartTable } from './charts3d.js';
+import { statusLabel } from './labels.js';
 import {
   formatDateTime,
   formatDayShort,
@@ -435,7 +436,11 @@ export function CockpitTab({ data }: { data: DashboardCockpit }) {
                 {campaign.name}{' '}
                 <span className="cell-sub">
                   ({AD_PLATFORM_LABEL[campaign.platform]}
-                  {campaign.delivering ? '' : ', pausada ou encerrada'})
+                  {campaign.delivering ? ', em veiculação' : ', sem veiculação'}
+                  {campaign.deliveryStatus
+                    ? ` · plataforma: ${statusLabel(campaign.deliveryStatus)}`
+                    : ''}
+                  )
                 </span>
               </span>
             ))}
