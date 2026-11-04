@@ -6,6 +6,7 @@ import {
   type Actor,
   type AgendaCalendar,
   type AgendaCalendarKey,
+  type AgendaCrmLink,
   type AgendaEvent,
   type AgendaEventColor,
   type AgendaEventInput,
@@ -26,6 +27,7 @@ import {
 import { GoogleOAuthError } from '../google-workspace/oauth.js';
 import { accessTokenFor, type GoogleWorkspaceDeps } from '../google-workspace/service.js';
 import { leadVisibleTo } from '../leads/access.js';
+import { canChangeMeeting, meetingIsOpen } from '../meetings/access.js';
 import {
   canEditEvent,
   deleteRawEvent,
@@ -314,14 +316,16 @@ async function crmLinksOf(
   db: Database,
   actor: Actor,
   eventIds: string[],
-): Promise<Map<string, { leadId: string | null }>> {
-  const links = new Map<string, { leadId: string | null }>();
+): Promise<Map<string, AgendaCrmLink>> {
+  const links = new Map<string, AgendaCrmLink>();
   const ids = [...new Set(eventIds)];
   if (!ids.length) return links;
   const rows = await db
     .select({
+      id: crmMeetings.id,
       googleEventId: crmMeetings.googleEventId,
       leadId: crmMeetings.leadId,
+      status: crmMeetings.status,
       ownerEmployeeId: leads.ownerEmployeeId,
     })
     .from(crmMeetings)
@@ -329,14 +333,28 @@ async function crmLinksOf(
     .where(and(inArray(crmMeetings.googleEventId, ids), ne(crmMeetings.status, 'cancelada')));
   for (const row of rows) {
     if (!row.googleEventId) continue;
-    const visible = leadVisibleTo(actor, 'leads.read', { ownerEmployeeId: row.ownerEmployeeId });
+    const link = crmLinkOf(actor, row);
     const current = links.get(row.googleEventId);
     // Two rows on one event: the one this person may open wins.
-    if (!current || (current.leadId === null && visible)) {
-      links.set(row.googleEventId, { leadId: visible ? row.leadId : null });
+    if (!current || (current.leadId === null && link.leadId !== null)) {
+      links.set(row.googleEventId, link);
     }
   }
   return links;
+}
+
+/** What the card needs of a deal's meeting: the deal when openable, the meeting when changeable. */
+function crmLinkOf(
+  actor: Actor,
+  row: { id: string; leadId: string; status: string; ownerEmployeeId: string | null },
+): AgendaCrmLink {
+  const lead = { ownerEmployeeId: row.ownerEmployeeId };
+  const canManage = meetingIsOpen(row.status) && canChangeMeeting(actor, lead);
+  return {
+    leadId: leadVisibleTo(actor, 'leads.read', lead) ? row.leadId : null,
+    meetingId: canManage ? row.id : null,
+    canManage,
+  };
 }
 
 /**
@@ -357,6 +375,7 @@ export async function pastedMeetingsFor(
       startsAt: crmMeetings.startsAt,
       endsAt: crmMeetings.endsAt,
       meetUrl: crmMeetings.meetUrl,
+      status: crmMeetings.status,
       ownerEmployeeId: leads.ownerEmployeeId,
     })
     .from(crmMeetings)
@@ -397,21 +416,17 @@ export async function pastedMeetingsFor(
       recurring: false,
       canEdit: false,
       guestsNotified: false,
-      crm: {
-        leadId: leadVisibleTo(actor, 'leads.read', { ownerEmployeeId: row.ownerEmployeeId })
-          ? row.leadId
-          : null,
-      },
+      crm: crmLinkOf(actor, row),
     }));
 }
 
 const seriesIdOf = (raw: RawEvent) =>
   typeof raw.recurringEventId === 'string' ? raw.recurringEventId : null;
 
-const linkOf = (links: Map<string, { leadId: string | null }>, raw: RawEvent) =>
+const linkOf = (links: Map<string, AgendaCrmLink>, raw: RawEvent) =>
   links.get(String(raw.id)) ?? links.get(seriesIdOf(raw) ?? '') ?? null;
 
-function withCrm(event: AgendaEvent, crm: { leadId: string | null } | null): AgendaEvent {
+function withCrm(event: AgendaEvent, crm: AgendaCrmLink | null): AgendaEvent {
   return crm ? { ...event, crm, canEdit: false } : event;
 }
 

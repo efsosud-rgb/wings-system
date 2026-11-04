@@ -173,15 +173,19 @@ async function crmMeeting(
   googleEventId: string,
   status = 'agendada',
 ) {
-  await db.insert(crmMeetings).values({
-    leadId,
-    ownerEmployeeId: ownerId,
-    title: 'Reunião',
-    startsAt: new Date('2026-10-15T13:00:00Z'),
-    endsAt: new Date('2026-10-15T14:00:00Z'),
-    googleEventId,
-    status,
-  });
+  const [row] = await db
+    .insert(crmMeetings)
+    .values({
+      leadId,
+      ownerEmployeeId: ownerId,
+      title: 'Reunião',
+      startsAt: new Date('2026-10-15T13:00:00Z'),
+      endsAt: new Date('2026-10-15T14:00:00Z'),
+      googleEventId,
+      status,
+    })
+    .returning({ id: crmMeetings.id });
+  return row!.id;
 }
 
 const byId = (answer: AgendaEventsAnswer, id: string) => answer.events.find((e) => e.id === id);
@@ -495,7 +499,7 @@ describe('Agenda: CRM meetings', () => {
   it('links a deal’s meeting for its owner and the Admin only, and never lets it move from here', async () => {
     const owner = await connected('vendedor_formatacao');
     const leadId = await deal(owner.id);
-    await crmMeeting(leadId, owner.id, 'crm-evt');
+    const meetingId = await crmMeeting(leadId, owner.id, 'crm-evt');
     await crmMeeting(leadId, owner.id, 'serie-crm');
     await crmMeeting(leadId, owner.id, 'crm-old', 'cancelada');
     const seedAll = (google: ReturnType<typeof fakeGoogle>) => {
@@ -505,7 +509,10 @@ describe('Agenda: CRM meetings', () => {
     };
     seedAll(owner.google);
     const mine = await eventsOf(owner.cookies);
-    expect(byId(mine, 'crm-evt')).toMatchObject({ crm: { leadId }, canEdit: false });
+    expect(byId(mine, 'crm-evt')).toMatchObject({
+      crm: { leadId, meetingId, canManage: true },
+      canEdit: false,
+    });
     expect(byId(mine, 'serie-crm_20261015T130000Z')).toMatchObject({
       crm: { leadId },
       recurring: true,
@@ -517,11 +524,20 @@ describe('Agenda: CRM meetings', () => {
 
     const admin = await connected('admin_master');
     seedAll(admin.google);
-    expect(byId(await eventsOf(admin.cookies), 'crm-evt')!.crm).toEqual({ leadId });
+    expect(byId(await eventsOf(admin.cookies), 'crm-evt')!.crm).toEqual({
+      leadId,
+      meetingId,
+      canManage: true,
+    });
 
     const other = await connected('vendedor_expansao');
     seedAll(other.google);
-    expect(byId(await eventsOf(other.cookies), 'crm-evt')!.crm).toEqual({ leadId: null });
+    // Neither the deal nor the meeting's id reaches someone who may not change it.
+    expect(byId(await eventsOf(other.cookies), 'crm-evt')!.crm).toEqual({
+      leadId: null,
+      meetingId: null,
+      canManage: false,
+    });
 
     // The sellers cannot write at all (calendar.write); the meeting guard stands for whoever can.
     const manager = await connected(WRITER);
@@ -553,6 +569,52 @@ describe('Agenda: CRM meetings', () => {
         false,
       );
     }
+  });
+});
+
+describe('Agenda: who may change a CRM meeting from its card', () => {
+  it('offers edit and delete to the deal owner and the Admin, not to Diretoria, and not once it was held', async () => {
+    const owner = await connected('vendedor_formatacao');
+    const leadId = await deal(owner.id);
+    const open = await crmMeeting(leadId, owner.id, 'card-open');
+    const running = await crmMeeting(leadId, owner.id, 'card-running', 'em_andamento');
+    await crmMeeting(leadId, owner.id, 'card-held', 'encerrada');
+    const seedAll = (google: ReturnType<typeof fakeGoogle>) => {
+      for (const id of ['card-open', 'card-running', 'card-held']) google.seed('primary', own(id));
+    };
+
+    seedAll(owner.google);
+    const mine = await eventsOf(owner.cookies);
+    expect(byId(mine, 'card-open')!.crm).toEqual({ leadId, meetingId: open, canManage: true });
+    expect(byId(mine, 'card-running')!.crm).toEqual({
+      leadId,
+      meetingId: running,
+      canManage: true,
+    });
+    // A meeting already held is history: seen, linked to its deal, never changed.
+    expect(byId(mine, 'card-held')!.crm).toEqual({ leadId, meetingId: null, canManage: false });
+
+    const admin = await connected('admin_master');
+    seedAll(admin.google);
+    expect(byId(await eventsOf(admin.cookies), 'card-open')!.crm!.canManage).toBe(true);
+
+    // Diretoria reads every deal but holds no leads.write: it opens the deal and changes nothing.
+    const board = await connected('diretoria');
+    seedAll(board.google);
+    expect(byId(await eventsOf(board.cookies), 'card-open')!.crm).toEqual({
+      leadId,
+      meetingId: null,
+      canManage: false,
+    });
+
+    // Another seller of the same level, not the owner.
+    const peer = await connected('vendedor_formatacao');
+    seedAll(peer.google);
+    expect(byId(await eventsOf(peer.cookies), 'card-open')!.crm).toEqual({
+      leadId: null,
+      meetingId: null,
+      canManage: false,
+    });
   });
 });
 
@@ -641,11 +703,12 @@ describe('Agenda: meetings with a pasted link', () => {
 
     const before = await listOf(scheduler.cookies);
     expect(before).toHaveLength(1);
-    expect(before[0]!.crm).toEqual({ leadId: null });
+    expect(before[0]!.crm).toEqual({ leadId: null, meetingId: null, canManage: false });
     expect(JSON.stringify(before)).not.toContain('Candidato');
     const after = await listOf(newOwner.cookies);
     expect(after).toHaveLength(1);
-    expect(after[0]!.crm).toEqual({ leadId });
+    expect(after[0]!.crm).toMatchObject({ leadId, canManage: true });
+    expect(after[0]!.crm!.meetingId).toBe(after[0]!.id.replace('crm-', ''));
   });
 
   it('narrows by the search text on the title', async () => {

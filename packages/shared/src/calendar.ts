@@ -214,11 +214,19 @@ export interface AgendaEvent {
    */
   guestsNotified: boolean;
   /**
-   * Set when the event is a meeting of a deal (crm_meetings): it is moved and
-   * cancelled only from the deal. `leadId` only when this person may open that
-   * deal; null otherwise.
+   * Set when the event is a meeting of a deal (crm_meetings): it is changed
+   * through the meeting's own route (`PATCH /meetings/:meetingId`), never through the event routes
+   * here. `leadId` only when this person may open that deal; null otherwise. `meetingId` and
+   * `canManage` only when this person may edit or delete the meeting (see `canChangeMeeting` in the API):
+   * `meetingId` is null and `canManage` false for everyone else, and for a meeting already held.
    */
-  crm: { leadId: string | null } | null;
+  crm: AgendaCrmLink | null;
+}
+
+export interface AgendaCrmLink {
+  leadId: string | null;
+  meetingId: string | null;
+  canManage: boolean;
 }
 
 export interface AgendaEventsAnswer {

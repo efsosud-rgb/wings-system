@@ -5,12 +5,18 @@ import {
   type Meeting,
   type RoleKey,
 } from '@wings/shared';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
-import { googleWorkspaceConnections, leads } from '../../db/schema/index.js';
+import {
+  auditLog,
+  crmMeetings,
+  googleWorkspaceConnections,
+  leadEvents,
+  leads,
+} from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
@@ -433,6 +439,142 @@ describe('Google Workspace por pessoa', () => {
       payload: { status: 'cancelada' },
     });
     expect(cancelled.statusCode).toBe(200);
+    expect(google.events.get(meeting.googleEventId!)!.deleted).toBe(true);
+  });
+});
+
+/** Editing and deleting a deal's meeting from its Agenda card (t088): the same route as the deal page. */
+describe('Reunião do CRM: editar e excluir pelo card da Agenda', () => {
+  const patch = (cookies: Record<string, string>, id: string, payload: Record<string, unknown>) =>
+    app.inject({ method: 'PATCH', url: `/meetings/${id}`, cookies, payload });
+
+  async function googleMeeting() {
+    const seller = await sessionFor('vendedor_formatacao');
+    await connect(seller.cookies);
+    const leadId = await deal(seller.id);
+    const created = await app.inject({
+      method: 'POST',
+      url: `/leads/${leadId}/meetings`,
+      cookies: seller.cookies,
+      payload: { ...slot, createMeet: true },
+    });
+    expect(created.statusCode).toBe(201);
+    google.calls.length = 0;
+    return { seller, leadId, meeting: created.json<{ meeting: Meeting }>().meeting };
+  }
+
+  it('edits title, time and guests on Google first and in the deal, with the trail and no personal data in the audit', async () => {
+    const { seller, leadId, meeting } = await googleMeeting();
+    const edited = await patch(seller.cookies, meeting.id, {
+      title: 'Alinhamento com o sócio',
+      startsAt: '2026-10-09T14:00:00-03:00',
+      endsAt: '2026-10-09T15:30:00-03:00',
+      attendees: [{ email: 'socio@exemplo.com.br' }],
+    });
+    expect(edited.statusCode).toBe(200);
+    const sent = google.calls.find((c) => c.method === 'PATCH');
+    expect(sent!.url).toContain(`/events/${meeting.googleEventId}?`);
+    expect(sent!.body).toMatchObject({ summary: 'Alinhamento com o sócio' });
+    expect(guestsOf(sent!.body)).toEqual(['socio@exemplo.com.br']);
+    expect(edited.json<{ meeting: Meeting }>().meeting).toMatchObject({
+      title: 'Alinhamento com o sócio',
+      startsAt: '2026-10-09T17:00:00.000Z',
+      endsAt: '2026-10-09T18:30:00.000Z',
+      googleSync: { state: 'ok', error: null },
+    });
+    const [moved] = await db
+      .select()
+      .from(leadEvents)
+      .where(and(eq(leadEvents.leadId, leadId), eq(leadEvents.kind, 'meeting.rescheduled')));
+    expect(moved).toMatchObject({ actorEmployeeId: seller.id, detail: { meetingId: meeting.id } });
+    const [trail] = await db
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.entityId, meeting.id), eq(auditLog.action, 'meeting.updated')));
+    expect(trail!.metadata).toEqual({
+      google: 'mirrored',
+      fields: ['title', 'startsAt', 'endsAt', 'attendees'],
+    });
+    expect(JSON.stringify(trail!.metadata)).not.toContain('sócio');
+  });
+
+  it('deletes: the event leaves Google, the deal keeps the cancelled meeting without the link, and the trail says who', async () => {
+    const { seller, leadId, meeting } = await googleMeeting();
+    const eventId = meeting.googleEventId!;
+    const deleted = await patch(seller.cookies, meeting.id, { status: 'cancelada' });
+    expect(deleted.statusCode).toBe(200);
+    expect(google.events.get(eventId)!.deleted).toBe(true);
+    const [row] = await db.select().from(crmMeetings).where(eq(crmMeetings.id, meeting.id));
+    expect(row).toMatchObject({
+      status: 'cancelada',
+      googleEventId: null,
+      googleHtmlLink: null,
+      googleSync: 'ok',
+    });
+    const [cancelled] = await db
+      .select()
+      .from(leadEvents)
+      .where(and(eq(leadEvents.leadId, leadId), eq(leadEvents.kind, 'meeting.cancelled')));
+    expect(cancelled).toMatchObject({
+      actorEmployeeId: seller.id,
+      detail: { meetingId: meeting.id },
+    });
+    // A meeting that is already cancelled is not deleted twice.
+    google.calls.length = 0;
+    const again = await patch(seller.cookies, meeting.id, { status: 'cancelada' });
+    expect(again.statusCode).toBe(409);
+    expect(google.calls.filter((c) => c.method === 'DELETE')).toHaveLength(0);
+  });
+
+  it('keeps the link when Google refuses the delete and the person chooses to cancel only in the system', async () => {
+    const { seller, meeting } = await googleMeeting();
+    // Google answers a server error to the delete (a delete of an event already gone counts as done).
+    const failing = fakeGoogle({ eventsStatus: 500 });
+    app.wings.googleFetch = failing.transport;
+    let refused;
+    try {
+      refused = await patch(seller.cookies, meeting.id, { status: 'cancelada' });
+    } finally {
+      app.wings.googleFetch = google.transport;
+    }
+    expect(refused.statusCode).toBe(502);
+    const [still] = await db.select().from(crmMeetings).where(eq(crmMeetings.id, meeting.id));
+    expect(still).toMatchObject({ status: 'agendada', googleEventId: meeting.googleEventId });
+    const forced = await patch(seller.cookies, meeting.id, {
+      status: 'cancelada',
+      skipGoogle: true,
+    });
+    expect(forced.statusCode).toBe(200);
+    const [row] = await db.select().from(crmMeetings).where(eq(crmMeetings.id, meeting.id));
+    expect(row).toMatchObject({ status: 'cancelada', googleEventId: meeting.googleEventId });
+  });
+
+  it('refuses everyone who is not the deal owner or a writer over all deals, and Google is never called', async () => {
+    const { meeting } = await googleMeeting();
+    const stranger = await sessionFor('vendedor_expansao');
+    const board = await sessionFor('diretoria');
+    for (const payload of [{ title: 'Invadida' }, { status: 'cancelada' }]) {
+      const hidden = await patch(stranger.cookies, meeting.id, payload);
+      expect(hidden.statusCode).toBe(404);
+      // Diretoria reads every deal but writes none: the route is closed to it.
+      const closed = await patch(board.cookies, meeting.id, payload);
+      expect(closed.statusCode).toBe(403);
+    }
+    expect(google.calls.filter((c) => c.method === 'PATCH' || c.method === 'DELETE')).toHaveLength(
+      0,
+    );
+    const [row] = await db.select().from(crmMeetings).where(eq(crmMeetings.id, meeting.id));
+    expect(row).toMatchObject({ status: 'agendada', title: meeting.title });
+  });
+
+  it("lets the Admin edit and delete another seller's meeting, using the creator's Google", async () => {
+    const { meeting } = await googleMeeting();
+    const admin = await sessionFor('admin_master');
+    const renamed = await patch(admin.cookies, meeting.id, { title: 'Ajustada pelo gestor' });
+    expect(renamed.statusCode).toBe(200);
+    expect(google.calls.some((c) => c.method === 'PATCH')).toBe(true);
+    const deleted = await patch(admin.cookies, meeting.id, { status: 'cancelada' });
+    expect(deleted.statusCode).toBe(200);
     expect(google.events.get(meeting.googleEventId!)!.deleted).toBe(true);
   });
 });
