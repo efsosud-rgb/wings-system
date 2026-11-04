@@ -419,7 +419,7 @@ describe('Prospecção: reservar, criar lead e Meus prospects', () => {
     );
   });
 
-  it('opens Criar lead already filled with the Google row, editable, in "Sem contato"', async () => {
+  it('opens Criar lead without Google\'s name, phone or site, only as a reference, in "Sem contato"', async () => {
     const reservedProspect = {
       id: 'p1',
       placeId: 'ChIJ_fake_place_0001',
@@ -462,36 +462,51 @@ describe('Prospecção: reservar, criar lead e Meus prospects', () => {
     const dialog = screen.getByRole('dialog', { name: 'Criar lead no funil Formatação' });
     const value = (label: string) =>
       (within(dialog).getByLabelText(label) as HTMLInputElement | HTMLSelectElement).value;
-    expect(value('Empresa')).toBe('Hamburgueria Exemplo');
-    expect(value('Telefone')).toBe('(21) 90000-0001');
-    expect(value('Site')).toBe('https://hamburgueria-exemplo.com.br/');
+    // Google's row is not in the form (the "only the place_id" rule): only our own data is.
+    expect(value('Empresa')).toBe('');
+    expect(value('Telefone')).toBe('');
+    expect(value('Site')).toBe('');
     expect(value('Instagram')).toBe('@hamburgueriaexemplo');
     expect(value('E-mail')).toBe('');
     expect(value('Contato')).toBe('');
+    // It is shown beside the form as a reference, for the seller to read and type.
+    expect(within(dialog).getByLabelText('Referência do Google Maps').textContent).toContain(
+      'Empresa: Hamburgueria Exemplo · Telefone: (21) 90000-0001 · Site: https://hamburgueria-exemplo.com.br/',
+    );
     // The stage is "Sem contato" (never the old "Primeira etapa do funil").
     const stage = within(dialog).getByLabelText('Etapa') as HTMLSelectElement;
     await waitFor(() => expect(stage.value).toBe(SEM_CONTATO));
     expect(stage.options[stage.selectedIndex]?.textContent).toBe('Sem contato');
     expect(within(dialog).queryByText('Primeira etapa do funil')).toBeNull();
 
-    // Editable: the seller corrects the phone and what is sent is what the form says.
-    fireEvent.change(within(dialog).getByLabelText('Telefone'), {
-      target: { value: '(21) 90000-0002' },
-    });
+    // Saving without typing the company is refused: Google's name is not sent in its place.
     fireEvent.change(within(dialog).getByLabelText('Contato'), { target: { value: 'Ana Teste' } });
     fireEvent.click(within(dialog).getByLabelText('Não'));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Criar lead' }));
+    expect(within(dialog).getByRole('alert')).toBeTruthy();
+    expect(post.mock.calls.some(([path]) => String(path).endsWith('/lead'))).toBe(false);
+
+    // What the seller types is what is sent, and nothing else from Google goes with it.
+    fireEvent.change(within(dialog).getByLabelText('Empresa'), {
+      target: { value: 'Empresa Confirmada' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Telefone'), {
+      target: { value: '(21) 90000-0009' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Criar lead' }));
     expect(await within(results).findByRole('link', { name: 'Abrir negociação' })).toBeTruthy();
-    expect(post).toHaveBeenCalledWith(
-      '/prospecting/prospects/p1/lead',
+    const sent = post.mock.calls.find(([path]) => String(path).endsWith('/lead'))?.[1];
+    expect(sent).toEqual(
       expect.objectContaining({
-        companyName: 'Hamburgueria Exemplo',
-        phone: '(21) 90000-0002',
-        website: 'https://hamburgueria-exemplo.com.br/',
+        companyName: 'Empresa Confirmada',
+        phone: '(21) 90000-0009',
         instagram: '@hamburgueriaexemplo',
         stageId: SEM_CONTATO,
       }),
     );
+    const body = JSON.stringify(sent);
+    for (const google of ['Hamburgueria Exemplo', '90000-0001', 'hamburgueria-exemplo.com.br'])
+      expect(body).not.toContain(google);
   });
 
   it('keeps the results when the seller looks at Meus prospects and comes back', async () => {

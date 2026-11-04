@@ -3,6 +3,7 @@ import {
   ICP_WEIGHT_LABELS,
   PLACES_ERROR_LABELS,
   PROSPECT_ENRICHMENT_KEYS,
+  PROSPECT_LEAD_PREFILL_FROM_GOOGLE,
   PROSPECT_LEAD_STAGE,
   PROSPECT_MANUAL_STATUSES,
   PROSPECT_MISSING_LABELS,
@@ -1162,9 +1163,10 @@ function EnrichButton({
 }
 
 /**
- * Criar lead: the form starts with the company's row from the live Google answer and what its site
- * showed, all editable; the seller adds who they spoke to and what the company said. Only what
- * they confirm here is sent: the page keeps Google's answer in memory, never the server.
+ * Criar lead: the form starts with what the company's own site showed (e-mail, Instagram) and is
+ * otherwise empty, all editable. Google's name, phone and site are only shown beside it as a
+ * reference, live and unsaved: the seller types what they confirmed, and only that is sent
+ * (`PROSPECT_LEAD_PREFILL_FROM_GOOGLE` turns the prefill on once Eric decides).
  */
 function LeadModal({
   prospectId,
@@ -1198,6 +1200,13 @@ function LeadModal({
   const stageId = form.stageId || entryStage?.id || '';
   const [optIn, setOptIn] = useState<boolean | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  const reference = PROSPECT_LEAD_PREFILL_FROM_GOOGLE
+    ? []
+    : [
+        ['Empresa', place?.name],
+        ['Telefone', place?.phone],
+        ['Site', place?.website],
+      ].filter((line): line is [string, string] => Boolean(line[1]?.trim()));
   const field = (key: keyof typeof form, label: string, extra: { wide?: boolean } = {}) => (
     <label className={`crm-field${extra.wide ? ' is-wide' : ''}`}>
       <span>{label}</span>
@@ -1232,10 +1241,16 @@ function LeadModal({
     <Modal title="Criar lead no funil Formatação" onClose={onClose}>
       <form className="crm-stack" onSubmit={submit}>
         <p className="crm-sub">
-          Empresa, telefone e site vêm do Google Maps e do site da empresa; confira e corrija o que
-          a empresa disse no contato. O lead entra no funil Formatação em &quot;Sem contato&quot;,
-          com uma tarefa de follow-up para o dono (no retorno combinado, ou no dia seguinte).
+          Preencha com o que a empresa disse no primeiro contato; e-mail e Instagram vêm do site da
+          empresa. O lead entra no funil Formatação em &quot;Sem contato&quot;, com uma tarefa de
+          follow-up para o dono (no retorno combinado, ou no dia seguinte).
         </p>
+        {reference.length > 0 && (
+          <p className="crm-sub" role="note" aria-label="Referência do Google Maps">
+            Só para consulta, consultado agora no Google Maps e não salvo:{' '}
+            {reference.map(([label, value]) => `${label}: ${value}`).join(' · ')}.
+          </p>
+        )}
         <div className="crm-form-grid">
           {field('companyName', 'Empresa')}
           {field('contactName', 'Contato')}

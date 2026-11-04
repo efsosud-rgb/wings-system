@@ -180,23 +180,33 @@ export const PROSPECT_DEFAULT_FOLLOW_UP_HOURS = 24;
 export const PROSPECT_LEAD_STAGE = 'Sem contato';
 
 /**
- * What the Criar lead form starts with: the company's row from the live Google answer (name,
- * phone, site) and what its own site showed (e-mail, Instagram). Only a starting point, every
- * field stays editable, and nothing here is sent anywhere until the seller confirms the form.
- * A value Google or the site did not give stays empty, never guessed.
+ * Whether Criar lead starts with Google's name, phone and site in the form. OFF until Eric decides
+ * (DUVIDAS.md of t087, `docs/crm/prospeccao.md`): the rule is "only the place_id of Google is kept",
+ * and a seller who saves without editing would put Maps data in the lead. Turning it on is this
+ * line plus the rule, `docs/crm/prospeccao.md` and the "nothing from Google is stored" tests.
+ */
+export const PROSPECT_LEAD_PREFILL_FROM_GOOGLE = false;
+
+/**
+ * What the Criar lead form starts with: what the company's own site showed (e-mail, Instagram)
+ * and the @ of the search row, which are ours; the company's name, phone and site from the live
+ * Google answer only when `fromGoogle` (see above). Every field stays editable, nothing is sent
+ * until the seller confirms the form, and a value nobody gave stays empty, never guessed.
  */
 export function prospectLeadDefaults(
   place: Pick<PlaceResult, 'name' | 'phone' | 'website'> | null,
   enrichment: ProspectEnrichment,
   instagram: Pick<ProspectInstagramRef, 'username'> | null = null,
+  fromGoogle: boolean = PROSPECT_LEAD_PREFILL_FROM_GOOGLE,
 ) {
   const text = (value: string | null | undefined) => value?.trim() ?? '';
+  const google = fromGoogle ? place : null;
   return {
-    companyName: text(place?.name),
-    phone: text(place?.phone),
+    companyName: text(google?.name),
+    phone: text(google?.phone),
     email: text(enrichment.email?.value),
     instagram: text(enrichment.instagram?.value) || (instagram ? `@${instagram.username}` : ''),
-    website: /^https?:\/\//i.test(text(place?.website)) ? text(place?.website) : '',
+    website: /^https?:\/\//i.test(text(google?.website)) ? text(google?.website) : '',
   };
 }
 

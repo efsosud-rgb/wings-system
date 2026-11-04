@@ -12,6 +12,7 @@ import type { Database } from '../../db/client.js';
 import { crmStages, leads, leadTasks, prospects } from '../../db/schema/index.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee } from '../../test/factories.js';
+import { recordContactOptOut } from '../leads/contact-block.js';
 import { ensureStage } from '../leads/crm.js';
 import { upsertLead } from '../leads/service.js';
 import { convertProspect, type ProspectRow } from './service.js';
@@ -82,6 +83,24 @@ afterAll(async () => {
 });
 
 describe('Criar lead from a prospect: stage, owner and follow-up', () => {
+  // First on purpose: it needs a Formatação funnel that has no "Sem contato" yet.
+  it('makes "Sem contato" only once the conversion went through, never for a refused one', async () => {
+    const stages = () =>
+      db
+        .select()
+        .from(crmStages)
+        .where(and(eq(crmStages.pipeline, 'formatacao'), eq(crmStages.name, PROSPECT_LEAD_STAGE)));
+    expect(await stages()).toHaveLength(0);
+    // Someone else changed the prospect since the seller opened the form: refused (409).
+    const stale = await reserved();
+    await db.update(prospects).set({ status: 'descartado' }).where(eq(prospects.id, stale.id));
+    const refused = await convertProspect(db, manager, stale, form(), NOW);
+    expect(refused.ok).toBe(false);
+    expect(await stages()).toHaveLength(0);
+    expect((await convert(await reserved())).lead.stage).toBe(PROSPECT_LEAD_STAGE);
+    expect(await stages()).toHaveLength(1);
+  });
+
   it('puts the lead in "Sem contato" even when the funnel only has other stages, and makes it once', async () => {
     await ensureStage(db, { pipeline: 'formatacao', name: 'Primeira ligação', position: 1 });
     const first = await convert(await reserved());
@@ -123,6 +142,31 @@ describe('Criar lead from a prospect: stage, owner and follow-up', () => {
     expect(tasks).toHaveLength(1);
     expect(tasks[0]).toMatchObject({ title: PROSPECT_FOLLOW_UP_TITLE, assigneeEmployeeId: owner });
     expect(tasks[0]!.dueAt.toISOString()).toBe(followUpAt);
+  });
+
+  it('opens no follow-up for a company that asked not to be contacted by that phone', async () => {
+    const phone = '21990008686';
+    await recordContactOptOut(db, {
+      phone,
+      channels: ['all'],
+      origin: 'crm',
+      reason: 'Teste',
+      createdBy: null,
+    });
+    const { outcome, lead, tasks } = await convert(await reserved(), { phone });
+    expect(lead.stage).toBe(PROSPECT_LEAD_STAGE);
+    expect(tasks).toHaveLength(0);
+    expect(outcome.followUpTask).toBe(false);
+    // Neither the agreed return survives the refusal.
+    const agreed = await convert(await reserved(), {
+      phone,
+      followUpAt: '2027-03-10T13:00:00.000Z',
+    });
+    expect(agreed.tasks).toHaveLength(0);
+  });
+
+  it('says whether the owner got a task (the audit of the conversion reads it)', async () => {
+    expect((await convert(await reserved())).outcome.followUpTask).toBe(true);
   });
 
   it('uses the stage the seller picked instead of "Sem contato"', async () => {

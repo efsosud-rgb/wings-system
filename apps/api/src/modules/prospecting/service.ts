@@ -54,7 +54,7 @@ import {
   roles,
 } from '../../db/schema/index.js';
 import type { AgentLlm } from '../agent/llm.js';
-import { optOutsAmong, recordContactOptOut } from '../leads/contact-block.js';
+import { contactBlock, optOutsAmong, recordContactOptOut } from '../leads/contact-block.js';
 import { leadVisibleTo } from '../leads/access.js';
 import {
   addNote,
@@ -732,6 +732,14 @@ export async function prospectingOwners(db: Database): Promise<{ id: string; nam
 export const dayOf = (at: Date) =>
   new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo' }).format(at);
 
+/** `followUpTask`: whether the owner got a follow-up task out of this conversion. */
+export interface ProspectLeadResult {
+  ok: true;
+  leadId: string;
+  created: boolean;
+  followUpTask: boolean;
+}
+
 /**
  * The lead in the Formatação funnel, from what the company said in the first
  * contact (never from Google): its entry stage ("Sem contato") or the stage
@@ -745,7 +753,7 @@ export async function convertProspect(
   row: ProspectRow,
   input: ProspectLeadInput,
   now: Date,
-): Promise<{ ok: true; leadId: string; created: boolean } | Refusal> {
+): Promise<ProspectLeadResult | Refusal> {
   if (row.status === 'virou_lead') return CONVERTED;
   if (row.status === 'nao_contatar') return DO_NOT_CONTACT;
   const stage = input.stageId
@@ -753,7 +761,6 @@ export async function convertProspect(
     : null;
   if (input.stageId && (!stage || !stage.active || stage.pipeline !== 'formatacao'))
     return refusal(400, 'invalid', 'Etapa inexistente ou fora do funil Formatação.');
-  const entry = stage ?? (await prospectEntryStage(db));
   // Claimed first, in SQL: two clicks at once convert once; given back if the lead fails.
   const [claimed] = await db
     .update(prospects)
@@ -762,6 +769,8 @@ export async function convertProspect(
     .returning({ id: prospects.id });
   if (!claimed) return CHANGED;
   try {
+    // After the claim: a refused conversion never leaves a stage made behind it.
+    const entry = stage ?? (await prospectEntryStage(db));
     return await leadOfProspect(db, actor, row, input, entry.id, now);
   } catch (error) {
     await db
@@ -831,7 +840,7 @@ async function leadOfProspect(
   input: ProspectLeadInput,
   stageId: string,
   now: Date,
-): Promise<{ ok: true; leadId: string; created: boolean }> {
+): Promise<ProspectLeadResult> {
   const optIn = input.whatsappOptIn;
   const consent: ProspectConsent = {
     legalBasis: optIn ? 'consent' : 'legitimate_interest',
@@ -898,8 +907,14 @@ async function leadOfProspect(
       );
   if (input.notes)
     await addNote(db, { leadId, body: input.notes, authorEmployeeId: actor.employeeId });
-  // A new lead always gets its owner a follow-up: the agreed return, else the next day.
-  if (input.followUpAt || result.created)
+  // A new lead always gets its owner a follow-up: the agreed return, else the next day. Not when
+  // the person asked not to be contacted by any key of the lead (phone, e-mail, Instagram).
+  const wantsTask = Boolean(input.followUpAt) || result.created;
+  const followUpTask =
+    wantsTask &&
+    !(await contactBlock(db, ['phone', 'email', 'instagram'], { leadId, placeId: row.placeId }))
+      .blocked;
+  if (followUpTask)
     await createTask(db, {
       leadId,
       kind: 'follow_up',
@@ -911,5 +926,5 @@ async function leadOfProspect(
       createdBy: actor.employeeId,
     });
   await db.update(prospects).set({ leadId, updatedAt: now }).where(eq(prospects.id, row.id));
-  return { ok: true, leadId, created: result.created };
+  return { ok: true, leadId, created: result.created, followUpTask };
 }

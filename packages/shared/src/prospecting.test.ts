@@ -10,6 +10,7 @@ import {
   prospectClaimSchema,
   prospectingIcpSchema,
   prospectingRetentionSchema,
+  PROSPECT_LEAD_PREFILL_FROM_GOOGLE,
   prospectLeadDefaults,
   prospectLeadSchema,
   reservationExpiresAt,
@@ -363,17 +364,28 @@ describe('prospectLeadDefaults', () => {
     website: 'https://exemplo.com.br/',
   };
 
-  it('starts the form with the Google row and what the site showed', () => {
-    expect(
-      prospectLeadDefaults(
-        place,
-        {
-          email: { value: 'contato@exemplo.com.br', source: 'site da empresa', at: '2026-10-26' },
-          instagram: { value: 'empresateste', source: 'site da empresa', at: '2026-10-26' },
-        },
-        { username: 'outro' },
-      ),
-    ).toEqual({
+  const site = {
+    email: { value: 'contato@exemplo.com.br', source: 'site da empresa', at: '2026-10-26' },
+    instagram: { value: 'empresateste', source: 'site da empresa', at: '2026-10-26' },
+  } as const;
+
+  it("keeps Google's name, phone and site out of the form until Eric decides", () => {
+    expect(PROSPECT_LEAD_PREFILL_FROM_GOOGLE).toBe(false);
+    const defaults = prospectLeadDefaults(place, site, { username: 'outro' });
+    expect(defaults).toEqual({
+      companyName: '',
+      phone: '',
+      email: 'contato@exemplo.com.br',
+      instagram: 'empresateste',
+      website: '',
+    });
+    const values = Object.values(defaults).join(' ');
+    for (const google of [place.name.trim(), place.phone, place.website])
+      expect(values).not.toContain(google);
+  });
+
+  it('can start with the Google row too, ready for the day the rule changes', () => {
+    expect(prospectLeadDefaults(place, site, { username: 'outro' }, true)).toEqual({
       companyName: 'Empresa Teste',
       phone: '(21) 90000-0001',
       email: 'contato@exemplo.com.br',
@@ -390,6 +402,7 @@ describe('prospectLeadDefaults', () => {
         {
           username: 'empresateste',
         },
+        true,
       ),
     ).toEqual({ companyName: '', phone: '', email: '', instagram: '@empresateste', website: '' });
     expect(prospectLeadDefaults(null, {})).toEqual({
@@ -401,13 +414,21 @@ describe('prospectLeadDefaults', () => {
     });
   });
 
-  it('is accepted by the Criar lead schema once the seller adds the contact and the answer', () => {
-    const defaults = prospectLeadDefaults(place, {});
-    const parsed = prospectLeadSchema.safeParse({
-      ...defaults,
-      contactName: 'Pessoa Teste',
-      whatsappOptIn: false,
+  it('needs the seller to type the company: the schema refuses the form without it', () => {
+    const contact = { contactName: 'Pessoa Teste', whatsappOptIn: false };
+    const blank = prospectLeadSchema.safeParse({ ...prospectLeadDefaults(place, {}), ...contact });
+    expect(blank.success).toBe(false);
+    const typed = prospectLeadSchema.safeParse({
+      ...prospectLeadDefaults(place, {}),
+      ...contact,
+      companyName: 'Empresa Digitada',
+      phone: '(21) 90000-0009',
     });
-    expect(parsed.success).toBe(true);
+    expect(typed.success).toBe(true);
+    // With the prefill on, the form of the Google row is accepted as it is.
+    expect(
+      prospectLeadSchema.safeParse({ ...prospectLeadDefaults(place, {}, null, true), ...contact })
+        .success,
+    ).toBe(true);
   });
 });
