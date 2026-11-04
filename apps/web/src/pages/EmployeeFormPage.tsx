@@ -196,12 +196,23 @@ export function EmployeeFormPage() {
             ) === null,
         )
       : [...EMPLOYEE_STATUS];
+  const diretoriaStatusLock =
+    isEdit && employee && actor
+      ? statusChangeDenial(
+          actor,
+          { sector: employee.sector, currentRole: employee.role },
+          employee.status,
+          employee.status === 'inactive' ? 'active' : 'inactive',
+        ) === 'diretoria_account'
+      : false;
   const statusHint =
     !isEdit || fieldsLocked || statusOptions.length === EMPLOYEE_STATUS.length
       ? undefined
-      : employee?.status === 'inactive'
-        ? 'Só quem pode inativar funcionários reativa este cadastro.'
-        : 'Inativar exige a permissão de inativar funcionários.';
+      : diretoriaStatusLock
+        ? 'Só um Admin Master inativa ou reativa uma conta da Diretoria.'
+        : employee?.status === 'inactive'
+          ? 'Só quem pode inativar funcionários reativa este cadastro.'
+          : 'Inativar exige a permissão de inativar funcionários.';
 
   async function resendInvite() {
     try {

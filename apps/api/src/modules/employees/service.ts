@@ -35,7 +35,10 @@ export type EmployeeFailure =
   | 'email_change_forbidden'
   | 'deactivate_forbidden';
 
-export type Result<T> = { ok: true; value: T } | { ok: false; reason: EmployeeFailure };
+/** `detail` only refines the message of a refusal; the status code and `reason` stay the contract. */
+export type Result<T> =
+  | { ok: true; value: T }
+  | { ok: false; reason: EmployeeFailure; detail?: 'diretoria_account' };
 
 type Row = {
   id: string;
@@ -389,11 +392,20 @@ export async function updateEmployee(
   }
 
   // Switching someone off or back on is its own permission, not part of editing.
-  if (
-    input.status !== undefined &&
-    statusChangeDenial(actor, { sector: currentSector, currentRole }, current.status, input.status)
-  ) {
-    return { ok: false, reason: 'deactivate_forbidden' };
+  if (input.status !== undefined) {
+    const denial = statusChangeDenial(
+      actor,
+      { sector: currentSector, currentRole },
+      current.status,
+      input.status,
+    );
+    if (denial) {
+      return {
+        ok: false,
+        reason: 'deactivate_forbidden',
+        ...(denial === 'diretoria_account' ? { detail: 'diretoria_account' as const } : {}),
+      };
+    }
   }
 
   const nextCpfIndex = input.cpf ? cpfCrypto.index(input.cpf) : undefined;

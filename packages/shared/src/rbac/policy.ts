@@ -37,6 +37,7 @@ export type DenyReason =
   | 'self_role_change'
   | 'admin_master_record'
   | 'diretoria_level'
+  | 'diretoria_account'
   | 'last_admin_master'
   | 'sector_manager_powers'
   | 'role_permissions_exceed';
@@ -261,6 +262,10 @@ function managerPowersDenial(actor: Actor, sector: SectorSlug): DenyReason | nul
  * Switching someone off, or back on, needs `employees.deactivate` over their
  * sector: editing the record is not enough. Active ↔ on leave is an ordinary
  * edit.
+ *
+ * Audit rule A11 (decided by Eric, 2026-10-29): only an Admin Master switches a
+ * Diretoria account off or back on. RH/DP and Diretoria itself are refused, the
+ * same bar as changing that account's login e-mail.
  */
 export function statusChangeDenial(
   actor: Actor,
@@ -278,6 +283,11 @@ export function statusChangeDenial(
   if (target.currentRole && actor.role !== 'admin_master' && !wide) {
     if (PROTECTED_ROLES.includes(target.currentRole)) return 'protected_role';
     if (ROLES[target.currentRole].rank > ROLES[actor.role].rank) return 'role_rank_too_high';
+  }
+  // Audit rule A11: holders of employees.assign_roles (RH/DP) pass the checks above, but a
+  // Diretoria account is still an Admin Master's alone to switch off or on.
+  if (target.currentRole === 'diretoria' && actor.role !== 'admin_master') {
+    return 'diretoria_account';
   }
   return null;
 }

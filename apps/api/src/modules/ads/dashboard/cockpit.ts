@@ -33,7 +33,7 @@ import {
 import type { Env } from '../../../env.js';
 import { ga4CredentialsOf } from '../../../lib/ga4.js';
 import { effectiveCampaignEnds } from '../campaign-end.js';
-import { activeAccounts, creatives, sumsByEntity } from './queries.js';
+import { activeAccounts, campaignsSpentLast24h, creatives, sumsByEntity } from './queries.js';
 import { confirmedTargets } from './targets.js';
 import { addDays, daysBetween, windowOf } from './window.js';
 
@@ -74,6 +74,8 @@ export async function cockpit(
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(now);
   // A campaign with no end of its own ends with its ad sets that are on (Meta keeps the schedule there).
   const endOf = await effectiveCampaignEnds(db, campaignRows);
+  // Spend in the last 24 h makes a campaign "em veiculação" whatever its status says.
+  const spentLast24h = await campaignsSpentLast24h(db, ids, today);
   const active = campaignRows.filter((campaign) =>
     campaignDelivering(
       {
@@ -81,6 +83,7 @@ export async function cockpit(
         status: campaign.status,
         deliveryStatus: campaign.deliveryStatus,
         endDate: endOf.get(campaign.id) ?? null,
+        spentLast24h: spentLast24h.has(campaign.externalId),
       },
       today,
     ),
@@ -90,9 +93,10 @@ export async function cockpit(
   // "Ativo" is the status a person set; "entregando" is the rule above. The chip
   // says both, so 4 campaigns marked active and 2 in the figures do not look like a mistake.
   const withActiveStatus = campaignRows.filter((campaign) => campaign.status === 'ACTIVE');
+  // Spending campaigns are delivering whatever their end date says, so they are not "ended" here.
   const endedCampaigns = withActiveStatus.filter((campaign) => {
     const end = endOf.get(campaign.id);
-    return Boolean(end && end < today);
+    return !activeIds.has(campaign.id) && Boolean(end && end < today);
   });
   const deliveringCount = withActiveStatus.filter((campaign) => activeIds.has(campaign.id)).length;
   const statusSummary: CockpitStatusSummary = {

@@ -432,11 +432,23 @@ roteirizado para o WordPress e banco descartável
 
 ### Cockpit: só o que está entregando
 
-- Uma campanha conta quando está entregando de fato: Meta `effective_status`
-  ACTIVE; Google `status` ENABLED **e** `serving_status` SERVING; e a data de
-  fim ainda não passou (`campaignDelivering`, em `packages/shared`). O status
-  de entrega vem de cada reconciliação (`ad_campaigns.delivery_status`,
-  migração 0043). Antes da primeira leitura, vale o status ligado.
+- Regra única de "em veiculação" (`campaignDelivering`, em `packages/shared`),
+  a mesma em todas as abas (decisão do Eric, 29/10/2026: "o gasto manda, com o
+  status ao lado"):
+  1. Gastou nas últimas 24 h (hoje ou ontem em São Paulo; o gasto é guardado
+     por dia, então a janela pode passar de 24 h em até um dia): **em
+     veiculação**, mesmo pausada ou com a data de fim vencida. O status da
+     plataforma aparece ao lado ("Status na plataforma: Pausada").
+  2. Sem gasto, o status decide como antes: Meta `effective_status` ACTIVE;
+     Google `status` ENABLED **e** `serving_status` SERVING; data de fim
+     vencida não conta. Antes da primeira leitura do status de entrega
+     (`ad_campaigns.delivery_status`, migração 0043), vale o status ligado.
+  3. "Sem veiculação" é só gasto zero (nas últimas 24 h) e status inativo.
+  Usam a regra: Cockpit, aba Campanhas (`delivering` e `deliveryStatus` em
+  cada campanha), seletor de campanhas e a verificação "campanha ativa de leads
+  sem resultado" da Saúde. Não usam: a previsão do mês (`budgetForecast`, lê o
+  orçamento em vigor) e a atribuição de leads a campanhas
+  (`campaign-leads-sync.ts`, que já julga os dias em que a campanha gastou).
   O aviso do filtro diz as duas contas: "2 de 4 com status ativo; 2 encerradas
   em 05/10" (`statusSummary`): o status ativo que uma pessoa pôs contra o que
   entrega de fato. Ao lado dos dois "Investimento" sai a hora da última

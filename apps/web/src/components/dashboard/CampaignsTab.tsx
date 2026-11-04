@@ -208,8 +208,15 @@ const ORDER_LABEL: Record<CampaignOrder, string> = {
 const isRunning = (status: string) => status === 'ACTIVE' || status === 'ENABLED';
 
 /** Google can keep ENABLED on a campaign that ended: the end wins over the status set. */
-const campaignStatusLabel = (campaign: CampaignNode) =>
+const platformStatusLabel = (campaign: CampaignNode) =>
   campaign.ended ? 'Encerrada' : statusLabel(campaign.status);
+
+/** "Em veiculação" is the one rule (`campaignDelivering`: spend in the last 24 h manda); the platform's status goes beside it. */
+const deliveryLabel = (campaign: CampaignNode) =>
+  campaign.delivering ? 'Em veiculação' : 'Sem veiculação';
+
+const campaignStatusLabel = (campaign: CampaignNode) =>
+  `${deliveryLabel(campaign)} (plataforma: ${platformStatusLabel(campaign)})`;
 
 /** Neither spend nor an impression in the window: a row of zeros would read as a fault. */
 const delivered = (campaign: CampaignNode) =>
@@ -408,11 +415,10 @@ function CampaignRows({
           )}
         </td>
         <td>
-          <span
-            className={`status campaign-${campaign.ended ? 'ended' : campaign.status.toLowerCase()}`}
-          >
-            {campaignStatusLabel(campaign)}
+          <span className={`status campaign-${campaign.delivering ? 'active' : 'paused'}`}>
+            {deliveryLabel(campaign)}
           </span>
+          <span className="cell-sub">Status na plataforma: {platformStatusLabel(campaign)}</span>
         </td>
         <td className="mono">
           {campaign.dailyBudgetCents === null
@@ -430,7 +436,7 @@ function CampaignRows({
           <Figures totals={campaign.totals} />
         ) : (
           <td colSpan={7} className="cell-sub">
-            Sem veiculação nos últimos {days} dias
+            {campaign.delivering ? 'Sem gasto' : 'Sem veiculação'} nos últimos {days} dias
             {campaign.lastSpendDate && ` · último gasto em ${dayMonth(campaign.lastSpendDate)}`}
           </td>
         )}
