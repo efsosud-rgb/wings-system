@@ -60,7 +60,7 @@ As chamadas são reservadas antes de ir ao Google, numa transação com trava (`
 
 Na lista, a caixa de cada empresa livre (ou descartada, ou "sem interesse") entra na seleção; "Selecionar todas livres" marca todas. "Revisar N selecionadas" mostra nome, nota ICP, o que falta e as etiquetas; só "Reservar N" chama a API (`POST /prospecting/prospects/batch`, até 60). Cada empresa é reservada sozinha, com as mesmas regras do clique (transação, `for update`): uma recusa não desfaz as outras, e a resposta diz, empresa por empresa, o que entrou e por quê não ("Já reservado por X.", "A empresa pediu para não ser contatada."). Cada reserva grava `prospect.reserved` com `batch: true`.
 
-Reservar não cria lead: guarda o `place_id` em Meus prospects. O lead só nasce depois do primeiro contato, em "Criar lead", porque os termos do Google não deixam copiar nome, telefone ou endereço do Maps para o CRM.
+Reservar não cria lead: guarda o `place_id` em Meus prospects. O lead só nasce depois do primeiro contato, em "Criar lead", e leva só o que o vendedor confirmou no formulário (ver "Criar lead"): os termos do Google não deixam o servidor copiar nome, telefone ou endereço do Maps para as tabelas da prospecção.
 
 ## Histórico, Números e planilha
 
@@ -93,14 +93,17 @@ Só no clique, um prospect por vez, lendo o site que o resultado ao vivo mostrou
 
 ## Criar lead
 
-Depois do primeiro contato, com o que a empresa disse (não o que o Google mostra): empresa, contato, cargo, telefone ou e-mail, Instagram, observações e **"Aceitou receber WhatsApp?"** (obrigatório).
+O modal abre **já preenchido** (t087, 04/11): Empresa, Telefone e Site vêm da linha do Google que a tela tem na memória (`prospectLeadDefaults` no shared), E-mail e Instagram do que o site da empresa mostrou (ou do Instagram da linha da busca). Em Meus prospects, só se a ficha já foi aberta (abrir o modal não gasta ficha). Tudo editável; dado que o Google ou o site não deram fica em branco, nunca inventado. O vendedor acrescenta contato, cargo, observações e **"Aceitou receber WhatsApp?"** (obrigatório).
 
-- Funil Formatação, na etapa de entrada **"Sem contato"** (o pedido dizia "Novo Contato", que é a primeira etapa da Expansão) ou na etapa escolhida do funil Formatação.
+**O que o servidor guarda.** Só o que o vendedor confirmou no formulário (empresa, telefone, e-mail, Instagram, site vão para o lead e aparecem no card Origem como em qualquer lead). O servidor não recebe a linha do Google, não guarda cópia dela e não marca nada como "dado do Google": a regra "só o `place_id`" vale para as tabelas da prospecção (o teste de colunas continua). Que o telefone e o site confirmados pelo vendedor possam ter vindo do Maps é ponto a validar com o advogado (`DUVIDAS.md` da t087).
+
+- Funil Formatação, na etapa **"Sem contato"** (já escolhida no campo Etapa; o servidor cria a etapa se o funil ainda não a tem, nunca cai na primeira etapa por acaso) ou na etapa escolhida do funil Formatação.
 - Dono: o dono do prospect, fora do rodízio, sem tarefa de primeiro contato (o contato já houve) e sem a pesquisa paga da IA (`skipResearch`).
 - Origem `google_places` ("Prospecção Google Maps"), `externalId` e `leads.google_place_id` = o `place_id`. O cargo vai para o contato (`crm_contacts.job_title`); as observações viram uma anotação do lead.
 - Base legal: `consent` quando aceitou WhatsApp, `legitimate_interest` quando não; `consent_source = 'prospeccao'` e o texto "Aceitou / Não aceitou receber WhatsApp no primeiro contato (DD/MM/AAAA). Empresa encontrada no Google Maps em DD/MM/AAAA." (a data em que o prospect foi reservado) Quando o telefone ou o e-mail já é de uma negociação do dono do prospect, o lead é juntado a ela (que mantém a origem); se é de outra pessoa, responde 409 "Já existe uma negociação com este telefone ou e-mail.", qualquer que seja o nível de quem clica (gerente e Admin inclusive). Na junção, a resposta de agora substitui uma base legal vinda da prospecção ou nenhuma. Diante de um `consent` de outra origem (um formulário, por exemplo): um "sim" **mantém** esse consentimento e a resposta vira uma anotação no lead; um "não" **substitui** esse consentimento pela base da prospecção (`legitimate_interest`, `prospeccao`, texto "Não aceitou…"), o que bloqueia o WhatsApp, e a anotação registra a origem e a data do consentimento substituído (decisão do Eric, 28/10: o "não" explícito mais recente vale mais).
 - Telefone ou e-mail de um lead de outro vendedor: 409, como em "Criar negociação".
 - **Retorno combinado** (opcional): data e hora que a empresa pediu. Vira uma tarefa de follow-up "Retorno combinado na prospecção" para o dono do lead, pelo serviço de tarefas do CRM (`createTask`, que grava `lead.task_created` na linha do tempo).
+- **Sem retorno combinado**, um lead **novo** ganha mesmo assim a tarefa "Primeiro retorno da prospecção", para o dono, **24 horas** depois (`PROSPECT_DEFAULT_FOLLOW_UP_HOURS`). Lead juntado a uma negociação que já existia não ganha tarefa extra.
 
 **WhatsApp sem aceite.** Um lead `google_places`, ou com `consent_source = 'prospeccao'` (a negociação em que o "Criar lead" foi juntado), sem base `consent` não recebe nada do número do sistema: mensagem, modelo, pedido de ligação e ligação respondem **403** `whatsapp_no_opt_in` (`leadOptInMissing` em `whatsapp/official-number.ts`, no `send` de `whatsapp/routes.ts` e em `POST /leads/:id/whatsapp/calls`). A ficha do lead desabilita os botões de WhatsApp com o motivo; ligar pelo telefone e e-mail continuam. As automações do CRM não mandam WhatsApp. A regra também entra em `contactBlock` ([nao-me-contate.md](nao-me-contate.md)): o pedido automático de ligação não sai, e a Sofia não responde sozinha a um lead assim (a conversa espera um atendente).
 
@@ -125,7 +128,7 @@ No card do lead, "Dados do Google (ao vivo)" carrega a ficha no clique (gasta 1 
 | `GET /prospecting/prospects/:id/place`      | ficha ao vivo (1 ficha)                                                     |
 | `GET /prospecting/leads/:leadId/place`      | ficha ao vivo do lead que veio da prospecção (1 ficha)                      |
 | `POST /prospecting/prospects/:id/enrich`    | lê o site da empresa                                                        |
-| `POST /prospecting/prospects/:id/lead`      | cria o lead (e a tarefa de retorno); também `leads.write`                   |
+| `POST /prospecting/prospects/:id/lead`      | cria o lead (e a tarefa de follow-up); também `leads.write`                 |
 | `POST /prospecting/prospects/batch`         | reserva em lote, resultado por empresa                                      |
 | `GET /prospecting/history`                  | buscas feitas (o que foi digitado)                                          |
 | `GET /prospecting/metrics`                  | prospects por dono e situação, chamadas no mês                              |

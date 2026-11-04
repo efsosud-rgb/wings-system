@@ -10,6 +10,7 @@ import {
   prospectClaimSchema,
   prospectingIcpSchema,
   prospectingRetentionSchema,
+  prospectLeadDefaults,
   prospectLeadSchema,
   reservationExpiresAt,
   prospectSearchSchema,
@@ -352,5 +353,61 @@ describe('retention', () => {
     );
     for (const status of ['descartado', 'virou_lead', 'nao_contatar'] as const)
       expect(reservationExpiresAt({ status, updatedAt }, ok)).toBeNull();
+  });
+});
+
+describe('prospectLeadDefaults', () => {
+  const place = {
+    name: ' Empresa Teste ',
+    phone: '(21) 90000-0001',
+    website: 'https://exemplo.com.br/',
+  };
+
+  it('starts the form with the Google row and what the site showed', () => {
+    expect(
+      prospectLeadDefaults(
+        place,
+        {
+          email: { value: 'contato@exemplo.com.br', source: 'site da empresa', at: '2026-10-26' },
+          instagram: { value: 'empresateste', source: 'site da empresa', at: '2026-10-26' },
+        },
+        { username: 'outro' },
+      ),
+    ).toEqual({
+      companyName: 'Empresa Teste',
+      phone: '(21) 90000-0001',
+      email: 'contato@exemplo.com.br',
+      instagram: 'empresateste',
+      website: 'https://exemplo.com.br/',
+    });
+  });
+
+  it("falls back to the search row's Instagram and leaves missing data empty, never guessed", () => {
+    expect(
+      prospectLeadDefaults(
+        { name: null, phone: null, website: 'javascript:alert(1)' },
+        {},
+        {
+          username: 'empresateste',
+        },
+      ),
+    ).toEqual({ companyName: '', phone: '', email: '', instagram: '@empresateste', website: '' });
+    expect(prospectLeadDefaults(null, {})).toEqual({
+      companyName: '',
+      phone: '',
+      email: '',
+      instagram: '',
+      website: '',
+    });
+  });
+
+  it('is accepted by the Criar lead schema once the seller adds the contact and the answer', () => {
+    const defaults = prospectLeadDefaults(place, {});
+    const parsed = prospectLeadSchema.safeParse({
+      ...defaults,
+      contactName: 'Pessoa Teste',
+      whatsappOptIn: false,
+    });
+    expect(parsed.success).toBe(true);
   });
 });

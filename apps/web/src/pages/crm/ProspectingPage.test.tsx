@@ -1,8 +1,9 @@
-import type {
-  ProspectingUsage,
-  ProspectSearchItem,
-  ProspectSearchResponse,
-  SessionUser,
+import {
+  PROSPECT_ENRICHMENT_SOURCE,
+  type ProspectingUsage,
+  type ProspectSearchItem,
+  type ProspectSearchResponse,
+  type SessionUser,
 } from '@wings/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -11,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../api/client.js';
 
 const get = vi.fn();
+const SEM_CONTATO = '7b1d6f0e-3c53-4c9a-9b1e-0a5d2f4c8e11';
 const post = vi.fn();
 vi.mock('../../api/client.js', async (original) => ({
   ...(await original<typeof import('../../api/client.js')>()),
@@ -116,7 +118,7 @@ beforeEach(() => {
       };
     if (path === '/prospecting/prospects') return prospects;
     if (path === '/crm/stages?pipeline=formatacao')
-      return { stages: [{ id: 's1', name: 'Sem contato', active: true }] };
+      return { stages: [{ id: SEM_CONTATO, name: 'Sem contato', active: true }] };
     throw new Error(`unexpected GET ${path}`);
   });
   post.mockReset();
@@ -386,6 +388,9 @@ describe('Prospecção: reservar, criar lead e Meus prospects', () => {
     });
 
     const dialog = screen.getByRole('dialog', { name: 'Criar lead no funil Formatação' });
+    await waitFor(() =>
+      expect((within(dialog).getByLabelText('Etapa') as HTMLSelectElement).value).toBe(SEM_CONTATO),
+    );
     fireEvent.change(within(dialog).getByLabelText('Empresa'), {
       target: { value: 'Hamburgueria Exemplo' },
     });
@@ -408,8 +413,83 @@ describe('Prospecção: reservar, criar lead e Meus prospects', () => {
       expect.objectContaining({
         contactName: 'Ana Teste',
         whatsappOptIn: false,
-        stageId: '',
+        stageId: SEM_CONTATO,
         followUpAt: new Date('2027-03-10T10:00').toISOString(),
+      }),
+    );
+  });
+
+  it('opens Criar lead already filled with the Google row, editable, in "Sem contato"', async () => {
+    const reservedProspect = {
+      id: 'p1',
+      placeId: 'ChIJ_fake_place_0001',
+      status: 'reservado',
+      ownerEmployeeId: 'e1',
+      ownerName: 'Vendedora Teste',
+      mine: true,
+      reason: null,
+      notes: null,
+      enrichment: {},
+      leadId: null,
+      createdAt: '2026-10-26T12:00:00Z',
+      updatedAt: '2026-10-26T12:00:00Z',
+    };
+    post.mockImplementation(async (path: string) => {
+      if (path === '/prospecting/search')
+        return answer({
+          items: [
+            item({
+              name: 'Hamburgueria Exemplo',
+              phone: '(21) 90000-0001',
+              website: 'https://hamburgueria-exemplo.com.br/',
+              instagram: {
+                username: 'hamburgueriaexemplo',
+                source: PROSPECT_ENRICHMENT_SOURCE,
+                at: null,
+                ticket: 't',
+              },
+            }),
+          ],
+        });
+      if (path === '/prospecting/prospects') return reservedProspect;
+      if (path === '/prospecting/prospects/p1/lead') return { leadId: 'l7' };
+      throw new Error(`unexpected POST ${path}`);
+    });
+    const results = await searchOnce();
+    fireEvent.click(within(results).getByRole('button', { name: 'Reservar' }));
+    fireEvent.click(await within(results).findByRole('button', { name: 'Criar lead' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Criar lead no funil Formatação' });
+    const value = (label: string) =>
+      (within(dialog).getByLabelText(label) as HTMLInputElement | HTMLSelectElement).value;
+    expect(value('Empresa')).toBe('Hamburgueria Exemplo');
+    expect(value('Telefone')).toBe('(21) 90000-0001');
+    expect(value('Site')).toBe('https://hamburgueria-exemplo.com.br/');
+    expect(value('Instagram')).toBe('@hamburgueriaexemplo');
+    expect(value('E-mail')).toBe('');
+    expect(value('Contato')).toBe('');
+    // The stage is "Sem contato" (never the old "Primeira etapa do funil").
+    const stage = within(dialog).getByLabelText('Etapa') as HTMLSelectElement;
+    await waitFor(() => expect(stage.value).toBe(SEM_CONTATO));
+    expect(stage.options[stage.selectedIndex]?.textContent).toBe('Sem contato');
+    expect(within(dialog).queryByText('Primeira etapa do funil')).toBeNull();
+
+    // Editable: the seller corrects the phone and what is sent is what the form says.
+    fireEvent.change(within(dialog).getByLabelText('Telefone'), {
+      target: { value: '(21) 90000-0002' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Contato'), { target: { value: 'Ana Teste' } });
+    fireEvent.click(within(dialog).getByLabelText('Não'));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Criar lead' }));
+    expect(await within(results).findByRole('link', { name: 'Abrir negociação' })).toBeTruthy();
+    expect(post).toHaveBeenCalledWith(
+      '/prospecting/prospects/p1/lead',
+      expect.objectContaining({
+        companyName: 'Hamburgueria Exemplo',
+        phone: '(21) 90000-0002',
+        website: 'https://hamburgueria-exemplo.com.br/',
+        instagram: '@hamburgueriaexemplo',
+        stageId: SEM_CONTATO,
       }),
     );
   });
