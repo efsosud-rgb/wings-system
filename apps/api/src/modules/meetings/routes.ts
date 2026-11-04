@@ -30,6 +30,7 @@ import {
   patchMeetingEvent,
   type GoogleSyncDeps,
 } from './google-sync.js';
+import { canChangeMeeting } from './access.js';
 import {
   maskContact,
   meetingListFor,
@@ -447,7 +448,8 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
       if (!params.success) return bad(reply);
       if (!body.success) return bad(reply, body.error.issues[0]?.message);
       const found = await visibleMeeting(request, params.data.id);
-      if (!found) return notFound(reply);
+      // Seen is not changed: the write scope over the deal decides, and refuses as not found.
+      if (!found || !canChangeMeeting(request.session.actor, found.lead)) return notFound(reply);
       const { row } = found;
       if (row.status === 'encerrada' || row.status === 'cancelada') {
         return conflict(reply, 'meeting_closed', 'Esta reunião já foi encerrada ou cancelada.');
@@ -495,7 +497,14 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
                   : {}),
               });
             }
-            googlePatch = { googleSync: 'ok', googleSyncError: null, googleSyncedAt: now() };
+            googlePatch = {
+              googleSync: 'ok',
+              googleSyncError: null,
+              googleSyncedAt: now(),
+              // The event is gone from Google: the deal keeps the meeting as cancelled history,
+              // without a link to an event that no longer exists.
+              ...(cancelling ? { googleEventId: null, googleHtmlLink: null } : {}),
+            };
           } catch (error) {
             if (error instanceof MeetingGoogleError) {
               await update(row.id, {
@@ -549,6 +558,10 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
         ip: request.ip,
         metadata: {
           google: mirrored(row) ? (body.data.skipGoogle ? 'skipped' : 'mirrored') : 'none',
+          // Which parts changed, never their values (title and guests are personal data).
+          fields: (
+            ['title', 'startsAt', 'endsAt', 'attendees', 'meetUrl', 'status'] as const
+          ).filter((field) => body.data[field] !== undefined),
         },
       });
       return reply.send({ meeting: await answer(updated, found.lead.clientId) });
