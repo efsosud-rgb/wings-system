@@ -4,6 +4,7 @@ import {
   PROSPECT_PARSE_DAILY_MAX,
   PROSPECT_STATUSES,
   instagramDiscoverySchema,
+  instagramFindSchema,
   prospectApproachSchema,
   prospectBatchSchema,
   prospectClaimSchema,
@@ -16,6 +17,8 @@ import {
   prospectSearchSchema,
   prospectUpdateSchema,
   type Actor,
+  type InstagramFindItem,
+  type InstagramFindResponse,
   type ProspectBatchResponse,
   type ProspectEnrichment,
   type ProspectEnrichResponse,
@@ -31,6 +34,14 @@ import { createOpenRouterLlm, LlmError, type AgentLlm } from '../agent/llm.js';
 import { leadInScope } from '../leads/access.js';
 import { aiCallsToday, APPROACH_AUDIT_ACTION, suggestApproach } from './approach.js';
 import { discoverInstagram, type DiscoveryHold } from './instagram-discovery.js';
+import {
+  finderKeyOf,
+  findInstagram,
+  issueFinderTicket,
+  readFinderTicket,
+  WEB_SEARCH_PER_DAY,
+  type FinderDeps,
+} from './instagram-finder.js';
 import {
   createBusinessDiscoveryClient,
   issueTicket,
@@ -58,6 +69,7 @@ import {
 } from './service.js';
 import { loadProspectingSettings, saveProspectingPart } from './settings.js';
 import { readCompanySite } from './site-reader.js';
+import { createWebSearch, type WebSearchClient } from './web-search.js';
 
 /**
  * CRM Vendas → Prospecção (docs/crm/prospeccao.md). Every route needs
@@ -108,8 +120,30 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
         })
       : null;
   const ticketKey = ticketKeyOf(env.SESSION_SECRET);
+  const finderKey = finderKeyOf(env.SESSION_SECRET);
+  /** Null while `BRAVE_SEARCH_API_KEY` is missing: the finder's last path then says so. */
+  const webSearch: WebSearchClient | null = env.BRAVE_SEARCH_API_KEY
+    ? createWebSearch({
+        apiKey: env.BRAVE_SEARCH_API_KEY,
+        fetchImpl: app.wings.webSearchFetch,
+        log: (facts) => app.log.info(facts, 'web search'),
+      })
+    : null;
   // shortcut: one hold per API process; with replicas each learns Meta's limit on its own call.
   const hold: DiscoveryHold = { until: null, reason: null };
+  const finderDeps = (employeeId: string, at: Date): FinderDeps => ({
+    db,
+    now: at,
+    employeeId,
+    siteTransport: app.wings.siteTransport,
+    discovery: discovery ? { db, client: discovery, ticketKey, hold, now: at } : null,
+    search: webSearch,
+    budget: {
+      perDay: WEB_SEARCH_PER_DAY,
+      dailyUsd: env.ENRICH_DAILY_USD,
+      usdPerQuery: env.ENRICH_SEARCH_USD_PER_QUERY,
+    },
+  });
   const llm: AgentLlm | null =
     app.wings.agentLlm ??
     (env.OPENROUTER_API_KEY ? createOpenRouterLlm({ apiKey: env.OPENROUTER_API_KEY }) : null);
@@ -294,6 +328,50 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
     return reply.header('Cache-Control', 'no-store').send(answer);
   });
 
+  /**
+   * t086: the Instagram of the companies of a search that have none yet, five at a time, called by
+   * the screen right after the search. Each ticket was signed on that search for this seller; one
+   * that is wrong or expired refuses the whole request before anything is read or asked.
+   */
+  app.post('/prospecting/instagram/find', use, async (request, reply) => {
+    const body = instagramFindSchema.safeParse(request.body);
+    if (!body.success) return invalid(reply, body.error);
+    const actor = request.session.actor;
+    const at = now();
+    const companies = body.data.items.map(({ ticket }) =>
+      readFinderTicket(finderKey, actor.employeeId, ticket, at),
+    );
+    if (companies.some((company) => company === null))
+      return reply.status(400).send({
+        error: 'find_ticket_invalid',
+        message: 'Esta busca expirou ou não é sua. Busque de novo.',
+      });
+    const deps = finderDeps(actor.employeeId, at);
+    const items = await Promise.all(
+      companies.map(async (company): Promise<InstagramFindItem> => {
+        const outcome = await findInstagram(deps, company!);
+        return {
+          placeId: company!.placeId,
+          instagram: outcome.instagram && {
+            ...outcome.instagram,
+            ticket: issueTicket(ticketKey, actor.employeeId, outcome.instagram.username, at),
+          },
+          miss: outcome.miss,
+        };
+      }),
+    );
+    await writeAudit(db, {
+      actorEmployeeId: actor.employeeId,
+      action: 'prospect.instagram_find',
+      entity: 'prospect',
+      ip: request.ip,
+      metadata: { companies: items.length, found: items.filter((item) => item.instagram).length },
+    });
+    return reply
+      .header('Cache-Control', 'no-store')
+      .send({ items } satisfies InstagramFindResponse);
+  });
+
   // --- the AI and the search -------------------------------------------------------------
 
   app.post('/prospecting/parse', use, async (request, reply) => {
@@ -375,8 +453,15 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
     const settings = await loadProspectingSettings(db);
     let assembled: Awaited<ReturnType<typeof assembleSearch>>;
     try {
-      assembled = await assembleSearch(db, actor, answer, input, settings.icp, (username) =>
-        issueTicket(ticketKey, actor.employeeId, username, at),
+      assembled = await assembleSearch(
+        db,
+        actor,
+        answer,
+        input,
+        settings.icp,
+        (username) => issueTicket(ticketKey, actor.employeeId, username, at),
+        (place) => issueFinderTicket(finderKey, actor.employeeId, place, at),
+        at,
       );
     } catch (error) {
       // A failed query's message carries its parameters (Google's phones): only the code is kept.
@@ -582,8 +667,23 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
     const actor = request.session.actor;
     const found = await prospectInReach(db, actor, params.data.id);
     if (!found) return notFound(reply);
-    const reading = await readCompanySite(body.data.website, app.wings.siteTransport);
     const at = now();
+    // t086: with the search's ticket, the click also tries Meta and the web when the site had no link.
+    const company = body.data.findTicket
+      ? readFinderTicket(finderKey, actor.employeeId, body.data.findTicket, at)
+      : null;
+    // The ticket's site, not the screen's, for the read too: the lookup and the @ are shared with
+    // every seller, so a typed address must not change what the others see. Without one, the typed.
+    const website = company?.website ?? body.data.website;
+    const reading = await readCompanySite(website, { transport: app.wings.siteTransport });
+    const tried =
+      company && company.placeId === found.row.placeId
+        ? await findInstagram(
+            finderDeps(actor.employeeId, at),
+            { ...company, website },
+            { reading },
+          )
+        : null;
     const enrichment: ProspectEnrichment = {
       ...(found.row.enrichment as ProspectEnrichment),
       ...Object.fromEntries(
@@ -592,6 +692,15 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
           { value, source: PROSPECT_ENRICHMENT_SOURCE, at: at.toISOString() },
         ]),
       ),
+      ...(!reading.found.instagram && tried?.instagram
+        ? {
+            instagram: {
+              value: `https://www.instagram.com/${tried.instagram.username}/`,
+              source: tried.instagram.source,
+              at: at.toISOString(),
+            },
+          }
+        : {}),
     };
     const [updated] = await db
       .update(prospects)
@@ -604,12 +713,18 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
       entity: 'prospect',
       entityId: found.row.id,
       ip: request.ip,
-      metadata: { found: Object.keys(reading.found), pagesRead: reading.pagesRead },
+      metadata: {
+        found: [
+          ...new Set([...Object.keys(reading.found), ...(tried?.instagram ? ['instagram'] : [])]),
+        ],
+        pagesRead: reading.pagesRead,
+      },
     });
     return reply.send({
       prospect: toProspect(updated!, found.ownerName, actor),
       pagesRead: reading.pagesRead,
       skipped: reading.skipped,
+      ...(tried && !tried.instagram ? { instagramReasons: tried.miss?.reasons ?? [] } : {}),
     } satisfies ProspectEnrichResponse);
   });
 

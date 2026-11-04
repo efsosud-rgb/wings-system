@@ -3,7 +3,13 @@ import https from 'node:https';
 import { Readable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import { guardedLookup, readPublicPage, type PageTransport } from '../../lib/public-probe.js';
-import { contactPageOf, extractContacts, readCompanySite, robotsAllows } from './site-reader.js';
+import {
+  aboutPageOf,
+  contactPageOf,
+  extractContacts,
+  readCompanySite,
+  robotsAllows,
+} from './site-reader.js';
 
 /** A made-up company's site, served by a transport that records what was asked. */
 function site(pages: Record<string, { status?: number; location?: string; body?: string }>) {
@@ -286,5 +292,98 @@ describe('SSRF: the reader never reaches our own network', () => {
     } finally {
       request.mockRestore();
     }
+  });
+});
+
+describe('timeout, retry and the pages searched (t086)', () => {
+  const origin = 'https://padaria-teste.example.com.br';
+  const insta = '<a href="https://www.instagram.com/padaria.teste/">Instagram</a>';
+
+  /** A transport whose answers per URL are consumed in order; 'timeout' hangs past the deadline. */
+  function scripted(script: Record<string, ('timeout' | 'error' | string)[]>) {
+    const asked: { url: string; windowMs: number }[] = [];
+    const transport: PageTransport = async (url, limits) => {
+      asked.push({ url: url.href, windowMs: limits.deadline - Date.now() });
+      const queue = script[url.href];
+      const next = queue && queue.length > 1 ? queue.shift() : queue?.[0];
+      if (next === 'timeout') throw new Error('timeout');
+      if (next === 'error') throw new Error('ECONNRESET');
+      if (next === undefined) return { status: 404, location: null, body: '' };
+      return { status: 200, location: null, body: next };
+    };
+    return { transport, asked };
+  }
+
+  it('waits 12 seconds for each request, not 5', async () => {
+    const { transport, asked } = scripted({ [`${origin}/`]: [insta] });
+    await readCompanySite(`${origin}/`, { transport });
+    expect(asked.every((a) => a.windowMs > 11_000 && a.windowMs <= 12_000)).toBe(true);
+  });
+
+  it('tries a page again after a timeout or a connection failure, once', async () => {
+    const { transport, asked } = scripted({
+      [`${origin}/robots.txt`]: ['error', ''],
+      [`${origin}/`]: ['timeout', insta],
+    });
+    const reading = await readCompanySite(`${origin}/`, { transport });
+    expect(reading.found.instagram).toBe('https://www.instagram.com/padaria.teste/');
+    expect(asked.map((a) => a.url)).toEqual([
+      `${origin}/robots.txt`,
+      `${origin}/robots.txt`,
+      `${origin}/`,
+      `${origin}/`,
+    ]);
+    expect(reading.timedOut).toBeUndefined();
+  });
+
+  it('gives up after the second timeout and says 12 seconds and 2 tries, not 5 seconds', async () => {
+    const { transport, asked } = scripted({
+      [`${origin}/robots.txt`]: [''],
+      [`${origin}/`]: ['timeout'],
+    });
+    const reading = await readCompanySite(`${origin}/`, { transport });
+    expect(asked.filter((a) => a.url === `${origin}/`)).toHaveLength(2);
+    expect(reading).toMatchObject({ found: {}, pagesRead: 0, timedOut: true });
+    expect(reading.skipped).toEqual([
+      'Página inicial: o site não respondeu em 12 segundos (2 tentativas).',
+    ]);
+    expect(JSON.stringify(reading)).not.toContain('5 segundos');
+  });
+
+  it('does not retry an answer: a 503 from robots.txt is asked once', async () => {
+    const { transport, asked } = scripted({});
+    const failing: PageTransport = async (url, limits) => {
+      if (url.pathname === '/robots.txt') {
+        asked.push({ url: url.href, windowMs: 0 });
+        return { status: 503, location: null, body: '' };
+      }
+      return transport(url, limits);
+    };
+    const reading = await readCompanySite(`${origin}/`, { transport: failing });
+    expect(asked).toHaveLength(1);
+    expect(reading.pagesRead).toBe(0);
+  });
+
+  it('looks for the link on the home page footer, the contact page and the "sobre" page', async () => {
+    const home = `<footer>${'<a href="/contato">Contato</a><a href="/sobre-nos">Sobre nós</a>'}</footer>`;
+    const { transport, asked } = scripted({
+      [`${origin}/robots.txt`]: [''],
+      [`${origin}/`]: [home],
+      [`${origin}/contato`]: ['<p>sem redes</p>'],
+      [`${origin}/sobre-nos`]: [insta],
+    });
+    const reading = await readCompanySite(`${origin}/`, { transport });
+    expect(reading.pagesRead).toBe(3);
+    expect(reading.found.instagram).toBe('https://www.instagram.com/padaria.teste/');
+    expect(asked.map((a) => a.url)).toContain(`${origin}/sobre-nos`);
+    expect(aboutPageOf(home, new URL(`${origin}/`))?.pathname).toBe('/sobre-nos');
+  });
+
+  it('stops at the first Instagram link when the finder asks for only that', async () => {
+    const home = `${insta}<a href="/contato">Contato</a><a href="/sobre">Sobre</a>`;
+    const { transport, asked } = scripted({ [`${origin}/`]: [home] });
+    const reading = await readCompanySite(`${origin}/`, { transport, stopAtInstagram: true });
+    expect(reading.pagesRead).toBe(1);
+    expect(asked.map((a) => new URL(a.url).pathname)).toEqual(['/robots.txt', '/']);
   });
 });

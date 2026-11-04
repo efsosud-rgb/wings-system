@@ -4,6 +4,7 @@ import {
   ICP_WEIGHT_LABELS,
   icpScore,
   type InstagramDiscoveryResponse,
+  type InstagramFindResponse,
   type InstagramSnapshotView,
   type ProspectSearchItem,
   type ProspectSearchResponse,
@@ -69,6 +70,9 @@ const item = (n: number, username: string | null): ProspectSearchItem => ({
   instagram: username
     ? { username, source: 'site no Google', at: null, ticket: `ticket-${n}` }
     : null,
+  instagramFind: username ? null : `find-${n}`,
+  enrichTicket: username ? null : `find-${n}`,
+  instagramMiss: null,
   missing: [],
   tags: [],
   prospect: null,
@@ -123,8 +127,23 @@ const MANAGER: SessionUser = {
 let me = SELLER;
 let status = { configured: true, aiConfigured: true, instagramDiscovery: true };
 let discover: () => Promise<InstagramDiscoveryResponse> = async () => discovery;
+// t086: what the finder answers for the company without an @ (item 3).
+const nothingFound: InstagramFindResponse = {
+  items: [
+    {
+      placeId: 'ChIJ_fake_place_0003',
+      instagram: null,
+      miss: {
+        reasons: ['Site: o Google não informa o site da empresa.'],
+        at: '2026-11-04T15:00:00.000Z',
+      },
+    },
+  ],
+};
+let find: (body: unknown) => Promise<InstagramFindResponse> = async () => nothingFound;
 
 beforeEach(() => {
+  find = async () => nothingFound;
   me = SELLER;
   status = { configured: true, aiConfigured: true, instagramDiscovery: true };
   discover = async () => discovery;
@@ -142,9 +161,10 @@ beforeEach(() => {
     throw new Error(`unexpected GET ${path}`);
   });
   put.mockReset().mockResolvedValue({});
-  post.mockReset().mockImplementation(async (path: string) => {
+  post.mockReset().mockImplementation(async (path: string, body?: unknown) => {
     if (path === '/prospecting/search') return answer;
     if (path === '/prospecting/instagram/discovery') return discover();
+    if (path === '/prospecting/instagram/find') return find(body);
     throw new Error(`unexpected POST ${path}`);
   });
 });
@@ -219,7 +239,9 @@ describe('Instagram column and the 0-100 score', () => {
     ).toBeTruthy();
     expect(within(row).getByTitle(/3 de 9 pontos/).textContent).toBe('33');
     expect(
-      within(rowOf(results, 'Empresa Exemplo 3')).getByText('— sem Instagram conhecido'),
+      await within(rowOf(results, 'Empresa Exemplo 3')).findByText(
+        /— sem Instagram: Site: o Google não informa/,
+      ),
     ).toBeTruthy();
   });
 
@@ -333,5 +355,123 @@ describe('Ajustes → Nota ICP', () => {
     const [path, body] = put.mock.calls[0]! as [string, { weights: Record<string, number> }];
     expect(path).toBe('/prospecting/settings/icp');
     expect(body.weights).toMatchObject({ ...DEFAULT_ICP_WEIGHTS, igFollowers10k: 5 });
+  });
+});
+
+describe('Instagram finder (t086)', () => {
+  const findPosts = () =>
+    post.mock.calls.filter(([path]) => path === '/prospecting/instagram/find');
+
+  it('runs by itself after the search, with the ticket of each company without an @ only', async () => {
+    await searchOnce();
+    await waitFor(() => expect(findPosts()).toHaveLength(1));
+    expect(findPosts()[0]![1]).toEqual({ items: [{ ticket: 'find-3' }] });
+  });
+
+  it('shows "procurando…" until the finder answers, then the @ it found and where from', async () => {
+    let release: (value: InstagramFindResponse) => void = () => {};
+    find = () => new Promise((resolve) => (release = resolve));
+    const results = await searchOnce();
+    const row = rowOf(results, 'Empresa Exemplo 3');
+    expect(within(row).getByText('procurando o Instagram…')).toBeTruthy();
+    release({
+      items: [
+        {
+          placeId: ITEMS[2]!.placeId,
+          instagram: {
+            username: 'empresa.exemplo3',
+            source: 'site da empresa',
+            at: '2026-11-04T15:00:00.000Z',
+            ticket: 'ticket-3',
+          },
+          miss: null,
+        },
+      ],
+    });
+    expect(await within(row).findByText('@empresa.exemplo3')).toBeTruthy();
+    expect(within(row).getByText('site da empresa')).toBeTruthy();
+    // The new @ goes to Meta's numbers like any other.
+    await waitFor(() =>
+      expect(
+        discoveryPosts().some(([, body]) =>
+          JSON.stringify(body).includes('"username":"empresa.exemplo3"'),
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it('no @ in any path: "—" and the real reason of each path, never an invented @', async () => {
+    find = async () => ({
+      items: [
+        {
+          placeId: ITEMS[2]!.placeId,
+          instagram: null,
+          miss: {
+            reasons: [
+              'Site: Página inicial: o site não respondeu em 12 segundos (2 tentativas).',
+              'Meta: conta não confirmada (o @ provável não existe ou não é comercial).',
+            ],
+            at: '2026-11-04T15:00:00.000Z',
+          },
+        },
+      ],
+    });
+    const results = await searchOnce();
+    const row = rowOf(results, 'Empresa Exemplo 3');
+    expect(
+      await within(row).findByText(
+        /— sem Instagram: Site: .*12 segundos.*Meta: conta não confirmada/,
+      ),
+    ).toBeTruthy();
+    expect(within(row).queryByText(/^@/)).toBeNull();
+  });
+
+  it('a failed request is "—" and the reason, not "procurando…" forever', async () => {
+    find = async () => {
+      throw new ApiError(500, { error: 'x', message: 'x' });
+    };
+    const results = await searchOnce();
+    const row = rowOf(results, 'Empresa Exemplo 3');
+    expect(
+      await within(row).findByText(/— sem Instagram: a busca do Instagram falhou/),
+    ).toBeTruthy();
+  });
+
+  it('keeps the ticket for Enriquecer after the finder answers, and a new search clears an old failure', async () => {
+    const { withFinds } = await import('./ProspectInstagramFind.js');
+    const [row] = ITEMS.filter((entry) => entry.instagramFind);
+    const found = {
+      placeId: row!.placeId,
+      instagram: {
+        username: 'empresa.exemplo3',
+        source: 'site da empresa' as const,
+        at: '2026-11-04T15:00:00.000Z',
+        ticket: 'ticket-3',
+      },
+      miss: null,
+    };
+    const [shown] = withFinds([row!], {
+      byPlace: new Map([[found.placeId, found]]),
+      failure: null,
+    });
+    expect(shown!.instagramFind).toBeNull();
+    expect(shown!.enrichTicket).toBe(row!.enrichTicket);
+    expect(shown!.enrichTicket).toBeTruthy();
+
+    // After a failure, the next search's pending company says "procurando…", not "falhou".
+    find = async () => {
+      throw new ApiError(500, { error: 'x', message: 'x' });
+    };
+    const first = await searchOnce();
+    await within(rowOf(first, 'Empresa Exemplo 3')).findByText(/a busca do Instagram falhou/);
+    let release: (value: InstagramFindResponse) => void = () => {};
+    find = () => new Promise((resolve) => (release = resolve));
+    fireEvent.click(screen.getByRole('button', { name: 'Buscar' }));
+    expect(
+      await within(
+        rowOf(await screen.findByRole('region', { name: 'Resultados' }), 'Empresa Exemplo 3'),
+      ).findByText('procurando o Instagram…'),
+    ).toBeTruthy();
+    release({ items: [] });
   });
 });

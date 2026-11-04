@@ -11,6 +11,7 @@ import {
   purgeDiscoveryCalls,
   purgeInstagramSnapshots,
 } from '../prospecting/instagram-discovery.js';
+import { purgeInstagramLookups } from '../prospecting/instagram-finder.js';
 import { loadInstagramSettings } from './settings.js';
 
 /**
@@ -29,7 +30,8 @@ export const HOUSEKEEPING_TICK_MS = 60 * 60_000;
 const CACHE_DAYS = 30;
 
 export type HousekeepingResult =
-  { ran: false } | { ran: true; purged: number; cache: number; snapshots: number; calls: number };
+  | { ran: false }
+  | { ran: true; purged: number; cache: number; snapshots: number; calls: number; lookups: number };
 
 export async function runInstagramHousekeeping(
   db: Database,
@@ -61,13 +63,15 @@ export async function runInstagramHousekeeping(
       .returning({ key: prospectClassifierCache.keyHash });
     const snapshots = await purgeInstagramSnapshots(tx, now);
     const calls = await purgeDiscoveryCalls(tx, now);
+    // t086: the finder's kept lookups (an @ found, or why none) past their retry date.
+    const lookups = await purgeInstagramLookups(tx, now);
     if (purged.length)
       await writeAudit(tx, {
         action: 'prospect_ai.instagram_purged',
         entity: 'prospect_ai_settings',
         metadata: { count: purged.length, days },
       });
-    return { ran: true, purged: purged.length, cache: cache.length, snapshots, calls };
+    return { ran: true, purged: purged.length, cache: cache.length, snapshots, calls, lookups };
   });
 }
 

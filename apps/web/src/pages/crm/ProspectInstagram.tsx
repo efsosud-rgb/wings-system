@@ -129,7 +129,20 @@ export function InstagramCell({
   enabled: boolean | undefined;
 }) {
   const ref = item.instagram;
-  if (!ref) return <span className="crm-sub">— sem Instagram conhecido</span>;
+  if (!ref) {
+    // t086: the finder is still on it, or tried every path and says why it found nothing.
+    if (item.instagramMiss)
+      return (
+        <span className="crm-sub" title={item.instagramMiss.reasons.join('\n')}>
+          — sem Instagram: {item.instagramMiss.reasons.join(' ')}
+        </span>
+      );
+    return (
+      <span className="crm-sub">
+        {item.instagramFind ? 'procurando o Instagram…' : '— sem Instagram conhecido'}
+      </span>
+    );
+  }
   const entry = numbers.byUsername.get(ref.username);
   const snapshot = entry?.snapshot;
   const why = !enabled ? 'consulta ao Instagram desligada' : entry ? entry.reason : numbers.failure;

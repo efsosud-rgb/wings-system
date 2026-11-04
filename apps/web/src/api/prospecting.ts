@@ -201,8 +201,12 @@ export const useUpdateProspect = () =>
   );
 
 export const useEnrichProspect = () =>
-  useProspectMutation(({ id, website }: { id: string; website: string }) =>
-    api.post<ProspectEnrichResponse>(`/prospecting/prospects/${id}/enrich`, { website }),
+  useProspectMutation(
+    ({ id, website, findTicket }: { id: string; website: string; findTicket?: string }) =>
+      api.post<ProspectEnrichResponse>(`/prospecting/prospects/${id}/enrich`, {
+        website,
+        findTicket,
+      }),
   );
 
 export const useProspectLead = () =>

@@ -157,3 +157,37 @@ export const instagramDiscoveryCalls = pgTable(
   },
   (table) => [index('instagram_discovery_calls_created_idx').on(table.tenantId, table.createdAt)],
 );
+
+/**
+ * t086: what the Instagram finder learned about one company, kept per `place_id` so no company is
+ * read, asked or searched twice (Meta's and the web search's quota). Only our own findings: the
+ * @ found and from where, or why none was ("o site não respondeu em 12 segundos"). Never Google's
+ * name, address, phone or site. `expires_at` is the retry date (a timeout is tried again the next
+ * day, a missing link in a week, an @ found in 30 days); the housekeeping deletes expired rows.
+ */
+export const prospectInstagramLookups = pgTable(
+  'prospect_instagram_lookups',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: tenantId(),
+    placeId: text('place_id').notNull(),
+    /** 'found' or 'none'. */
+    outcome: text('outcome').notNull(),
+    /** normalizeInstagram: lower case, no @; null when none. */
+    username: text('username'),
+    /** A ProspectInstagramSource; null when none. */
+    source: text('source'),
+    /** One Portuguese sentence per path that did not resolve. */
+    reasons: jsonb('reasons').notNull().default([]),
+    checkedAt: timestamp('checked_at', { withTimezone: true }).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('prospect_instagram_lookups_place_uq').on(table.tenantId, table.placeId),
+    index('prospect_instagram_lookups_expires_idx').on(table.expiresAt),
+    check(
+      'prospect_instagram_lookups_outcome_check',
+      sql`${table.outcome} in ('found', 'none') and (${table.outcome} = 'none' or ${table.username} is not null)`,
+    ),
+  ],
+);
