@@ -8,7 +8,7 @@ import {
   type ProspectSearchResponse,
   type RoleKey,
 } from '@wings/shared';
-import { eq } from 'drizzle-orm';
+import { and, eq, gte } from 'drizzle-orm';
 import type { FastifyInstance, InjectOptions } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
@@ -24,6 +24,7 @@ import { loadEnv } from '../../env.js';
 import type { PageTransport } from '../../lib/public-probe.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
+import { startOfDaySaoPaulo } from '../prospect-ai/classifier.js';
 import { runInstagramHousekeeping } from '../prospect-ai/housekeeping.js';
 import { fakePlace, fakePlacesApi } from './fake-places-api.js';
 import {
@@ -488,11 +489,20 @@ describe('what stops the finder', () => {
   });
 
   it('the paid web search has a daily ceiling, reserved under a lock', async () => {
-    // The ceiling counts audit rows, which the database stamps with the real clock.
+    // The ceiling counts audit rows, which the database stamps with the real clock; the "before"
+    // counts the same São Paulo day as the code, so a run across midnight stays coherent (lição 2).
     const day = new Date();
     // The searches the tests above made already count today.
     const spentBefore = (
-      await db.select().from(auditLog).where(eq(auditLog.action, 'prospect.web_search'))
+      await db
+        .select()
+        .from(auditLog)
+        .where(
+          and(
+            eq(auditLog.action, 'prospect.web_search'),
+            gte(auditLog.at, startOfDaySaoPaulo(day)),
+          ),
+        )
     ).length;
     const results = await Promise.all(
       [1, 2, 3, 4].map(() => reserveWebSearch(db, seller.id, spentBefore + 2, day)),
@@ -540,10 +550,25 @@ describe('Enriquecer with the search ticket', () => {
     await db
       .delete(instagramBusinessSnapshots)
       .where(eq(instagramBusinessSnapshots.username, 'epsilon'));
+    // Start state: no earlier answer kept for this company. From here the order is the screen's:
+    // search -> find -> search again -> reserve -> Enriquecer, with nothing cleared in between.
     await db
       .delete(prospectInstagramLookups)
       .where(eq(prospectInstagramLookups.placeId, EPSILON.id));
-    const ticket = itemOf(await search(seller), EPSILON).instagramFind!;
+    const first = itemOf(await search(seller), EPSILON);
+    expect(first.instagramFind).toBeTruthy();
+    expect(first.enrichTicket).toBe(first.instagramFind);
+    const metaBefore = graphAsked.length;
+    const found = (await find(seller, [first.instagramFind!])).json<InstagramFindResponse>();
+    expect(found.items[0]!.instagram?.username).toBe('epsilon');
+    expect(graphAsked.length).toBeGreaterThan(metaBefore);
+    // The finder answered: the row stops asking, but keeps the ticket the click sends.
+    const next = itemOf(await search(seller), EPSILON);
+    expect(next.instagramFind).toBeNull();
+    expect(next.instagram).toMatchObject({ username: 'epsilon' });
+    const ticket = next.enrichTicket!;
+    expect(ticket).toBeTruthy();
+    const metaAfterFind = graphAsked.length;
     const [row] = await db
       .insert(prospects)
       .values({ placeId: EPSILON.id, status: 'reservado', ownerEmployeeId: seller.id })
@@ -561,6 +586,8 @@ describe('Enriquecer with the search ticket', () => {
     });
     expect(body.instagramReasons).toBeUndefined();
     expect((await lookupOf(EPSILON))?.username).toBe('epsilon');
+    // The kept answer is saved with no second call to Meta.
+    expect(graphAsked.length).toBe(metaAfterFind);
   });
 
   it('without a ticket it behaves as before: the site only', async () => {

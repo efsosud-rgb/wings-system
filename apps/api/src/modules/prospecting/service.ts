@@ -498,6 +498,8 @@ export async function assembleSearch(
       (keptOutcome?.instagram
         ? { ...keptOutcome.instagram, ticket: ticketOf(keptOutcome.instagram.username) }
         : null);
+    const doNotContact = tags.some((tag) => tag.kind === 'do_not_contact');
+    const findTicket = findTicketOf?.(place) ?? null;
     items.push({
       ...place,
       missing: missingFields(place),
@@ -514,10 +516,9 @@ export async function assembleSearch(
         icp.weights,
       ),
       instagram,
-      instagramFind:
-        instagram || keptOutcome || tags.some((tag) => tag.kind === 'do_not_contact')
-          ? null
-          : (findTicketOf?.(place) ?? null),
+      instagramFind: instagram || keptOutcome || doNotContact ? null : findTicket,
+      // Kept after the finder answers: the Enriquecer click still needs it to save the @ found.
+      enrichTicket: known || doNotContact ? null : findTicket,
       instagramMiss: instagram ? null : (keptOutcome?.miss ?? null),
       tags,
       prospect: prospect

@@ -71,6 +71,7 @@ const item = (n: number, username: string | null): ProspectSearchItem => ({
     ? { username, source: 'site no Google', at: null, ticket: `ticket-${n}` }
     : null,
   instagramFind: username ? null : `find-${n}`,
+  enrichTicket: username ? null : `find-${n}`,
   instagramMiss: null,
   missing: [],
   tags: [],
@@ -434,5 +435,43 @@ describe('Instagram finder (t086)', () => {
     expect(
       await within(row).findByText(/— sem Instagram: a busca do Instagram falhou/),
     ).toBeTruthy();
+  });
+
+  it('keeps the ticket for Enriquecer after the finder answers, and a new search clears an old failure', async () => {
+    const { withFinds } = await import('./ProspectInstagramFind.js');
+    const [row] = ITEMS.filter((entry) => entry.instagramFind);
+    const found = {
+      placeId: row!.placeId,
+      instagram: {
+        username: 'empresa.exemplo3',
+        source: 'site da empresa' as const,
+        at: '2026-11-04T15:00:00.000Z',
+        ticket: 'ticket-3',
+      },
+      miss: null,
+    };
+    const [shown] = withFinds([row!], {
+      byPlace: new Map([[found.placeId, found]]),
+      failure: null,
+    });
+    expect(shown!.instagramFind).toBeNull();
+    expect(shown!.enrichTicket).toBe(row!.enrichTicket);
+    expect(shown!.enrichTicket).toBeTruthy();
+
+    // After a failure, the next search's pending company says "procurando…", not "falhou".
+    find = async () => {
+      throw new ApiError(500, { error: 'x', message: 'x' });
+    };
+    const first = await searchOnce();
+    await within(rowOf(first, 'Empresa Exemplo 3')).findByText(/a busca do Instagram falhou/);
+    let release: (value: InstagramFindResponse) => void = () => {};
+    find = () => new Promise((resolve) => (release = resolve));
+    fireEvent.click(screen.getByRole('button', { name: 'Buscar' }));
+    expect(
+      await within(
+        rowOf(await screen.findByRole('region', { name: 'Resultados' }), 'Empresa Exemplo 3'),
+      ).findByText('procurando o Instagram…'),
+    ).toBeTruthy();
+    release({ items: [] });
   });
 });

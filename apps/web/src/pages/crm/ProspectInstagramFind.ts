@@ -29,6 +29,8 @@ export function useInstagramFinder(items: ProspectSearchItem[]): InstagramFinds 
     const fresh = items.filter((item) => item.instagramFind && !asked.current.has(item.placeId));
     if (fresh.length === 0) return;
     for (const item of fresh) asked.current.add(item.placeId);
+    // An old failure must not label the companies this search is still asking about.
+    setFailure(null);
     void (async () => {
       for (let i = 0; i < fresh.length; i += INSTAGRAM_FIND_MAX) {
         const chunk = fresh.slice(i, i + INSTAGRAM_FIND_MAX);

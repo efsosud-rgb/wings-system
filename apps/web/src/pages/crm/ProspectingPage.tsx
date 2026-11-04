@@ -1030,7 +1030,7 @@ function ResultRow({
               <EnrichButton
                 prospectId={prospect.id}
                 website={site}
-                findTicket={item.instagramFind ?? undefined}
+                findTicket={item.enrichTicket ?? undefined}
                 onDone={(answer) => setEnrichment(answer.prospect.enrichment)}
               />
             )}

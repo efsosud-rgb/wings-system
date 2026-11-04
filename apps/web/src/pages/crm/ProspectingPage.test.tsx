@@ -70,6 +70,7 @@ const item = (over: Partial<ProspectSearchItem>): ProspectSearchItem => ({
   },
   instagram: null,
   instagramFind: null,
+  enrichTicket: null,
   instagramMiss: null,
   missing: [],
   tags: [],

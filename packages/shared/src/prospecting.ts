@@ -649,6 +649,8 @@ export interface ProspectSearchItem extends PlaceResult {
   instagram: ProspectInstagramRef | null;
   /** t086: the ticket of the Instagram finder, while there is no @ and the finder has not tried. */
   instagramFind: string | null;
+  /** t086: the same ticket kept after the finder answers, so Enriquecer can save the @ it found. */
+  enrichTicket: string | null;
   /** t086: the finder tried and found no @; why, per path, and when. */
   instagramMiss: InstagramMiss | null;
   /** Fields Google did not give: an incomplete record, flagged, never filled in. */

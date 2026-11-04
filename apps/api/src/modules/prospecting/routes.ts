@@ -707,7 +707,9 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
       entityId: found.row.id,
       ip: request.ip,
       metadata: {
-        found: [...Object.keys(reading.found), ...(tried?.instagram ? ['instagram'] : [])],
+        found: [
+          ...new Set([...Object.keys(reading.found), ...(tried?.instagram ? ['instagram'] : [])]),
+        ],
         pagesRead: reading.pagesRead,
       },
     });
