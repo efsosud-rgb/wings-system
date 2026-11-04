@@ -121,6 +121,8 @@ declare module 'fastify' {
       placesFetch?: typeof fetch;
       /** Set only by tests, so no test ever reaches Instagram's Business Discovery (Prospecção). */
       instagramDiscoveryFetch?: typeof fetch;
+      /** Set only by tests, so no test ever reaches the web search of the Instagram finder. */
+      webSearchFetch?: typeof fetch;
       /** Set only by tests, so no test ever reads a company's site (Prospecção). */
       siteTransport?: PageTransport;
       storage?: ObjectStorage;
@@ -168,6 +170,8 @@ export async function buildApp(deps: {
   placesFetch?: typeof fetch;
   /** Overridable so tests play Instagram's Business Discovery themselves. */
   instagramDiscoveryFetch?: typeof fetch;
+  /** Overridable so tests play the web search of the Instagram finder themselves. */
+  webSearchFetch?: typeof fetch;
   /** Overridable so tests serve the companies' sites themselves. */
   siteTransport?: PageTransport;
   storage?: ObjectStorage;
@@ -273,6 +277,7 @@ export async function buildApp(deps: {
     youtubeFetch: deps.youtubeFetch,
     placesFetch: deps.placesFetch,
     instagramDiscoveryFetch: deps.instagramDiscoveryFetch,
+    webSearchFetch: deps.webSearchFetch,
     siteTransport: deps.siteTransport,
     storage: deps.storage,
     now: deps.now,

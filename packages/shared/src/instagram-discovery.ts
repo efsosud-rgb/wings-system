@@ -11,8 +11,18 @@ import { PROSPECT_ENRICHMENT_SOURCE, type InstagramIcpMetrics } from './prospect
 
 /** Where the company's @ came from: its own site (saved), or Google's site field (live, not saved). */
 export const INSTAGRAM_FROM_GOOGLE_SITE = 'site no Google';
+/** t086: the @ a name guess made, and Meta's Business Discovery confirmed is a business account. */
+export const INSTAGRAM_FROM_META_GUESS = 'palpite pelo nome, conta confirmada na Meta';
+/** t086: the first Instagram profile of a web search for name + city, confirmed in Meta. */
+export const INSTAGRAM_FROM_WEB = 'busca na web, conta confirmada na Meta';
+/** t086: same, while Meta's confirmation is off: the seller must check the profile. */
+export const INSTAGRAM_FROM_WEB_UNCONFIRMED = 'busca na web, não confirmada na Meta';
 export type ProspectInstagramSource =
-  typeof PROSPECT_ENRICHMENT_SOURCE | typeof INSTAGRAM_FROM_GOOGLE_SITE;
+  | typeof PROSPECT_ENRICHMENT_SOURCE
+  | typeof INSTAGRAM_FROM_GOOGLE_SITE
+  | typeof INSTAGRAM_FROM_META_GUESS
+  | typeof INSTAGRAM_FROM_WEB
+  | typeof INSTAGRAM_FROM_WEB_UNCONFIRMED;
 
 /** A search result's known Instagram, with the ticket that lets the screen ask Meta about it. */
 export interface ProspectInstagramRef {
@@ -21,6 +31,38 @@ export interface ProspectInstagramRef {
   /** When the company's site showed it; null for Google's site field (read now). */
   at: string | null;
   ticket: string;
+}
+
+/**
+ * Finding a company's Instagram on its own (t086): site, then Business Discovery on a probable @,
+ * then a web search. The search answer carries a ticket per company without an @; the screen sends
+ * the ticket, never the company's data, so the API only works on companies a Google search showed.
+ */
+export const INSTAGRAM_FIND_MAX = 5;
+
+export const instagramFindSchema = z.object({
+  items: z
+    .array(z.object({ ticket: z.string().min(1).max(2000) }))
+    .min(1)
+    .max(INSTAGRAM_FIND_MAX, `No máximo ${INSTAGRAM_FIND_MAX} por vez`),
+});
+export type InstagramFindInput = z.infer<typeof instagramFindSchema>;
+
+/** Why no @ was found, one sentence per path tried, and when. Never a made-up @. */
+export interface InstagramMiss {
+  reasons: string[];
+  at: string;
+}
+
+export interface InstagramFindItem {
+  placeId: string;
+  /** The @ found, with the ticket the discovery route takes; null when none was. */
+  instagram: ProspectInstagramRef | null;
+  miss: InstagramMiss | null;
+}
+
+export interface InstagramFindResponse {
+  items: InstagramFindItem[];
 }
 
 /** Paths of instagram.com that are not a profile ("instagram.com/p/…" is a post). */

@@ -146,6 +146,12 @@ const schema = z.object({
    */
   GOOGLE_PLACES_API_KEY: optionalString,
   /**
+   * Brave Search, the same key the worker uses (secret). On the API it feeds the last path of the
+   * Prospecção Instagram finder (name + city + "instagram"); PAID per query, capped per day in
+   * code. Without it that path is skipped and the reason says so.
+   */
+  BRAVE_SEARCH_API_KEY: optionalString,
+  /**
    * Google Analytics 4, read through the Data API. The property id is the
    * number in GA4 → Admin → Detalhes da propriedade (not the G-… measurement
    * id). Without it and GA4_REFRESH_TOKEN the site section says "não

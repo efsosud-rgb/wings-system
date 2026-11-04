@@ -55,6 +55,7 @@ import { optOutsAmong, recordContactOptOut } from '../leads/contact-block.js';
 import { leadVisibleTo } from '../leads/access.js';
 import { addNote, changeLead, createTask, type Executor } from '../leads/crm.js';
 import { ForeignLeadError, upsertLead } from '../leads/service.js';
+import { lookupsFor, outcomeOf } from './instagram-finder.js';
 import { PlacesError, type PlacesClient } from './places-client.js';
 
 /**
@@ -374,6 +375,9 @@ export async function assembleSearch(
   icp: ProspectingIcp,
   /** Signs a company's @ for this seller, so the discovery route takes it (instagram-graph.ts). */
   ticketOf: (username: string) => string,
+  /** t086: signs a company for the Instagram finder; null while the finder is not wired (tests). */
+  findTicketOf: ((place: PlaceResult) => string) | null = null,
+  now: Date = new Date(),
 ): Promise<Pick<ProspectSearchResponse, 'items' | 'hidden'>> {
   const hidden = { excluded: 0, filtered: 0, heldByOthers: 0, repeated: answer.repeated };
   const units = new Map<string, number>();
@@ -435,6 +439,8 @@ export async function assembleSearch(
     if (phone) phoneCount.set(phone, (phoneCount.get(phone) ?? 0) + 1);
   }
 
+  // What the finder kept of these companies: an @ found, or why none was (no second try).
+  const lookups = await lookupsFor(db, ids, now);
   const prospectOf = new Map(saved.map((found) => [found.row.placeId, found]));
   const leadByPlace = new Map<string, (typeof leadRows)[number]>();
   const leadByPhone = new Map<string, (typeof leadRows)[number]>();
@@ -484,6 +490,14 @@ export async function assembleSearch(
         text: 'possível lead: mesmo site de uma negociação',
       });
     const enrichment = (prospect?.row.enrichment ?? {}) as ProspectEnrichment;
+    const known = instagramRefOf(enrichment, place.website, ticketOf);
+    const lookup = lookups.get(place.placeId);
+    const keptOutcome = lookup ? outcomeOf(lookup) : null;
+    const instagram =
+      known ??
+      (keptOutcome?.instagram
+        ? { ...keptOutcome.instagram, ticket: ticketOf(keptOutcome.instagram.username) }
+        : null);
     items.push({
       ...place,
       missing: missingFields(place),
@@ -492,12 +506,19 @@ export async function assembleSearch(
           rating: place.rating,
           reviews: place.reviews,
           hasWebsite: Boolean(place.website),
-          hasInstagram: Boolean(enrichment.instagram),
+          hasInstagram:
+            Boolean(enrichment.instagram) ||
+            keptOutcome?.instagram?.source === PROSPECT_ENRICHMENT_SOURCE,
           multiUnit,
         },
         icp.weights,
       ),
-      instagram: instagramRefOf(enrichment, place.website, ticketOf),
+      instagram,
+      instagramFind:
+        instagram || keptOutcome || tags.some((tag) => tag.kind === 'do_not_contact')
+          ? null
+          : (findTicketOf?.(place) ?? null),
+      instagramMiss: instagram ? null : (keptOutcome?.miss ?? null),
       tags,
       prospect: prospect
         ? {

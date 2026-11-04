@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ProspectInstagramRef } from './instagram-discovery.js';
+import type { InstagramMiss, ProspectInstagramRef } from './instagram-discovery.js';
 import { LEAD_NAME_MAX } from './leads.js';
 
 /**
@@ -142,7 +142,11 @@ export const prospectUpdateSchema = z
 export type ProspectUpdateInput = z.infer<typeof prospectUpdateSchema>;
 
 /** Enriquecer: the company's site as the live result showed it; the URL itself is never stored. */
-export const prospectEnrichSchema = z.object({ website: z.url().max(2000) });
+export const prospectEnrichSchema = z.object({
+  website: z.url().max(2000),
+  /** t086: the search item's `instagramFind` ticket, so the click can also try Meta and the web. */
+  findTicket: z.string().max(2000).optional(),
+});
 
 /**
  * Criar lead, after the first contact: what the company said, not what Google shows. Phone or
@@ -643,6 +647,10 @@ export interface ProspectSearchItem extends PlaceResult {
   icp: IcpScore;
   /** The company's Instagram when known (its site, or Google's site field), for the discovery. */
   instagram: ProspectInstagramRef | null;
+  /** t086: the ticket of the Instagram finder, while there is no @ and the finder has not tried. */
+  instagramFind: string | null;
+  /** t086: the finder tried and found no @; why, per path, and when. */
+  instagramMiss: InstagramMiss | null;
   /** Fields Google did not give: an incomplete record, flagged, never filled in. */
   missing: ProspectMissingField[];
   tags: ProspectTag[];
@@ -754,10 +762,12 @@ export type ProspectPlaceResponse =
 
 export interface ProspectEnrichResponse {
   prospect: Prospect;
-  /** Pages actually read (robots.txt allowing), at most 2. */
+  /** Pages actually read (robots.txt allowing), at most 3. */
   pagesRead: number;
   /** Why a page was not read, in Portuguese, when one was not. */
   skipped: string[];
+  /** t086: with a finder ticket and no @ found by any path, why, one sentence per path. */
+  instagramReasons?: string[];
 }
 
 // --- WhatsApp opt-in ----------------------------------------------------------
