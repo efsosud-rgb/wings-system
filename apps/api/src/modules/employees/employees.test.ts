@@ -1027,6 +1027,57 @@ describe('PATCH /employees/:id — deactivating and reactivating (security audit
     expect(signIn.statusCode).toBe(403);
   });
 
+  it('A11: stops RH/DP and Diretoria switching a Diretoria account off or back on', async () => {
+    const rh = await sessionFor({ role: 'rh_dp', sector: 'diretoria' });
+    const boss = await sessionFor({ role: 'diretoria', sector: 'diretoria' });
+    const target = await sessionFor({ role: 'diretoria', sector: 'diretoria' });
+    const former = await createEmployee(db, {
+      role: 'diretoria',
+      sector: 'diretoria',
+      status: 'inactive',
+    });
+
+    // Diretoria edits nothing but the level (no employees.update), so it is refused even earlier.
+    for (const [actorSession, code] of [
+      [rh, 'deactivate_forbidden'],
+      [boss, 'forbidden'],
+    ] as const) {
+      const off = await patch(target.employee.id, actorSession.cookies, { status: 'inactive' });
+      expect(off.statusCode).toBe(403);
+      expect(off.json().error).toBe(code);
+      if (code === 'deactivate_forbidden') expect(off.json().message).toContain('Admin Master');
+      expect(await statusOf(target.employee.id)).toBe('active');
+
+      const on = await patch(former.id, actorSession.cookies, { status: 'active' });
+      expect(on.statusCode).toBe(403);
+      expect(on.json().error).toBe(code);
+      expect(await statusOf(former.id)).toBe('inactive');
+    }
+    expect(
+      (await app.inject({ method: 'GET', url: '/auth/me', cookies: target.cookies })).statusCode,
+    ).toBe(200);
+  });
+
+  it('A11: the Admin Master still switches a Diretoria account off and back on', async () => {
+    const admin = await sessionFor({ role: 'admin_master', sector: 'diretoria' });
+    const target = await sessionFor({ role: 'diretoria', sector: 'diretoria' });
+
+    const off = await patch(target.employee.id, admin.cookies, { status: 'inactive' });
+    expect(off.statusCode).toBe(200);
+    expect(await statusOf(target.employee.id)).toBe('inactive');
+    const on = await patch(target.employee.id, admin.cookies, { status: 'active' });
+    expect(on.statusCode).toBe(200);
+    expect(await statusOf(target.employee.id)).toBe('active');
+  });
+
+  it('A11: RH/DP still switches off someone who is not on the Diretoria', async () => {
+    const rh = await sessionFor({ role: 'rh_dp', sector: 'diretoria' });
+    const seller = await sessionFor({ role: 'vendedor_expansao', sector: 'comercial' });
+    const res = await patch(seller.employee.id, rh.cookies, { status: 'inactive' });
+    expect(res.statusCode).toBe(200);
+    expect(await statusOf(seller.employee.id)).toBe('inactive');
+  });
+
   it('still lets the Gerente Comercial mark leave, which is an ordinary edit', async () => {
     const gerente = await sessionFor({ role: 'gerente_comercial', sector: 'comercial' });
     const seller = await createEmployee(db, { role: 'vendedor_expansao', sector: 'comercial' });
