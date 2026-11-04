@@ -298,6 +298,8 @@ function buildCampaigns(): DashboardCampaigns {
         startDate: '2026-09-28',
         endDate: '2026-10-02',
         ended: false,
+        delivering: true,
+        deliveryStatus: 'ACTIVE',
         lastSpendDate: '2026-09-16',
         targetCplCents: 4500,
         mirroredAt: '2026-09-28T13:00:00.000Z',
@@ -713,6 +715,40 @@ describe('campaigns', () => {
     data.campaigns = buildCampaigns();
   });
 
+  it('calls a paused campaign that spent in the last 24 h Em veiculação, with the platform status beside it', () => {
+    const base = data.campaigns.campaigns[0]!;
+    data.campaigns = {
+      ...data.campaigns,
+      campaigns: [{ ...base, status: 'PAUSED', deliveryStatus: 'PAUSED', delivering: true }],
+    };
+    renderAt('/dashboard/marketing?aba=campanhas');
+    const row = screen.getByText('LEAD | FORMS').closest('tr')!;
+    expect(text(row)).toContain('Em veiculação');
+    expect(text(row)).toContain('Status na plataforma: Pausada');
+    expect(text(row)).not.toContain('Sem veiculação');
+    cleanup();
+
+    // Zero spend and an inactive status is the only "Sem veiculação".
+    data.campaigns = {
+      ...data.campaigns,
+      campaigns: [
+        {
+          ...base,
+          status: 'PAUSED',
+          deliveryStatus: 'PAUSED',
+          delivering: false,
+          totals: EMPTY_TOTALS,
+        },
+      ],
+    };
+    renderAt('/dashboard/marketing?aba=campanhas');
+    const quiet = screen.getByText('LEAD | FORMS').closest('tr')!;
+    expect(text(quiet)).toContain('Sem veiculação');
+    expect(text(quiet)).toContain('Status na plataforma: Pausada');
+    expect(text(quiet)).not.toContain('Em veiculação');
+    data.campaigns = buildCampaigns();
+  });
+
   it('keeps the API order (newest start first), and can flip it or sort by spend', () => {
     const base = data.campaigns.campaigns[0]!;
     const search = {
@@ -759,6 +795,8 @@ describe('campaigns', () => {
       startDate: '2026-09-29',
       endDate: '2026-10-09',
       ended: true,
+      delivering: false,
+      deliveryStatus: 'ENDED',
       lastSpendDate: '2026-10-09',
       totals: EMPTY_TOTALS,
       adSets: [],
@@ -778,7 +816,9 @@ describe('campaigns', () => {
     expect(names()).toEqual(['LEAD | FORMS', 'SEARCH | Formatação | Alta Intenção | Set26']);
 
     const row = screen.getByText('SEARCH | Formatação | Alta Intenção | Set26').closest('tr')!;
-    expect(text(row)).toContain('Encerrada');
+    expect(text(row)).toContain('Sem veiculação');
+    expect(text(row)).toContain('Status na plataforma: Encerrada');
+    expect(text(row)).not.toContain('Em veiculação');
     expect(text(row)).not.toContain('Ativa');
     expect(text(row)).toContain('Sem veiculação nos últimos 7 dias · último gasto em 09/10');
     expect(text(row)).not.toContain('R$ 0,00');
@@ -786,14 +826,17 @@ describe('campaigns', () => {
     expect(within(row).queryByRole('button', { name: 'Retomar' })).toBeNull();
     // The one that delivered keeps its figures and its Pausar.
     const live = screen.getByText('LEAD | FORMS').closest('tr')!;
-    expect(text(live)).toContain('Ativa');
+    expect(text(live)).toContain('Em veiculação');
+    expect(text(live)).toContain('Status na plataforma: Ativa');
     expect(within(live).getByRole('button', { name: 'Pausar' })).toBeTruthy();
     cleanup();
 
     // Never spent: no "último gasto".
     data.campaigns = {
       ...data.campaigns,
-      campaigns: [{ ...ended, ended: false, lastSpendDate: null, status: 'PAUSED' }],
+      campaigns: [
+        { ...ended, ended: false, lastSpendDate: null, status: 'PAUSED', deliveryStatus: 'PAUSED' },
+      ],
     };
     renderAt('/dashboard/marketing?aba=campanhas');
     const quiet = screen.getByText('SEARCH | Formatação | Alta Intenção | Set26').closest('tr')!;

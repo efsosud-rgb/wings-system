@@ -64,6 +64,15 @@ export const STATUS_LABEL: Record<string, string> = {
   PAUSED: 'Pausada',
   DELETED: 'Excluída',
   ARCHIVED: 'Arquivada',
+  // What the platforms report as the delivery status, shown beside "Em veiculação".
+  CAMPAIGN_PAUSED: 'Pausada',
+  ADSET_PAUSED: 'Conjunto pausado',
+  SERVING: 'Ativa',
+  ENDED: 'Encerrada',
+  WITH_ISSUES: 'Com problemas',
+  IN_PROCESS: 'Em processamento',
+  PENDING_REVIEW: 'Em análise',
+  DISAPPROVED: 'Reprovada',
 };
 
 export function statusLabel(status: string): string {
