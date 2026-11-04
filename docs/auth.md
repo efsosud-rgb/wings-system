@@ -99,6 +99,14 @@ e-mail de login controla a conta (o "esqueci minha senha" vai para ele), então:
 - **Inativar ou reativar exige `employees.deactivate`** sobre o setor da pessoa
   (`statusChangeDenial`); editar o cadastro não basta. Ativo ↔ afastado continua
   uma edição comum. Recusa: `403 deactivate_forbidden`.
+- **Regra A11 (decidida pelo Eric em 29/10/2026): só o Admin Master inativa ou
+  reativa uma conta da Diretoria.** Mesma régua da troca do e-mail de login
+  dela: o RH/DP, a própria Diretoria e qualquer papel que não seja Admin Master
+  recebem `403 deactivate_forbidden` (mensagem: "Só um Admin Master inativa ou
+  reativa uma conta da Diretoria."; internamente `diretoria_account` em
+  `statusChangeDenial`). Vale para inativar e para reativar; ativo ↔ afastado
+  segue como edição comum. A tela de Usuários mostra a mesma frase junto do
+  campo Status e só oferece o status atual.
 - **Auditoria de 27/10/2026 (A2 e A3).** Quem não tem `employees.assign_roles`
   (gestor de setor, Gerente Comercial) só atribui um nível abaixo do seu **se já
   tiver todas as permissões desse nível, com escopo igual ou maior**: um nível

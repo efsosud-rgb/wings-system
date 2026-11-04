@@ -461,6 +461,39 @@ describe('statusChangeDenial — switching someone off or back on', () => {
   });
 });
 
+describe('audit rule A11 (2026-10-29) — only an Admin Master switches a Diretoria account off or on', () => {
+  const aDiretoria = { sector: 'diretoria', currentRole: 'diretoria' } as const;
+
+  it('refuses RH/DP and Diretoria itself, in both directions', () => {
+    expect(statusChangeDenial(rhDp, aDiretoria, 'active', 'inactive')).toBe('diretoria_account');
+    expect(statusChangeDenial(rhDp, aDiretoria, 'inactive', 'active')).toBe('diretoria_account');
+    expect(statusChangeDenial(rhDp, aDiretoria, 'on_leave', 'inactive')).toBe('diretoria_account');
+    // Diretoria holds no employees.deactivate at all, so it is refused earlier than A11.
+    expect(statusChangeDenial(diretor, aDiretoria, 'active', 'inactive')).not.toBeNull();
+    expect(statusChangeDenial(diretor, aDiretoria, 'inactive', 'active')).not.toBeNull();
+  });
+
+  it('refuses a flagged manager too: any role but Admin Master', () => {
+    const flagged = actor('gerente_comercial', 'comercial', { id: 'emp-ger-mgr', manager: true });
+    expect(
+      statusChangeDenial(flagged, { sector: 'comercial', currentRole: 'diretoria' }, 'active', 'inactive'),
+    ).not.toBeNull();
+  });
+
+  it('lets the Admin Master do it', () => {
+    expect(statusChangeDenial(adminMaster, aDiretoria, 'active', 'inactive')).toBeNull();
+    expect(statusChangeDenial(adminMaster, aDiretoria, 'inactive', 'active')).toBeNull();
+  });
+
+  it('leaves active ↔ on leave an ordinary edit, and other levels to RH/DP', () => {
+    expect(statusChangeDenial(rhDp, aDiretoria, 'active', 'on_leave')).toBeNull();
+    expect(statusChangeDenial(rhDp, aDiretoria, 'inactive', 'inactive')).toBeNull();
+    expect(
+      statusChangeDenial(rhDp, { sector: 'comercial', currentRole: 'gerente_comercial' }, 'active', 'inactive'),
+    ).toBeNull();
+  });
+});
+
 describe('security audit 2026-10-27 — powers the manager lacks (A2) and people above (A3)', () => {
   const comercial = { sector: 'comercial' } as const;
 
