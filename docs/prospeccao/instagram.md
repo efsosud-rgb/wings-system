@@ -81,7 +81,7 @@ Toda tela que não conseguir carregar mostra "—" e o motivo (`components/LoadF
 
 1. A vendedora busca no Google como hoje. Para cada resultado, a API diz se a empresa tem Instagram conhecido, por uma destas fontes, nesta ordem:
    - o Instagram que o **site da própria empresa** mostrou (`prospects.enrichment.instagram`, guardado com `source: 'site da empresa'` e a data);
-   - o **site informado no Google** quando ele é um perfil `instagram.com/<@>` (lido ao vivo da resposta do Google; o @ tirado dele **não** é gravado ligado ao `place_id`, regra "Só o `place_id` é guardado" em `docs/crm/prospeccao.md`).
+   - o **site informado no Google** quando ele é um perfil `instagram.com/<@>` (lido ao vivo da resposta do Google; o @ tirado dele **não** é gravado ligado ao `place_id` e também não abre preenchido no "Criar lead" (`prospectLeadDefaults` só usa a fonte `'site da empresa'`), regra "Só o `place_id` é guardado" em `docs/crm/prospeccao.md`).
 2. A tela recebe a lista e pede, numa segunda chamada (`POST /prospecting/instagram/discovery`, até 20 @ por vez), os números do Instagram. A API devolve o que estiver no cache (§2.2, `instagram_business_snapshots`, até 7 dias) e chama a Business Discovery só para o resto, dentro do limite (§6.4).
 3. A coluna **Instagram** mostra seguidores, posts, média de curtidas e comentários dos posts recentes e a data da leitura ("Meta, lido em DD/MM"). Sem dado: "—" e o motivo (§6.5). A **nota de 0 a 100** (§6.3) passa a ordenar a lista; o detalhe mostra cada critério que contou.
 4. Nenhuma pessoa física passa pela Business Discovery: ela só é chamada para o @ de uma empresa vinda da busca do Google, nunca para o @ de quem comentou (partes 1 e 2), regra da spec PA (anexo 1, §2.10).

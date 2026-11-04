@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { INSTAGRAM_FROM_GOOGLE_SITE } from './instagram-discovery.js';
 import {
   DEFAULT_ICP_WEIGHTS,
   excludedName,
   icpScore,
   missingFields,
   nameKey,
+  PROSPECT_ENRICHMENT_SOURCE,
   prospectApproachSchema,
   prospectBatchSchema,
   prospectClaimSchema,
@@ -369,9 +371,13 @@ describe('prospectLeadDefaults', () => {
     instagram: { value: 'empresateste', source: 'site da empresa', at: '2026-10-26' },
   } as const;
 
+  // The search row's @ as the screen gets it: from the company's own site (ours) or from Google.
+  const ownRow = (username: string) => ({ username, source: PROSPECT_ENRICHMENT_SOURCE });
+  const googleRow = (username: string) => ({ username, source: INSTAGRAM_FROM_GOOGLE_SITE });
+
   it("keeps Google's name, phone and site out of the form until Eric decides", () => {
     expect(PROSPECT_LEAD_PREFILL_FROM_GOOGLE).toBe(false);
-    const defaults = prospectLeadDefaults(place, site, { username: 'outro' });
+    const defaults = prospectLeadDefaults(place, site, ownRow('outro'));
     expect(defaults).toEqual({
       companyName: '',
       phone: '',
@@ -385,7 +391,7 @@ describe('prospectLeadDefaults', () => {
   });
 
   it('can start with the Google row too, ready for the day the rule changes', () => {
-    expect(prospectLeadDefaults(place, site, { username: 'outro' }, true)).toEqual({
+    expect(prospectLeadDefaults(place, site, ownRow('outro'), true)).toEqual({
       companyName: 'Empresa Teste',
       phone: '(21) 90000-0001',
       email: 'contato@exemplo.com.br',
@@ -399,9 +405,7 @@ describe('prospectLeadDefaults', () => {
       prospectLeadDefaults(
         { name: null, phone: null, website: 'javascript:alert(1)' },
         {},
-        {
-          username: 'empresateste',
-        },
+        ownRow('empresateste'),
         true,
       ),
     ).toEqual({ companyName: '', phone: '', email: '', instagram: '@empresateste', website: '' });
@@ -412,6 +416,19 @@ describe('prospectLeadDefaults', () => {
       instagram: '',
       website: '',
     });
+  });
+
+  it("never starts the form with the @ Google's site field showed, whatever the fallback", () => {
+    // `instagram.com/<@>` as the company's site on Maps: live Google data, not ours (not stored).
+    for (const fromGoogle of [false, true]) {
+      expect(prospectLeadDefaults(place, {}, googleRow('perfilgoogle'), fromGoogle).instagram).toBe(
+        '',
+      );
+      // What the company's own site showed still wins over the Google one, and stays.
+      expect(
+        prospectLeadDefaults(place, site, googleRow('perfilgoogle'), fromGoogle).instagram,
+      ).toBe('empresateste');
+    }
   });
 
   it('needs the seller to type the company: the schema refuses the form without it', () => {

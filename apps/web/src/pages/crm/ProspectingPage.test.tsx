@@ -1,4 +1,5 @@
 import {
+  INSTAGRAM_FROM_GOOGLE_SITE,
   PROSPECT_ENRICHMENT_SOURCE,
   type ProspectingUsage,
   type ProspectSearchItem,
@@ -507,6 +508,61 @@ describe('Prospecção: reservar, criar lead e Meus prospects', () => {
     const body = JSON.stringify(sent);
     for (const google of ['Hamburgueria Exemplo', '90000-0001', 'hamburgueria-exemplo.com.br'])
       expect(body).not.toContain(google);
+  });
+
+  it("does not start Criar lead with the @ that Google's site field showed", async () => {
+    const reservedProspect = {
+      id: 'p1',
+      placeId: 'ChIJ_fake_place_0001',
+      status: 'reservado',
+      ownerEmployeeId: 'e1',
+      ownerName: 'Vendedora Teste',
+      mine: true,
+      reason: null,
+      notes: null,
+      enrichment: {},
+      leadId: null,
+      createdAt: '2026-10-26T12:00:00Z',
+      updatedAt: '2026-10-26T12:00:00Z',
+    };
+    post.mockImplementation(async (path: string) => {
+      if (path === '/prospecting/search')
+        return answer({
+          items: [
+            item({
+              website: 'https://www.instagram.com/perfilgoogle/',
+              instagram: {
+                username: 'perfilgoogle',
+                source: INSTAGRAM_FROM_GOOGLE_SITE,
+                at: null,
+                ticket: 't',
+              },
+            }),
+          ],
+        });
+      if (path === '/prospecting/prospects') return reservedProspect;
+      if (path === '/prospecting/prospects/p1/lead') return { leadId: 'l7' };
+      throw new Error(`unexpected POST ${path}`);
+    });
+    const results = await searchOnce();
+    fireEvent.click(within(results).getByRole('button', { name: 'Reservar' }));
+    fireEvent.click(await within(results).findByRole('button', { name: 'Criar lead' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Criar lead no funil Formatação' });
+    expect((within(dialog).getByLabelText('Instagram') as HTMLInputElement).value).toBe('');
+
+    // Saving without typing the @ sends no Instagram at all: nothing of Google's goes to the lead.
+    fireEvent.change(within(dialog).getByLabelText('Empresa'), { target: { value: 'Empresa X' } });
+    fireEvent.change(within(dialog).getByLabelText('Telefone'), {
+      target: { value: '(21) 90000-0009' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Contato'), { target: { value: 'Ana Teste' } });
+    fireEvent.click(within(dialog).getByLabelText('Não'));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Criar lead' }));
+    expect(await within(results).findByRole('link', { name: 'Abrir negociação' })).toBeTruthy();
+    const sent = post.mock.calls.find(([path]) => String(path).endsWith('/lead'))?.[1];
+    expect(sent).toEqual(expect.objectContaining({ companyName: 'Empresa X', instagram: '' }));
+    expect(JSON.stringify(sent)).not.toContain('perfilgoogle');
   });
 
   it('keeps the results when the seller looks at Meus prospects and comes back', async () => {

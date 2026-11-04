@@ -189,23 +189,27 @@ export const PROSPECT_LEAD_PREFILL_FROM_GOOGLE = false;
 
 /**
  * What the Criar lead form starts with: what the company's own site showed (e-mail, Instagram)
- * and the @ of the search row, which are ours; the company's name, phone and site from the live
- * Google answer only when `fromGoogle` (see above). Every field stays editable, nothing is sent
- * until the seller confirms the form, and a value nobody gave stays empty, never guessed.
+ * and the @ of the search row when that @ also came from the company's own site, which are ours;
+ * the company's name, phone and site from the live Google answer only when `fromGoogle` (see
+ * above). The @ that Google's site field showed (`INSTAGRAM_FROM_GOOGLE_SITE`) is Google's data
+ * like the rest: it stays a line of the search, never a value of the form. Every field stays
+ * editable, nothing is sent until the seller confirms the form, and a value nobody gave stays
+ * empty, never guessed.
  */
 export function prospectLeadDefaults(
   place: Pick<PlaceResult, 'name' | 'phone' | 'website'> | null,
   enrichment: ProspectEnrichment,
-  instagram: Pick<ProspectInstagramRef, 'username'> | null = null,
+  instagram: Pick<ProspectInstagramRef, 'username' | 'source'> | null = null,
   fromGoogle: boolean = PROSPECT_LEAD_PREFILL_FROM_GOOGLE,
 ) {
   const text = (value: string | null | undefined) => value?.trim() ?? '';
   const google = fromGoogle ? place : null;
+  const ownRow = instagram?.source === PROSPECT_ENRICHMENT_SOURCE ? instagram : null;
   return {
     companyName: text(google?.name),
     phone: text(google?.phone),
     email: text(enrichment.email?.value),
-    instagram: text(enrichment.instagram?.value) || (instagram ? `@${instagram.username}` : ''),
+    instagram: text(enrichment.instagram?.value) || (ownRow ? `@${ownRow.username}` : ''),
     website: /^https?:\/\//i.test(text(google?.website)) ? text(google?.website) : '',
   };
 }
