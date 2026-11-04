@@ -11,6 +11,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import {
   useAgendaEvents,
   useAgendaOverview,
+  useChangeCrmMeeting,
   useDeleteAgendaEvent,
   usePastedMeetings,
 } from '../api/agenda.js';
@@ -18,6 +19,7 @@ import { hasPermission, useSession } from '../api/auth.js';
 import { ApiError } from '../api/client.js';
 import { AgendaSidebar } from '../components/agenda/AgendaSidebar.js';
 import { ConfirmDialog } from '../components/agenda/ConfirmDialog.js';
+import { CrmMeetingEditor } from '../components/agenda/CrmMeetingEditor.js';
 import { EventDetails } from '../components/agenda/EventDetails.js';
 import { defaultSlot, EventForm, type EventFormTarget } from '../components/agenda/EventForm.js';
 import { titleOf } from '../components/agenda/format.js';
@@ -273,8 +275,15 @@ function AgendaWorkspace({ overview }: { overview: AgendaOverview }) {
     event: AgendaEvent;
     returnFocus: HTMLElement | null;
   } | null>(null);
+  const [crmEdit, setCrmEdit] = useState<{
+    meetingId: string;
+    returnFocus: HTMLElement | null;
+  } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const remove = useDeleteAgendaEvent();
+  const removeMeeting = useChangeCrmMeeting();
+  // A deal's meeting is deleted through its own route, any other event through the Agenda's.
+  const removal = confirm?.event.crm ? removeMeeting : remove;
   // The sellers only read here (Eric, 19/10); the API refuses their writes all the same.
   const canWrite = hasPermission(useSession().data, 'calendar.write');
 
@@ -678,14 +687,18 @@ function AgendaWorkspace({ overview }: { overview: AgendaOverview }) {
           onClose={() => setDetails(null)}
           readOnly={!canWrite}
           onEdit={() => {
-            setForm({
-              target: { kind: 'edit', event: details.event },
-              returnFocus: details.anchor,
-            });
+            const meetingId = details.event.crm?.meetingId;
+            if (meetingId) setCrmEdit({ meetingId, returnFocus: details.anchor });
+            else
+              setForm({
+                target: { kind: 'edit', event: details.event },
+                returnFocus: details.anchor,
+              });
             setDetails(null);
           }}
           onDelete={() => {
             remove.reset();
+            removeMeeting.reset();
             setConfirm({ event: details.event, returnFocus: details.anchor });
             setDetails(null);
           }}
@@ -699,29 +712,51 @@ function AgendaWorkspace({ overview }: { overview: AgendaOverview }) {
           onClose={() => setForm(null)}
         />
       )}
+      {crmEdit && (
+        <CrmMeetingEditor
+          meetingId={crmEdit.meetingId}
+          returnFocus={crmEdit.returnFocus}
+          onClose={() => setCrmEdit(null)}
+        />
+      )}
       {confirm && (
         <ConfirmDialog
           title={`Excluir “${titleOf(confirm.event)}”?`}
           confirmLabel="Excluir"
           busyLabel="Excluindo…"
-          busy={remove.isPending}
+          busy={removal.isPending}
           error={
-            remove.error
-              ? remove.error instanceof ApiError
-                ? remove.error.message
-                : `Não foi possível excluir: ${failureReason(remove.error)}.`
+            removal.error
+              ? removal.error instanceof ApiError
+                ? removal.error.message
+                : `Não foi possível excluir: ${failureReason(removal.error)}.`
               : null
           }
           returnFocus={confirm.returnFocus}
           onCancel={() => setConfirm(null)}
-          onConfirm={() =>
-            remove.mutate(
-              { calendar: confirm.event.calendar, id: confirm.event.id },
-              { onSuccess: () => setConfirm(null) },
-            )
-          }
+          onConfirm={() => {
+            const meetingId = confirm.event.crm?.meetingId;
+            // A deal's meeting is cancelled through its own route: Google, the deal and the trail follow.
+            if (meetingId)
+              removeMeeting.mutate(
+                { meetingId, patch: { status: 'cancelada' } },
+                { onSuccess: () => setConfirm(null) },
+              );
+            else
+              remove.mutate(
+                { calendar: confirm.event.calendar, id: confirm.event.id },
+                { onSuccess: () => setConfirm(null) },
+              );
+          }}
         >
-          {confirm.event.guestsNotified ? (
+          {confirm.event.crm ? (
+            <p>
+              {confirm.event.htmlLink
+                ? 'A reunião sai do Google Agenda e os convidados são avisados. '
+                : ''}
+              A negociação guarda o registro do cancelamento.
+            </p>
+          ) : confirm.event.guestsNotified ? (
             <p>Os convidados recebem o cancelamento por e-mail.</p>
           ) : (
             !confirm.event.organizer?.self &&

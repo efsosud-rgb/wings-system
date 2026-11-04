@@ -5,6 +5,8 @@ import type {
   AgendaEventPatch,
   AgendaEventsAnswer,
   AgendaOverview,
+  Meeting,
+  MeetingUpdateInput,
 } from '@wings/shared';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client.js';
@@ -84,5 +86,26 @@ export function useDeleteAgendaEvent() {
     mutationFn: (input: { calendar: AgendaCalendarKey; id: string }) =>
       api.delete<unknown>(eventPath(input.calendar, input.id)),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: AGENDA_EVENTS_KEY }),
+  });
+}
+
+/**
+ * Edit or delete a deal's meeting from its Agenda card: the meeting's own route (the deal page's
+ * Remarcar and Cancelar use it too), which mirrors the change on Google and writes the deal's
+ * trail. The Agenda's event routes refuse a CRM meeting; this is the way.
+ */
+export function useChangeCrmMeeting() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { meetingId: string; patch: MeetingUpdateInput }) =>
+      api
+        .patch<{ meeting: Meeting }>(`/meetings/${input.meetingId}`, input.patch)
+        .then((r) => r.meeting),
+    onSuccess: (meeting) => {
+      void queryClient.invalidateQueries({ queryKey: AGENDA_EVENTS_KEY });
+      void queryClient.invalidateQueries({ queryKey: ['agenda', 'crm-meetings'] });
+      void queryClient.invalidateQueries({ queryKey: ['meetings', meeting.id] });
+      void queryClient.invalidateQueries({ queryKey: ['leads', meeting.leadId, 'meetings'] });
+    },
   });
 }

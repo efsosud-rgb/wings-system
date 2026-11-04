@@ -21,7 +21,8 @@ const NARROW_PX = 700;
 /**
  * An event's details, as the Google Agenda shows them: a card beside the
  * event on a wide screen, a centered dialog on a phone. Edit and delete only
- * when the person may (`canEdit`); a CRM meeting points to its deal instead. `readOnly`: the
+ * when the person may (`canEdit`, or `crm.canManage` for a deal's meeting, which the page changes
+ * through the meeting's own route); a CRM meeting also points to its deal. `readOnly`: the
  * person has no `calendar.write` (the sellers) and schedules from the deal.
  */
 export function EventDetails({
@@ -90,7 +91,7 @@ export function EventDetails({
         style={place ?? undefined}
       >
         <div className="agenda-details-tools">
-          {event.canEdit && (
+          {(event.canEdit || event.crm?.canManage) && (
             <>
               <button
                 type="button"

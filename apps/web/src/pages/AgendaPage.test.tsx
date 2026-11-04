@@ -99,6 +99,17 @@ const event = (over: Partial<AgendaEvent> = {}): AgendaEvent => ({
   ...over,
 });
 
+/** The deal's meeting the card's editor reads (GET /meetings/:id), as the API answers it. */
+const crmMeeting = {
+  id: 'm1',
+  leadId: 'lead-1',
+  title: 'Diagnóstico',
+  startsAt: '2026-10-14T12:00:00.000Z',
+  endsAt: '2026-10-14T13:00:00.000Z',
+  googleEventId: 'g1',
+  attendees: [{ email: 'socio@exemplo.com', name: null, responseStatus: null }],
+};
+
 function serve(
   view: AgendaOverview | Error,
   answer: AgendaEventsAnswer | Error = { events: [], failures: [], truncated: false },
@@ -106,6 +117,7 @@ function serve(
 ) {
   get.mockImplementation((path: string) => {
     if (path === '/auth/me') return Promise.resolve({ user: me });
+    if (path.startsWith('/meetings/')) return Promise.resolve({ meeting: crmMeeting });
     if (path.startsWith('/agenda/crm-meetings?')) {
       return pasted instanceof Error ? Promise.reject(pasted) : Promise.resolve({ events: pasted });
     }
@@ -306,7 +318,7 @@ describe('Agenda — meetings pasted from the deal', () => {
       start: '2026-10-15T12:00:00.000Z',
       end: '2026-10-15T13:00:00.000Z',
       canEdit: false,
-      crm: { leadId: 'lead-1' },
+      crm: { leadId: 'lead-1', meetingId: null, canManage: false },
       ...over,
     });
   const section = () => screen.findByRole('region', { name: 'Reuniões marcadas pela ficha' });
@@ -314,7 +326,12 @@ describe('Agenda — meetings pasted from the deal', () => {
   it('lists them under the connect notice for the next 30 days when Google is not connected', async () => {
     serve(overview({ state: 'not_connected', calendars: [] }), undefined, [
       pastedEvent(),
-      pastedEvent({ id: 'crm-m2', uid: 'crm-m2', title: '', crm: { leadId: null } }),
+      pastedEvent({
+        id: 'crm-m2',
+        uid: 'crm-m2',
+        title: '',
+        crm: { leadId: null, meetingId: null, canManage: false },
+      }),
     ]);
     renderPage();
     expect(await screen.findByText(AGENDA_NOTICES.notConnected)).toBeTruthy();
@@ -435,7 +452,12 @@ describe('Agenda — details', () => {
   });
 
   it('a CRM meeting opens its deal and offers no edit or delete', async () => {
-    serve(overview(), answerWith(event({ canEdit: false, crm: { leadId: 'lead-1' } })));
+    serve(
+      overview(),
+      answerWith(
+        event({ canEdit: false, crm: { leadId: 'lead-1', meetingId: null, canManage: false } }),
+      ),
+    );
     renderPage();
     fireEvent.click(await screen.findByRole('button', { name: MEETING }));
     const card = screen.getByRole('dialog');
@@ -445,6 +467,123 @@ describe('Agenda — details', () => {
       '/crm-vendas/negociacoes/lead-1',
     );
     expect(within(card).queryByRole('button', { name: /Editar|Excluir/ })).toBeNull();
+  });
+});
+
+describe('Agenda — a deal’s meeting: edit and delete from the card', () => {
+  const manageable = () =>
+    event({
+      id: 'g1',
+      canEdit: false,
+      crm: { leadId: 'lead-1', meetingId: 'm1', canManage: true },
+    });
+  const open = async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: MEETING }));
+    return screen.getByRole('dialog');
+  };
+
+  it('offers Editar and Excluir to who may change the meeting, even without calendar.write', async () => {
+    me = SELLER;
+    serve(overview(), answerWith(manageable()));
+    const card = await open();
+    expect(within(card).getByRole('button', { name: 'Editar evento' })).toBeTruthy();
+    expect(within(card).getByRole('button', { name: 'Excluir evento' })).toBeTruthy();
+    expect(within(card).getByRole('link', { name: 'Abrir negociação' })).toBeTruthy();
+  });
+
+  it('deletes through the meeting route after asking, and leaves the Agenda event routes alone', async () => {
+    serve(overview(), answerWith(manageable()));
+    patch.mockResolvedValue({ meeting: crmMeeting });
+    const card = await open();
+    fireEvent.click(within(card).getByRole('button', { name: 'Excluir evento' }));
+    const ask = screen.getByRole('alertdialog');
+    expect(patch).not.toHaveBeenCalled();
+    expect(within(ask).getByText(/negociação guarda o registro/)).toBeTruthy();
+    fireEvent.click(within(ask).getByRole('button', { name: 'Excluir' }));
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith('/meetings/m1', { status: 'cancelada' }),
+    );
+    expect(del).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+  });
+
+  it('shows the refusal and keeps the question open when the meeting cannot be deleted', async () => {
+    serve(overview(), answerWith(manageable()));
+    patch.mockRejectedValue(
+      new ApiError(502, { error: 'google_sync_failed', message: 'O Google não aceitou.' }),
+    );
+    const card = await open();
+    fireEvent.click(within(card).getByRole('button', { name: 'Excluir evento' }));
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Excluir' }),
+    );
+    expect(await screen.findByText('O Google não aceitou.')).toBeTruthy();
+    expect(screen.getByRole('alertdialog')).toBeTruthy();
+  });
+
+  it('edits title, time and guests with the meeting’s own route, sending only what changed', async () => {
+    serve(overview(), answerWith(manageable()));
+    patch.mockResolvedValue({ meeting: crmMeeting });
+    const card = await open();
+    fireEvent.click(within(card).getByRole('button', { name: 'Editar evento' }));
+    const form = await screen.findByRole('dialog', { name: 'Editar reunião' });
+    const title = await within(form).findByDisplayValue('Diagnóstico');
+    expect(within(form).getByText('socio@exemplo.com')).toBeTruthy();
+    fireEvent.change(title, { target: { value: 'Diagnóstico com o sócio' } });
+    const guest = within(form).getByPlaceholderText('Adicionar convidados (e-mail)');
+    fireEvent.change(guest, { target: { value: 'novo@exemplo.com' } });
+    fireEvent.keyDown(guest, { key: 'Enter' });
+    fireEvent.click(within(form).getByRole('button', { name: 'Salvar' }));
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+    expect(patch).toHaveBeenCalledWith('/meetings/m1', {
+      title: 'Diagnóstico com o sócio',
+      attendees: [{ email: 'socio@exemplo.com' }, { email: 'novo@exemplo.com' }],
+    });
+    expect(post).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Editar reunião' })).toBeNull(),
+    );
+  });
+
+  it('offers to change only the system when Google refuses, and does not close', async () => {
+    serve(overview(), answerWith(manageable()));
+    patch.mockRejectedValueOnce(
+      new ApiError(502, { error: 'google_sync_failed', message: 'O Google não aceitou.' }),
+    );
+    patch.mockResolvedValue({ meeting: crmMeeting });
+    const card = await open();
+    fireEvent.click(within(card).getByRole('button', { name: 'Editar evento' }));
+    const form = await screen.findByRole('dialog', { name: 'Editar reunião' });
+    fireEvent.change(await within(form).findByDisplayValue('Diagnóstico'), {
+      target: { value: 'Outro título' },
+    });
+    fireEvent.click(within(form).getByRole('button', { name: 'Salvar' }));
+    expect(await within(form).findByText('O Google não aceitou.')).toBeTruthy();
+    fireEvent.click(within(form).getByRole('button', { name: 'Mudar só no sistema' }));
+    await waitFor(() =>
+      expect(patch).toHaveBeenLastCalledWith('/meetings/m1', {
+        title: 'Outro título',
+        skipGoogle: true,
+      }),
+    );
+  });
+
+  it('shows nothing to change for who may not, and Editar does not touch the Agenda event routes', async () => {
+    serve(
+      overview(),
+      answerWith(
+        event({
+          id: 'g1',
+          canEdit: false,
+          crm: { leadId: 'lead-1', meetingId: null, canManage: false },
+        }),
+      ),
+    );
+    const card = await open();
+    expect(within(card).queryByRole('button', { name: /Editar|Excluir/ })).toBeNull();
+    expect(patch).not.toHaveBeenCalled();
+    expect(del).not.toHaveBeenCalled();
   });
 });
 
@@ -773,7 +912,12 @@ describe('Agenda — a level without calendar.write (the sellers)', () => {
 
   it('still points a CRM meeting to its deal, with the deal’s note instead of the read-only one', async () => {
     me = SELLER;
-    serve(overview(), answerWith(event({ canEdit: false, crm: { leadId: 'lead-1' } })));
+    serve(
+      overview(),
+      answerWith(
+        event({ canEdit: false, crm: { leadId: 'lead-1', meetingId: null, canManage: false } }),
+      ),
+    );
     renderPage();
     fireEvent.click(await screen.findByRole('button', { name: OPEN_EVENT }));
     const card = screen.getByRole('dialog');
