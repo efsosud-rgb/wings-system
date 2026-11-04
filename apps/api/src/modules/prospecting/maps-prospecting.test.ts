@@ -571,7 +571,12 @@ describe('the whole way: search → qualify → review → import → owner → 
       .select()
       .from(auditLog)
       .where(and(eq(auditLog.action, 'prospect.converted'), eq(auditLog.entityId, prospectId)));
-    expect(converted?.metadata).toMatchObject({ leadId, created: true, followUp: true });
+    expect(converted?.metadata).toMatchObject({
+      leadId,
+      created: true,
+      followUp: true,
+      followUpTask: true,
+    });
     const metrics = (await call(sellerA, 'GET', '/prospecting/metrics')).json<ProspectingMetrics>();
     expect(metrics.byStatus.virou_lead).toBe(1);
     // Nothing of Google's anywhere it was written.

@@ -687,6 +687,7 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
         leadId: outcome.leadId,
         created: outcome.created,
         followUp: Boolean(body.data.followUpAt),
+        followUpTask: outcome.followUpTask,
       },
     });
     return reply.status(outcome.created ? 201 : 200).send({ leadId: outcome.leadId });

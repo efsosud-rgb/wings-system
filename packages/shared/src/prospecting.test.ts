@@ -1,15 +1,19 @@
 import { describe, expect, it } from 'vitest';
+import { INSTAGRAM_FROM_GOOGLE_SITE, type ProspectInstagramRef } from './instagram-discovery.js';
 import {
   DEFAULT_ICP_WEIGHTS,
   excludedName,
   icpScore,
   missingFields,
   nameKey,
+  PROSPECT_ENRICHMENT_SOURCE,
   prospectApproachSchema,
   prospectBatchSchema,
   prospectClaimSchema,
   prospectingIcpSchema,
   prospectingRetentionSchema,
+  PROSPECT_LEAD_PREFILL_FROM_GOOGLE,
+  prospectLeadDefaults,
   prospectLeadSchema,
   reservationExpiresAt,
   prospectSearchSchema,
@@ -352,5 +356,102 @@ describe('retention', () => {
     );
     for (const status of ['descartado', 'virou_lead', 'nao_contatar'] as const)
       expect(reservationExpiresAt({ status, updatedAt }, ok)).toBeNull();
+  });
+});
+
+describe('prospectLeadDefaults', () => {
+  const place = {
+    name: ' Empresa Teste ',
+    phone: '(21) 90000-0001',
+    website: 'https://exemplo.com.br/',
+  };
+
+  const site = {
+    email: { value: 'contato@exemplo.com.br', source: 'site da empresa', at: '2026-10-26' },
+    instagram: { value: 'empresateste', source: 'site da empresa', at: '2026-10-26' },
+  } as const;
+
+  // The search row's @ as the screen gets it: from the company's own site (ours) or from Google.
+  const ownRow = (username: string): Pick<ProspectInstagramRef, 'username' | 'source'> => ({
+    username,
+    source: PROSPECT_ENRICHMENT_SOURCE,
+  });
+  const googleRow = (username: string): Pick<ProspectInstagramRef, 'username' | 'source'> => ({
+    username,
+    source: INSTAGRAM_FROM_GOOGLE_SITE,
+  });
+
+  it("keeps Google's name, phone and site out of the form until Eric decides", () => {
+    expect(PROSPECT_LEAD_PREFILL_FROM_GOOGLE).toBe(false);
+    const defaults = prospectLeadDefaults(place, site, ownRow('outro'));
+    expect(defaults).toEqual({
+      companyName: '',
+      phone: '',
+      email: 'contato@exemplo.com.br',
+      instagram: 'empresateste',
+      website: '',
+    });
+    const values = Object.values(defaults).join(' ');
+    for (const google of [place.name.trim(), place.phone, place.website])
+      expect(values).not.toContain(google);
+  });
+
+  it('can start with the Google row too, ready for the day the rule changes', () => {
+    expect(prospectLeadDefaults(place, site, ownRow('outro'), true)).toEqual({
+      companyName: 'Empresa Teste',
+      phone: '(21) 90000-0001',
+      email: 'contato@exemplo.com.br',
+      instagram: 'empresateste',
+      website: 'https://exemplo.com.br/',
+    });
+  });
+
+  it("falls back to the search row's Instagram and leaves missing data empty, never guessed", () => {
+    expect(
+      prospectLeadDefaults(
+        { name: null, phone: null, website: 'javascript:alert(1)' },
+        {},
+        ownRow('empresateste'),
+        true,
+      ),
+    ).toEqual({ companyName: '', phone: '', email: '', instagram: '@empresateste', website: '' });
+    expect(prospectLeadDefaults(null, {})).toEqual({
+      companyName: '',
+      phone: '',
+      email: '',
+      instagram: '',
+      website: '',
+    });
+  });
+
+  it("never starts the form with the @ Google's site field showed, whatever the fallback", () => {
+    // `instagram.com/<@>` as the company's site on Maps: live Google data, not ours (not stored).
+    for (const fromGoogle of [false, true]) {
+      expect(prospectLeadDefaults(place, {}, googleRow('perfilgoogle'), fromGoogle).instagram).toBe(
+        '',
+      );
+      // What the company's own site showed still wins over the Google one, and stays.
+      expect(
+        prospectLeadDefaults(place, site, googleRow('perfilgoogle'), fromGoogle).instagram,
+      ).toBe('empresateste');
+    }
+  });
+
+  it('needs the seller to type the company: the schema refuses the form without it', () => {
+    const contact = { contactName: 'Pessoa Teste', whatsappOptIn: false };
+    const blank = prospectLeadSchema.safeParse({ ...prospectLeadDefaults(place, {}), ...contact });
+    expect(blank.success).toBe(false);
+    const typed = prospectLeadSchema.safeParse({
+      ...prospectLeadDefaults(place, {}),
+      ...contact,
+      companyName: 'Empresa Digitada',
+      phone: '(21) 90000-0009',
+    });
+    expect(typed.success).toBe(true);
+    // With the prefill on, the form of the Google row is accepted as it is.
+    expect(
+      prospectLeadSchema.safeParse({ ...prospectLeadDefaults(place, {}, null, true), ...contact })
+        .success,
+    ).toBe(true);
   });
 });

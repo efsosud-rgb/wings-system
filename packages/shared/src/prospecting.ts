@@ -156,6 +156,7 @@ export const prospectLeadSchema = z
     phone: optionalText(30),
     email: optionalText(200),
     instagram: optionalText(200),
+    website: optionalText(300),
     notes: optionalText(2000),
     whatsappOptIn: z.boolean({ error: 'Diga se aceitou receber WhatsApp' }),
     stageId: z.uuid().optional().or(z.literal('')),
@@ -170,6 +171,48 @@ export type ProspectLeadInput = z.infer<typeof prospectLeadSchema>;
 
 /** The title of the follow-up task Criar lead opens when a return was agreed. */
 export const PROSPECT_FOLLOW_UP_TITLE = 'Retorno combinado na prospecção';
+
+/** The follow-up task when no return was agreed: the owner is due to call back the next day. */
+export const PROSPECT_DEFAULT_FOLLOW_UP_TITLE = 'Primeiro retorno da prospecção';
+export const PROSPECT_DEFAULT_FOLLOW_UP_HOURS = 24;
+
+/** The entry stage of a lead made from a prospect: nobody spoke to the company in the system yet. */
+export const PROSPECT_LEAD_STAGE = 'Sem contato';
+
+/**
+ * Whether Criar lead starts with Google's name, phone and site in the form. OFF until Eric decides
+ * (DUVIDAS.md of t087, `docs/crm/prospeccao.md`): the rule is "only the place_id of Google is kept",
+ * and a seller who saves without editing would put Maps data in the lead. Turning it on is this
+ * line plus the rule, `docs/crm/prospeccao.md` and the "nothing from Google is stored" tests.
+ */
+export const PROSPECT_LEAD_PREFILL_FROM_GOOGLE = false;
+
+/**
+ * What the Criar lead form starts with: what the company's own site showed (e-mail, Instagram)
+ * and the @ of the search row when that @ also came from the company's own site, which are ours;
+ * the company's name, phone and site from the live Google answer only when `fromGoogle` (see
+ * above). The @ that Google's site field showed (`INSTAGRAM_FROM_GOOGLE_SITE`) is Google's data
+ * like the rest: it stays a line of the search, never a value of the form. Every field stays
+ * editable, nothing is sent until the seller confirms the form, and a value nobody gave stays
+ * empty, never guessed.
+ */
+export function prospectLeadDefaults(
+  place: Pick<PlaceResult, 'name' | 'phone' | 'website'> | null,
+  enrichment: ProspectEnrichment,
+  instagram: Pick<ProspectInstagramRef, 'username' | 'source'> | null = null,
+  fromGoogle: boolean = PROSPECT_LEAD_PREFILL_FROM_GOOGLE,
+) {
+  const text = (value: string | null | undefined) => value?.trim() ?? '';
+  const google = fromGoogle ? place : null;
+  const ownRow = instagram?.source === PROSPECT_ENRICHMENT_SOURCE ? instagram : null;
+  return {
+    companyName: text(google?.name),
+    phone: text(google?.phone),
+    email: text(enrichment.email?.value),
+    instagram: text(enrichment.instagram?.value) || (ownRow ? `@${ownRow.username}` : ''),
+    website: /^https?:\/\//i.test(text(google?.website)) ? text(google?.website) : '',
+  };
+}
 
 /**
  * How the seller will approach the company. No WhatsApp: a prospecting company gets WhatsApp from

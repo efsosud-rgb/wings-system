@@ -13,7 +13,10 @@ import {
   normalizeBrazilianPhone,
   normalizeInstagram,
   PROSPECT_ENRICHMENT_SOURCE,
+  PROSPECT_DEFAULT_FOLLOW_UP_HOURS,
+  PROSPECT_DEFAULT_FOLLOW_UP_TITLE,
   PROSPECT_FOLLOW_UP_TITLE,
+  PROSPECT_LEAD_STAGE,
   PROSPECT_HOLDING_STATUSES,
   PROSPECT_SEARCH_MAX_PAGES,
   PROSPECT_STATUS_LABELS,
@@ -51,9 +54,16 @@ import {
   roles,
 } from '../../db/schema/index.js';
 import type { AgentLlm } from '../agent/llm.js';
-import { optOutsAmong, recordContactOptOut } from '../leads/contact-block.js';
+import { contactBlock, optOutsAmong, recordContactOptOut } from '../leads/contact-block.js';
 import { leadVisibleTo } from '../leads/access.js';
-import { addNote, changeLead, createTask, type Executor } from '../leads/crm.js';
+import {
+  addNote,
+  changeLead,
+  createTask,
+  ensureStage,
+  entryStageOf,
+  type Executor,
+} from '../leads/crm.js';
 import { ForeignLeadError, upsertLead } from '../leads/service.js';
 import { PlacesError, type PlacesClient } from './places-client.js';
 
@@ -722,6 +732,14 @@ export async function prospectingOwners(db: Database): Promise<{ id: string; nam
 export const dayOf = (at: Date) =>
   new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo' }).format(at);
 
+/** `followUpTask`: whether the owner got a follow-up task out of this conversion. */
+export interface ProspectLeadResult {
+  ok: true;
+  leadId: string;
+  created: boolean;
+  followUpTask: boolean;
+}
+
 /**
  * The lead in the Formatação funnel, from what the company said in the first
  * contact (never from Google): its entry stage ("Sem contato") or the stage
@@ -735,7 +753,7 @@ export async function convertProspect(
   row: ProspectRow,
   input: ProspectLeadInput,
   now: Date,
-): Promise<{ ok: true; leadId: string; created: boolean } | Refusal> {
+): Promise<ProspectLeadResult | Refusal> {
   if (row.status === 'virou_lead') return CONVERTED;
   if (row.status === 'nao_contatar') return DO_NOT_CONTACT;
   const stage = input.stageId
@@ -751,7 +769,9 @@ export async function convertProspect(
     .returning({ id: prospects.id });
   if (!claimed) return CHANGED;
   try {
-    return await leadOfProspect(db, actor, row, input, stage?.id ?? null, now);
+    // After the claim: a refused conversion never leaves a stage made behind it.
+    const entry = stage ?? (await prospectEntryStage(db));
+    return await leadOfProspect(db, actor, row, input, entry.id, now);
   } catch (error) {
     await db
       .update(prospects)
@@ -761,6 +781,19 @@ export async function convertProspect(
       return refusal(409, 'duplicate', 'Já existe uma negociação com este telefone ou e-mail.');
     throw error;
   }
+}
+
+/**
+ * The stage a lead from a prospect starts in when the seller chose none: "Sem contato" of
+ * Formatação, made if the funnel does not have it yet (never the funnel's first stage by luck).
+ */
+async function prospectEntryStage(db: Database) {
+  const named = await ensureStage(db, {
+    pipeline: 'formatacao',
+    name: PROSPECT_LEAD_STAGE,
+    position: 1,
+  });
+  return named.active ? named : entryStageOf(db, 'formatacao');
 }
 
 export interface ProspectConsent {
@@ -805,9 +838,9 @@ async function leadOfProspect(
   actor: Actor,
   row: ProspectRow,
   input: ProspectLeadInput,
-  stageId: string | null,
+  stageId: string,
   now: Date,
-): Promise<{ ok: true; leadId: string; created: boolean }> {
+): Promise<ProspectLeadResult> {
   const optIn = input.whatsappOptIn;
   const consent: ProspectConsent = {
     legalBasis: optIn ? 'consent' : 'legitimate_interest',
@@ -826,7 +859,12 @@ async function leadOfProspect(
     pipeline: 'formatacao',
     ownerEmployeeId: row.ownerEmployeeId ?? actor.employeeId,
     company: { name: input.companyName },
-    fields: input.instagram ? { instagram: input.instagram } : null,
+    // What the seller confirmed in the form: it is what the lead card's Origem shows.
+    fields: {
+      companyName: input.companyName,
+      ...(input.instagram ? { instagram: input.instagram } : {}),
+      ...(input.website ? { website: input.website } : {}),
+    },
     ...consent,
     // Only into a deal of the prospect's owner, whatever the clicker's role (a manager too).
     mergeOnlyIfOwnedBy: row.ownerEmployeeId ?? actor.employeeId,
@@ -840,7 +878,7 @@ async function leadOfProspect(
   });
   const leadId = result.lead.id;
   if (!result.created) await mergeProspectConsent(db, actor, result.lead, consent, optIn);
-  if (result.created && stageId && result.lead.stageId !== stageId)
+  if (result.created && result.lead.stageId !== stageId)
     await changeLead(db, {
       leadId,
       stageId,
@@ -869,15 +907,24 @@ async function leadOfProspect(
       );
   if (input.notes)
     await addNote(db, { leadId, body: input.notes, authorEmployeeId: actor.employeeId });
-  if (input.followUpAt)
+  // A new lead always gets its owner a follow-up: the agreed return, else the next day. Not when
+  // the person asked not to be contacted by any key of the lead (phone, e-mail, Instagram).
+  const wantsTask = Boolean(input.followUpAt) || result.created;
+  const followUpTask =
+    wantsTask &&
+    !(await contactBlock(db, ['phone', 'email', 'instagram'], { leadId, placeId: row.placeId }))
+      .blocked;
+  if (followUpTask)
     await createTask(db, {
       leadId,
       kind: 'follow_up',
-      title: PROSPECT_FOLLOW_UP_TITLE,
-      dueAt: new Date(input.followUpAt),
+      title: input.followUpAt ? PROSPECT_FOLLOW_UP_TITLE : PROSPECT_DEFAULT_FOLLOW_UP_TITLE,
+      dueAt: input.followUpAt
+        ? new Date(input.followUpAt)
+        : new Date(now.getTime() + PROSPECT_DEFAULT_FOLLOW_UP_HOURS * 3_600_000),
       assigneeEmployeeId: result.lead.ownerEmployeeId ?? actor.employeeId,
       createdBy: actor.employeeId,
     });
   await db.update(prospects).set({ leadId, updatedAt: now }).where(eq(prospects.id, row.id));
-  return { ok: true, leadId, created: result.created };
+  return { ok: true, leadId, created: result.created, followUpTask };
 }

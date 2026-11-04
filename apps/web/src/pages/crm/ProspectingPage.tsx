@@ -3,6 +3,8 @@ import {
   ICP_WEIGHT_LABELS,
   PLACES_ERROR_LABELS,
   PROSPECT_ENRICHMENT_KEYS,
+  PROSPECT_LEAD_PREFILL_FROM_GOOGLE,
+  PROSPECT_LEAD_STAGE,
   PROSPECT_MANUAL_STATUSES,
   PROSPECT_MISSING_LABELS,
   PROSPECT_STATUS_LABELS,
@@ -10,9 +12,11 @@ import {
   prospectingIcpSchema,
   prospectingQuotaSchema,
   prospectingRetentionSchema,
+  prospectLeadDefaults,
   prospectLeadSchema,
   reservationExpiresAt,
   type IcpWeights,
+  type PlaceResult,
   type Prospect,
   type ProspectEnrichment,
   type ProspectEnrichmentKey,
@@ -20,6 +24,7 @@ import {
   type ProspectingQuota,
   type ProspectingRetention,
   type ProspectingUsage,
+  type ProspectInstagramRef,
   type ProspectQuery,
   type ProspectRef,
   type ProspectBatchResponse,
@@ -1038,6 +1043,8 @@ function ResultRow({
           {leadOpen && prospect && (
             <LeadModal
               prospectId={prospect.id}
+              place={item}
+              instagram={item.instagram}
               enrichment={enrichment}
               onClose={() => setLeadOpen(false)}
               onCreated={(leadId) => {
@@ -1155,14 +1162,24 @@ function EnrichButton({
   );
 }
 
-/** Criar lead, after the first contact: what the company said, never what Google shows. */
+/**
+ * Criar lead: the form starts with what the company's own site showed (e-mail, Instagram) and is
+ * otherwise empty, all editable. Google's name, phone and site are only shown beside it as a
+ * reference, live and unsaved: the seller types what they confirmed, and only that is sent
+ * (`PROSPECT_LEAD_PREFILL_FROM_GOOGLE` turns the prefill on once Eric decides).
+ */
 function LeadModal({
   prospectId,
+  place,
+  instagram,
   enrichment,
   onClose,
   onCreated,
 }: {
   prospectId: string;
+  /** The company's live Google row: null when this screen has not read it (Meus prospects). */
+  place: Pick<PlaceResult, 'name' | 'phone' | 'website'> | null;
+  instagram: ProspectInstagramRef | null;
   enrichment: ProspectEnrichment;
   onClose: () => void;
   onCreated: (leadId: string) => void;
@@ -1170,18 +1187,26 @@ function LeadModal({
   const create = useProspectLead();
   const stages = useStages('formatacao');
   const [form, setForm] = useState({
-    companyName: '',
+    ...prospectLeadDefaults(place, enrichment, instagram),
     contactName: '',
     contactRole: '',
-    phone: '',
-    email: enrichment.email?.value ?? '',
-    instagram: enrichment.instagram?.value ?? '',
     notes: '',
     stageId: '',
     followUpAt: '',
   });
+  // "Sem contato" is the default entry; it stays unless the seller picks another stage.
+  const activeStages = (stages.data?.stages ?? []).filter((stage) => stage.active);
+  const entryStage = activeStages.find((stage) => stage.name === PROSPECT_LEAD_STAGE);
+  const stageId = form.stageId || entryStage?.id || '';
   const [optIn, setOptIn] = useState<boolean | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  const reference = PROSPECT_LEAD_PREFILL_FROM_GOOGLE
+    ? []
+    : [
+        ['Empresa', place?.name],
+        ['Telefone', place?.phone],
+        ['Site', place?.website],
+      ].filter((line): line is [string, string] => Boolean(line[1]?.trim()));
   const field = (key: keyof typeof form, label: string, extra: { wide?: boolean } = {}) => (
     <label className={`crm-field${extra.wide ? ' is-wide' : ''}`}>
       <span>{label}</span>
@@ -1199,6 +1224,7 @@ function LeadModal({
     const followUpAt = form.followUpAt ? new Date(form.followUpAt).toISOString() : '';
     const parsed = prospectLeadSchema.safeParse({
       ...form,
+      stageId,
       followUpAt,
       whatsappOptIn: optIn ?? undefined,
     });
@@ -1215,9 +1241,16 @@ function LeadModal({
     <Modal title="Criar lead no funil Formatação" onClose={onClose}>
       <form className="crm-stack" onSubmit={submit}>
         <p className="crm-sub">
-          Preencha com o que a empresa disse no primeiro contato. Nada do Google vai para o lead.
-          Com retorno combinado, o lead ganha uma tarefa de follow-up para o dono.
+          Preencha com o que a empresa disse no primeiro contato; e-mail e Instagram vêm do site da
+          empresa. O lead entra no funil Formatação em &quot;Sem contato&quot;, com uma tarefa de
+          follow-up para o dono (no retorno combinado, ou no dia seguinte).
         </p>
+        {reference.length > 0 && (
+          <p className="crm-sub" role="note" aria-label="Referência do Google Maps">
+            Só para consulta, consultado agora no Google Maps e não salvo:{' '}
+            {reference.map(([label, value]) => `${label}: ${value}`).join(' · ')}.
+          </p>
+        )}
         <div className="crm-form-grid">
           {field('companyName', 'Empresa')}
           {field('contactName', 'Contato')}
@@ -1225,21 +1258,21 @@ function LeadModal({
           {field('phone', 'Telefone')}
           {field('email', 'E-mail')}
           {field('instagram', 'Instagram')}
+          {field('website', 'Site')}
           <label className="crm-field">
             <span>Etapa</span>
             <select
               className="crm-select"
-              value={form.stageId}
+              value={stageId}
               onChange={(event) => setForm((c) => ({ ...c, stageId: event.target.value }))}
             >
-              <option value="">Primeira etapa do funil</option>
-              {(stages.data?.stages ?? [])
-                .filter((stage) => stage.active)
-                .map((stage) => (
-                  <option key={stage.id} value={stage.id}>
-                    {stage.name}
-                  </option>
-                ))}
+              {/* The server makes "Sem contato" when the funnel has none yet. */}
+              {!entryStage && <option value="">{PROSPECT_LEAD_STAGE}</option>}
+              {activeStages.map((stage) => (
+                <option key={stage.id} value={stage.id}>
+                  {stage.name}
+                </option>
+              ))}
             </select>
           </label>
           <fieldset className="crm-field">
@@ -1596,6 +1629,8 @@ function ProspectCard({
       {leadOpen && (
         <LeadModal
           prospectId={prospect.id}
+          place={place}
+          instagram={null}
           enrichment={enrichment}
           onClose={() => setLeadOpen(false)}
           onCreated={() => setLeadOpen(false)}
