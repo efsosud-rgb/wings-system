@@ -65,6 +65,7 @@ import { failureReason } from '../../lib/failure.js';
 import { CallPanel } from './CallPanel.js';
 import { CompanyResearchPanel } from './CompanyResearchPanel.js';
 import { CopyButton } from './CopyButton.js';
+import { LeadContactEditor } from './LeadContactEditor.js';
 import { DealSummary } from './DealSummary.js';
 import { DealTabs, type View } from './DealTabs.js';
 import {
@@ -1299,6 +1300,7 @@ function ContactPanel({
           </button>
         )}
       </h2>
+      {canWrite && <LeadContactEditor lead={lead} />}
       {lead.contacts.length === 0 && (
         <div className="crm-stack" style={{ gap: 2 }}>
           <div className="crm-sub">A pessoa da negociação</div>
