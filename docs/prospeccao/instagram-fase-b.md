@@ -2,6 +2,8 @@
 
 Construída em 31/10/2026 (tarefa ig03) a partir da [especificação](instagram.md), §1.3, §2.2, §6, §8.4 e §10 (Fase B). Esta página diz o que existe, onde está e o que ficou diferente da especificação. **Nada liga sozinho:** a consulta à Meta fica desligada até o Eric conferir o token (B0) e ligar a chave.
 
+> **t086 (04/11/2026):** o @ também é procurado sozinho quando o site do Google não é um perfil: [../crm/prospeccao.md](../crm/prospeccao.md), "Instagram da empresa na busca".
+
 ## Como se usa
 
 CRM Vendas → Prospecção → **Busca** (quem tem `prospecting.use`), como hoje.

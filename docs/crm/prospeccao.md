@@ -87,9 +87,24 @@ Calculada a cada resposta, nunca guardada (`icpScore` e `withInstagram` no share
 Só no clique, um prospect por vez, lendo o site que o resultado ao vivo mostrou (a URL não é guardada):
 
 - `robots.txt` primeiro (grupo `WingsSystem-Prospeccao`, senão `*`; a regra mais longa vale), e de novo para cada redirecionamento, no endereço para onde ele leva. Sem `robots.txt` (4xx) pode ler; erro 5xx ou sem resposta: não lê e diz por quê. As regras são comparadas sem expressão regular (o texto é do site), e um caminho com mais de 512 caracteres não é lido.
-- No máximo 2 páginas: a do site e uma de contato ligada nela, no mesmo endereço ("contato", "fale conosco", "atendimento"). 5 segundos e 1 MB por página, user-agent `WingsSystem-Prospeccao/1.0`.
+- No máximo 3 páginas: a do site (o rodapé faz parte dela), uma de contato e uma de "sobre"/"quem somos" ligadas nela, no mesmo endereço. 12 segundos e 1 MB por página, com **1 nova tentativa** depois de estouro de tempo ou falha de conexão (nunca depois de uma resposta, como 404 ou 503), e 40 segundos no total por empresa (t086: com 5 segundos e sem nova tentativa, o site "não respondia" e o Instagram nunca vinha), user-agent `WingsSystem-Prospeccao/1.0`.
 - Contra SSRF, o mesmo guarda de `apps/api/src/lib/public-probe.ts`: só http/https nas portas 80 e 443, o nome resolvido tem de dar só endereço público (checado de novo na conexão, contra DNS rebinding), cada redirecionamento (até 4) checado antes. Endereço bloqueado e endereço inexistente dão a mesma mensagem, para a tela não revelar quais nomes internos existem.
 - Guarda em `prospects.enrichment` o primeiro Instagram, Facebook, LinkedIn, WhatsApp (`https://wa.me/<número>`) e e-mail achados, cada um com `source: 'site da empresa'` e a data.
+
+## Instagram da empresa na busca (t086, 04/11/2026)
+
+Cada empresa da busca sem Instagram conhecido ganha, **sozinha e logo depois da busca** (a tela chama `POST /prospecting/instagram/find`, 5 empresas por vez), uma procura em três caminhos, parando no primeiro que resolve:
+
+1. **Site da empresa** (o que o Google deu): home, contato e "sobre", 12 s com 1 nova tentativa, redirecionamentos seguidos, robots.txt obedecido. Procura links `instagram.com/<@>` em todas as páginas lidas.
+2. **Meta Business Discovery** (API oficial, a mesma da coluna Instagram): testa o @ provável (a palavra do domínio do site; depois o nome da empresa junto, sem acento) e só guarda se a Meta confirmar uma conta comercial. Mostra seguidores/posts com "Meta, lido em DD/MM". Origem exibida: "palpite pelo nome, conta confirmada na Meta".
+3. **Busca na web** (Brave, `BRAVE_SEARCH_API_KEY`, o provedor do worker): "nome + cidade + instagram". Um perfil só passa se **todas as palavras que identificam o nome** estão no @ ou no título; depois é confirmado na Meta (origem "busca na web, conta confirmada na Meta"). Com a Meta desligada, fica "busca na web, não confirmada na Meta", para o vendedor conferir. Teto de **100 buscas por dia** para a empresa toda (reservadas sob trava, `audit_log` `prospect.web_search`); sem a chave, o caminho é pulado e o motivo diz isso.
+
+- **Sem Instagram em nenhum caminho:** "—" e o motivo de cada caminho ("Site: Página inicial: o site não respondeu em 12 segundos (2 tentativas).", "Meta: conta não confirmada…", "Web: nenhum perfil… bate com o nome"). Nunca um @ inventado.
+- **Cota e cache por empresa** (`prospect_instagram_lookups`, migração 0112, só o `place_id`, o @ achado ou os motivos; nunca nome, endereço, telefone nem site do Google): uma empresa não é lida, consultada nem buscada de novo até a data de nova tentativa: **30 dias** com @ achado, **1 dia** se o site não respondeu, **6 horas** se a Meta pediu espera/recusou ou a busca falhou, **7 dias** nos demais. A Meta respeita o teto do dia e a espera de sempre (`instagram_discovery_calls`); o Google não é chamado. Apagado pela faxina de hora em hora quando vence.
+- **Quem pode:** o tíquete (`instagramFind`) vem assinado na resposta da busca, por vendedor, 12 h, e leva o nome, o site e o endereço da empresa; a rota não aceita dado da tela. Tíquete errado, de outro vendedor ou vencido recusa o pedido inteiro (400 `find_ticket_invalid`) antes de ler, consultar ou buscar qualquer coisa. Empresa com "não me contate" não ganha tíquete.
+- **Botão Enriquecer** também usa o tíquete: lê o site e, sem link, tenta a Meta e a web; o @ achado vai para `enrichment.instagram` com a origem; sem @, a tela diz o motivo de cada caminho.
+- Auditoria: `prospect.instagram_find` (empresas, achadas), só contagens.
+- **Não verificado ao vivo:** a resposta do Brave e a Meta seguem a referência (o log guarda só o formato).
 
 ## Criar lead
 
