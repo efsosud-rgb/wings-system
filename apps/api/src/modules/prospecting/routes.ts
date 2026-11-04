@@ -675,11 +675,13 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
     const company = body.data.findTicket
       ? readFinderTicket(finderKey, actor.employeeId, body.data.findTicket, at)
       : null;
+    // The ticket's site, not the screen's: the lookup is cached per place for every seller, so a
+    // typed address must not steer the @ the others see. Only without one does the typed address go.
     const tried =
       company && company.placeId === found.row.placeId
         ? await findInstagram(
             finderDeps(actor.employeeId, at),
-            { ...company, website: body.data.website },
+            { ...company, website: company.website ?? body.data.website },
             { reading },
           )
         : null;

@@ -443,6 +443,28 @@ describe('what stops the finder', () => {
     expect(results.filter((reason) => reason === null)).toHaveLength(2);
   });
 
+  it('the Enriquecer gives the Meta guess the website of the ticket, never the one the screen typed', async () => {
+    resetSites();
+    // Eta has no site on Google, so its ticket says so; the screen types Eta's own site.
+    const eta = itemOf(await search(seller), ETA).enrichTicket!;
+    const [row] = await db
+      .insert(prospects)
+      .values({ placeId: ETA.id, status: 'reservado', ownerEmployeeId: seller.id })
+      .returning();
+    const before = graphAsked.length;
+    await call(seller, 'POST', `/prospecting/prospects/${row!.id}/enrich`, {
+      website: 'https://eta.example/',
+      findTicket: eta,
+    });
+    // The cached lookup is shared by every seller: the typed site must not name the @ guessed.
+    expect(graphAsked.slice(before)).not.toContain('eta');
+    // Neither the lookup nor Meta's cache this click kept is news for the tests after it.
+    await db.delete(prospectInstagramLookups).where(eq(prospectInstagramLookups.placeId, ETA.id));
+    await db
+      .delete(instagramBusinessSnapshots)
+      .where(eq(instagramBusinessSnapshots.username, 'lojaeta'));
+  });
+
   it('a refused Meta (permission) is a transient reason: tried again within hours, not a week', async () => {
     resetSites();
     graphScript.lojaeta = {
