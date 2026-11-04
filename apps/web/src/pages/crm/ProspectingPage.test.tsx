@@ -69,6 +69,8 @@ const item = (over: Partial<ProspectSearchItem>): ProspectSearchItem => ({
     noData: [],
   },
   instagram: null,
+  instagramFind: null,
+  instagramMiss: null,
   missing: [],
   tags: [],
   prospect: null,
