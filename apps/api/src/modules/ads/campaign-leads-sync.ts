@@ -339,6 +339,10 @@ export function buildAttributionCampaigns(input: {
           status: campaign.status,
           deliveryStatus: campaign.deliveryStatus,
           endDate: endNow,
+          // The attribution of a lead already judges the days a campaign spent (`spendDays`, in
+          // `inForceOn`); the "spent in the last 24 h" rule of the screens would change which
+          // campaign a lead is credited to, so it stays out of here (d-t036, DUVIDAS.md).
+          spentLast24h: false,
         },
         today,
       ),

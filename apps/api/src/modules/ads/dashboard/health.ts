@@ -1,10 +1,16 @@
-import { objectiveKindOf, type AdPlatform, type HealthItem, type HealthState } from '@wings/shared';
+import {
+  campaignDelivering,
+  objectiveKindOf,
+  type AdPlatform,
+  type HealthItem,
+  type HealthState,
+} from '@wings/shared';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { Database } from '../../../db/client.js';
 import { adAlerts, adCampaigns } from '../../../db/schema/index.js';
 import { pacingFacts } from '../alerts.js';
 import type { ConversionSource } from '../platform/types.js';
-import { creatives, sumsByEntity, type Account } from './queries.js';
+import { campaignsSpentLast24h, creatives, sumsByEntity, type Account } from './queries.js';
 import { addDays, dayIn } from './window.js';
 
 /**
@@ -76,7 +82,7 @@ export async function accountHealth(
   if (ids.length === 0) return [];
   const today = dayIn(now);
 
-  const [recent, last7, wornOut, fatigueAlerts, campaigns] = await Promise.all([
+  const [recent, last7, wornOut, fatigueAlerts, campaigns, spentLast24h] = await Promise.all([
     sumsByEntity(db, ids, 'campaign', addDays(today, -(CONVERSION_DAYS - 1)), today),
     sumsByEntity(db, ids, 'campaign', addDays(today, -(RESULTLESS_DAYS - 1)), today),
     creatives(db, FATIGUE_DAYS, now).then((result) =>
@@ -94,6 +100,7 @@ export async function accountHealth(
       )
       .groupBy(adAlerts.adAccountId),
     db.query.adCampaigns.findMany({ where: inArray(adCampaigns.adAccountId, ids) }),
+    campaignsSpentLast24h(db, ids, today),
   ]);
   const alertsByAccount = new Map(fatigueAlerts.map((row) => [row.adAccountId, Number(row.count)]));
 
@@ -172,7 +179,18 @@ export async function accountHealth(
 
     // Active leads campaigns without a result in 7 days.
     const silent = own.filter((campaign) => {
-      if (campaign.status !== 'ACTIVE') return false;
+      // "Ativa" is the one rule of the dashboard: spent in the last 24 h, or an active status.
+      const delivering = campaignDelivering(
+        {
+          platform,
+          status: campaign.status,
+          deliveryStatus: campaign.deliveryStatus,
+          endDate: campaign.endDate,
+          spentLast24h: spentLast24h.has(campaign.externalId),
+        },
+        today,
+      );
+      if (!delivering) return false;
       if (objectiveKindOf(campaign.objective, platform) !== 'leads') return false;
       const totals = last7.get(campaign.externalId);
       return totals !== undefined && totals.spendCents > 0 && totals.conversions === 0;
