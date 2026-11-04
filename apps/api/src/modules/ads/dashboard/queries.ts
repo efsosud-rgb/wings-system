@@ -1,11 +1,13 @@
 import {
   addTotals,
+  campaignDelivering,
   campaignEnded,
   earliestEnd,
   effectiveCampaignEnd,
   EMPTY_TOTALS,
   fatigueOf,
   killSwitchRuleOf,
+  last24hDays,
   ratiosOf,
   type AdNode,
   type AdPlatform,
@@ -134,6 +136,22 @@ export async function sumsByEntity(
     .groupBy(adMetricsDaily.entityExternalId);
   for (const row of rows) byEntity.set(row.entity, totalsOf(row));
   return byEntity;
+}
+
+/**
+ * The campaigns (platform ids) that spent anything in the last 24 hours, which
+ * is what lets `campaignDelivering` call a paused or ended campaign "em
+ * veiculação". Spend is kept per São Paulo day, so the last 24 hours are
+ * today and the day before (`last24hDays`).
+ */
+export async function campaignsSpentLast24h(
+  db: Database,
+  accountIds: string[],
+  today: string,
+): Promise<Set<string>> {
+  const { since, until } = last24hDays(today);
+  const sums = await sumsByEntity(db, accountIds, 'campaign', since, until);
+  return new Set([...sums].filter(([, totals]) => totals.spendCents > 0).map(([entity]) => entity));
 }
 
 /** One campaign-level sum over the accounts and days. */
@@ -777,6 +795,7 @@ export async function campaigns(
     verdicts,
     drafts,
     lastSpends,
+    spentLast24h,
   ] = await Promise.all([
     db.query.adCampaigns.findMany({ where: inArray(adCampaigns.adAccountId, ids) }),
     db
@@ -821,6 +840,7 @@ export async function campaigns(
         ),
       )
       .groupBy(adMetricsDaily.entityExternalId),
+    campaignsSpentLast24h(db, ids, window.until),
   ]);
   const lastSpendOf = new Map(lastSpends.map((row) => [row.entity, row.day]));
   const verdictOf = new Map(verdicts.map((row) => [row.campaignId, row.verdict]));
@@ -900,6 +920,17 @@ export async function campaigns(
       startDate: campaign.startDate ?? draftOf.get(campaign.id)?.startDate ?? null,
       endDate,
       ended: campaignEnded({ deliveryStatus: campaign.deliveryStatus, endDate }, window.until),
+      delivering: campaignDelivering(
+        {
+          platform: (account?.platform ?? 'meta') as AdPlatform,
+          status: campaign.status,
+          deliveryStatus: campaign.deliveryStatus,
+          endDate,
+          spentLast24h: spentLast24h.has(campaign.externalId),
+        },
+        window.until,
+      ),
+      deliveryStatus: campaign.deliveryStatus,
       lastSpendDate: lastSpendOf.get(campaign.externalId) ?? null,
       mirroredAt: campaign.createdAt.toISOString(),
       targetCplCents: targetOf.get(campaign.id) ?? null,

@@ -429,6 +429,10 @@ export interface CampaignNode {
   endDate: string | null;
   /** Ran its course (`campaignEnded`): "Encerrada", and neither Pausar nor Retomar is offered. */
   ended: boolean;
+  /** The one rule for "Em veiculação" (`campaignDelivering`): spent in the last 24 h, or an active status. */
+  delivering: boolean;
+  /** The platform's own delivery status (Meta effective_status, Google serving_status); null before the first read. */
+  deliveryStatus: string | null;
   /** The last day it spent anything, in any window; null when it never spent. */
   lastSpendDate: string | null;
   /** When the mirror first saw it: the order's tie-break when the start date is unknown. */
@@ -822,11 +826,26 @@ export function effectiveCampaignEnd(
 }
 
 /**
- * The Cockpit's one rule for "active": what is really delivering. Meta counts
- * when its effective_status is ACTIVE; Google when the campaign is ENABLED
- * and serving_status is SERVING. A campaign whose end date has passed never
- * counts. Until the ingestion has read the delivery status (null), the status
- * a person set stands in for it.
+ * The days that stand for "the last 24 hours" when spend is only kept per
+ * São Paulo day: today and the day before. A campaign that spent on either
+ * counts as having spent in the last 24 hours (it can lag the clock by up to
+ * a day, never the other way round).
+ */
+export function last24hDays(today: string): { since: string; until: string } {
+  const before = new Date(Date.parse(`${today}T00:00:00Z`) - 24 * 3600_000);
+  return { since: before.toISOString().slice(0, 10), until: today };
+}
+
+/**
+ * The one rule for "em veiculação", used by every tab (Eric, 29/10/2026:
+ * "o gasto manda, com o status ao lado"). A campaign that spent in the last
+ * 24 hours is delivering, even paused or past its end date; the platform's
+ * status is shown beside it, never instead of it. With no spend, the status
+ * decides as before: Meta counts when its effective_status is ACTIVE; Google
+ * when the campaign is ENABLED and serving_status is SERVING; a campaign whose
+ * end date has passed does not. Until the ingestion has read the delivery
+ * status (null), the status a person set stands in for it. "Sem veiculação"
+ * is therefore zero spend and an inactive status, nothing less.
  */
 export function campaignDelivering(
   campaign: {
@@ -834,9 +853,12 @@ export function campaignDelivering(
     status: string;
     deliveryStatus: string | null;
     endDate: string | null;
+    /** Spent on any of `last24hDays` (any amount above zero). */
+    spentLast24h: boolean;
   },
   today: string,
 ): boolean {
+  if (campaign.spentLast24h) return true;
   if (campaign.endDate && campaign.endDate < today) return false;
   if (campaign.platform === 'google') {
     return campaign.status === 'ACTIVE' && (campaign.deliveryStatus ?? 'SERVING') === 'SERVING';
@@ -906,7 +928,7 @@ export interface CockpitCampaign {
   externalId: string;
   name: string;
   deliveryStatus: string | null;
-  /** Delivering now; false for a paused or ended campaign shown under "Todas". */
+  /** `campaignDelivering`: spent in the last 24 h or active; false for a campaign shown under "Todas" that is neither. */
   delivering: boolean;
   startDate: string | null;
   endDate: string | null;

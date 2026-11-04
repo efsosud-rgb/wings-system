@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   addTotals,
+  campaignDelivering,
   campaignEnded,
   deltaPercent,
   earliestEnd,
   effectiveCampaignEnd,
   EMPTY_TOTALS,
   fatigueOf,
+  last24hDays,
   placementsLabel,
   ratiosOf,
 } from './dashboard.js';
@@ -147,5 +149,51 @@ describe('where a campaign ends when its schedule lives on the ad sets', () => {
     );
     expect(placementsLabel(null)).toBeNull();
     expect(placementsLabel({ platforms: [], positions: [] })).toBeNull();
+  });
+});
+
+describe('the one rule for "em veiculação"', () => {
+  const TODAY = '2026-10-29';
+  const meta = {
+    platform: 'meta' as const,
+    status: 'ACTIVE',
+    deliveryStatus: 'ACTIVE' as string | null,
+    endDate: null as string | null,
+    spentLast24h: false,
+  };
+
+  it('counts the last 24 hours as today and the day before', () => {
+    expect(last24hDays('2026-10-29')).toEqual({ since: '2026-10-28', until: '2026-10-29' });
+    expect(last24hDays('2026-11-01')).toEqual({ since: '2026-10-31', until: '2026-11-01' });
+    expect(last24hDays('2027-01-01')).toEqual({ since: '2026-12-31', until: '2027-01-01' });
+  });
+
+  it('lets spend in the last 24 hours win over a paused status and a past end date', () => {
+    const spending = { ...meta, spentLast24h: true };
+    expect(
+      campaignDelivering({ ...spending, status: 'PAUSED', deliveryStatus: 'PAUSED' }, TODAY),
+    ).toBe(true);
+    expect(campaignDelivering({ ...spending, endDate: '2026-10-20' }, TODAY)).toBe(true);
+    const google = { ...spending, platform: 'google' as const };
+    expect(
+      campaignDelivering({ ...google, status: 'PAUSED', deliveryStatus: 'ENDED' }, TODAY),
+    ).toBe(true);
+  });
+
+  it('keeps the status as the rule when nothing was spent', () => {
+    expect(campaignDelivering(meta, TODAY)).toBe(true);
+    expect(campaignDelivering({ ...meta, deliveryStatus: null }, TODAY)).toBe(true);
+    expect(campaignDelivering({ ...meta, status: 'PAUSED', deliveryStatus: 'PAUSED' }, TODAY)).toBe(
+      false,
+    );
+    expect(campaignDelivering({ ...meta, deliveryStatus: 'CAMPAIGN_PAUSED' }, TODAY)).toBe(false);
+    expect(campaignDelivering({ ...meta, endDate: '2026-10-28' }, TODAY)).toBe(false);
+    expect(campaignDelivering({ ...meta, endDate: TODAY }, TODAY)).toBe(true);
+    const google = { ...meta, platform: 'google' as const };
+    expect(campaignDelivering({ ...google, deliveryStatus: 'SERVING' }, TODAY)).toBe(true);
+    expect(campaignDelivering({ ...google, deliveryStatus: 'ENDED' }, TODAY)).toBe(false);
+    expect(campaignDelivering({ ...google, status: 'PAUSED', deliveryStatus: null }, TODAY)).toBe(
+      false,
+    );
   });
 });

@@ -49,10 +49,19 @@ const MESSAGE_BY_FAILURE: Record<EmployeeFailure, string> = {
   deactivate_forbidden: 'Você não tem permissão para inativar ou reativar funcionários.',
 };
 
-function fail(reply: FastifyReply, reason: EmployeeFailure) {
-  return reply
-    .status(STATUS_BY_FAILURE[reason])
-    .send({ error: reason, message: MESSAGE_BY_FAILURE[reason] });
+const MESSAGE_BY_DETAIL = {
+  diretoria_account: 'Só um Admin Master inativa ou reativa uma conta da Diretoria.',
+} as const;
+
+function fail(
+  reply: FastifyReply,
+  reason: EmployeeFailure,
+  detail?: keyof typeof MESSAGE_BY_DETAIL,
+) {
+  return reply.status(STATUS_BY_FAILURE[reason]).send({
+    error: reason,
+    message: detail ? MESSAGE_BY_DETAIL[detail] : MESSAGE_BY_FAILURE[reason],
+  });
 }
 
 function requestContext(request: FastifyRequest) {
@@ -184,7 +193,7 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
       parsed.data,
       requestContext(request),
     );
-    if (!updated.ok) return fail(reply, updated.reason);
+    if (!updated.ok) return fail(reply, updated.reason, updated.detail);
 
     const { employee, emailChange } = updated.value;
     if (!emailChange) return reply.send({ employee });

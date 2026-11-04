@@ -15,8 +15,9 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../../app.js';
 import type { Database } from '../../../db/client.js';
-import { eq } from 'drizzle-orm';
+import { eq, gte, sql } from 'drizzle-orm';
 import {
+  adMetricsDaily,
   rdCrmDeals,
   ga4TrafficDaily,
   adCampaignDrafts,
@@ -280,6 +281,24 @@ async function sessionFor(role: 'marketing' | 'vendedor_expansao') {
   return { [SESSION_COOKIE]: token };
 }
 
+/**
+ * Moves the spend of the last 24 hours (the 15th and the 16th) five days back, inside the same
+ * 7-day window, so a campaign has delivered in the window but not in the last 24 hours and only
+ * its status decides. No fixture spends on the 10th or the 11th. Returns the undo.
+ */
+async function moveSpendOutOfLast24h(): Promise<() => Promise<void>> {
+  await db
+    .update(adMetricsDaily)
+    .set({ day: sql`${adMetricsDaily.day} - 5` })
+    .where(gte(adMetricsDaily.day, '2026-09-15'));
+  return async () => {
+    await db
+      .update(adMetricsDaily)
+      .set({ day: sql`${adMetricsDaily.day} + 5` })
+      .where(sql`${adMetricsDaily.day} between '2026-09-10' and '2026-09-11'`);
+  };
+}
+
 async function read<T>(path: string, key: string): Promise<T> {
   const cookies = await sessionFor('marketing');
   const response = await app.inject({ method: 'GET', url: path, cookies });
@@ -508,6 +527,43 @@ describe('the overview', () => {
       expect(['ok', 'attention', 'problem', 'unknown']).toContain(item.state);
       expect(item.detail.length).toBeGreaterThan(10);
       if (item.state === 'ok') expect(item.action).toBe('');
+    }
+  });
+
+  it('flags a paused leads campaign that spent in the last 24 h with no leads, as it would an active one', async () => {
+    const item = async () =>
+      (await read<DashboardOverview>('/ads/dashboard/overview', 'overview')).health.find(
+        (entry) => entry.platform === 'google' && entry.key === 'active_without_results',
+      );
+    expect(await item()).toMatchObject({ state: 'ok' });
+    // The Google campaign spent but brought no lead, and a person paused it.
+    const leads = await db
+      .select({ id: adMetricsDaily.id, conversions: adMetricsDaily.conversions })
+      .from(adMetricsDaily)
+      .where(eq(adMetricsDaily.entityExternalId, '100'));
+    await db
+      .update(adMetricsDaily)
+      .set({ conversions: 0 })
+      .where(eq(adMetricsDaily.entityExternalId, '100'));
+    await db.update(adCampaigns).set({ status: 'PAUSED' }).where(eq(adCampaigns.externalId, '100'));
+    let restoreSpend: (() => Promise<void>) | null = null;
+    try {
+      expect(await item()).toMatchObject({ state: 'attention' });
+      // Without spend in the last 24 h, paused is paused: nothing to flag.
+      restoreSpend = await moveSpendOutOfLast24h();
+      expect(await item()).toMatchObject({ state: 'ok' });
+    } finally {
+      if (restoreSpend) await restoreSpend();
+      await db
+        .update(adCampaigns)
+        .set({ status: 'ACTIVE' })
+        .where(eq(adCampaigns.externalId, '100'));
+      for (const row of leads) {
+        await db
+          .update(adMetricsDaily)
+          .set({ conversions: row.conversions })
+          .where(eq(adMetricsDaily.id, row.id));
+      }
     }
   });
 
@@ -967,7 +1023,9 @@ describe('the cockpit', () => {
     // A target confirmed by an earlier test in this file reaches the gauge.
     expect(before.cplTargetCents).toBe(5000);
 
-    // Google stops serving (the end date came, say): its spend leaves every figure.
+    // Google stops serving (the end date came, say) and has not spent in the last 24 h:
+    // its spend leaves every figure.
+    const restoreSpend = await moveSpendOutOfLast24h();
     await db
       .update(adCampaigns)
       .set({ deliveryStatus: 'ENDED' })
@@ -991,6 +1049,7 @@ describe('the cockpit', () => {
       expect(all.current.spendCents).toBe(before.current.spendCents);
       expect(all.activePerformance).toEqual(after.activePerformance);
     } finally {
+      await restoreSpend();
       await db
         .update(adCampaigns)
         .set({ deliveryStatus: 'SERVING' })
@@ -1007,6 +1066,7 @@ describe('the cockpit', () => {
 
     // The end date of the Google campaign passed, yet its status is still active:
     // it leaves every figure, and the summary says it ended, not that it vanished.
+    const restoreSpend = await moveSpendOutOfLast24h();
     await db
       .update(adCampaigns)
       .set({ endDate: '2026-09-15' })
@@ -1020,12 +1080,66 @@ describe('the cockpit', () => {
         { platform: 'google', name: 'Pesquisa | Franquia', endDate: '2026-09-15' },
       ]);
     } finally {
+      await restoreSpend();
       await db.update(adCampaigns).set({ endDate: null }).where(eq(adCampaigns.externalId, '100'));
+    }
+  });
+
+  it('spend in the last 24 h makes a campaign delivering, paused or past its end date, with its status beside it', async () => {
+    // Meta paused by a person yet it spent yesterday; Google past its end date and ENDED, same.
+    await db
+      .update(adCampaigns)
+      .set({ status: 'PAUSED', deliveryStatus: 'PAUSED' })
+      .where(eq(adCampaigns.externalId, 'c-leads'));
+    await db
+      .update(adCampaigns)
+      .set({ endDate: '2026-09-10', deliveryStatus: 'ENDED' })
+      .where(eq(adCampaigns.externalId, '100'));
+    let restoreSpend: (() => Promise<void>) | null = null;
+    try {
+      const spending = await read<DashboardCockpit>('/ads/dashboard/cockpit?days=7', 'cockpit');
+      const byName = (name: string) => spending.activeCampaigns.find((c) => c.name === name);
+      expect(byName('LEAD | FORMS')).toMatchObject({ delivering: true, deliveryStatus: 'PAUSED' });
+      expect(byName('Pesquisa | Franquia')).toMatchObject({
+        delivering: true,
+        deliveryStatus: 'ENDED',
+      });
+      // They are not "ended" for the chip: the money says they run.
+      expect(spending.statusSummary.ended).toEqual([]);
+      expect(spending.statusSummary.notDelivering).toBeGreaterThanOrEqual(0);
+      const spendingTree = await read<DashboardCampaigns>(
+        '/ads/dashboard/campaigns?days=7',
+        'campaigns',
+      );
+      const rowOf = (name: string) => spendingTree.campaigns.find((c) => c.name === name);
+      expect(rowOf('LEAD | FORMS')).toMatchObject({ delivering: true, deliveryStatus: 'PAUSED' });
+      expect(rowOf('Pesquisa | Franquia')).toMatchObject({ delivering: true, ended: true });
+
+      // Same status, no spend in the last 24 h: now they are not delivering.
+      restoreSpend = await moveSpendOutOfLast24h();
+      const quiet = await read<DashboardCockpit>('/ads/dashboard/cockpit?days=7', 'cockpit');
+      expect(quiet.activeCampaigns).toEqual([]);
+      const quietTree = await read<DashboardCampaigns>(
+        '/ads/dashboard/campaigns?days=7',
+        'campaigns',
+      );
+      expect(quietTree.campaigns.every((c) => !c.delivering)).toBe(true);
+    } finally {
+      if (restoreSpend) await restoreSpend();
+      await db
+        .update(adCampaigns)
+        .set({ status: 'ACTIVE', deliveryStatus: 'ACTIVE' })
+        .where(eq(adCampaigns.externalId, 'c-leads'));
+      await db
+        .update(adCampaigns)
+        .set({ endDate: null, deliveryStatus: 'SERVING' })
+        .where(eq(adCampaigns.externalId, '100'));
     }
   });
 
   it('ends a campaign with its ad sets when the campaign has no end of its own (Meta keeps the schedule there)', async () => {
     const instagram = { platforms: ['instagram'], positions: ['instagram:stream'] };
+    const restoreSpend = await moveSpendOutOfLast24h();
     await db
       .update(adSets)
       .set({ endDate: '2026-09-15', placements: instagram })
@@ -1045,6 +1159,7 @@ describe('the cockpit', () => {
       expect(leads?.endDate).toBe('2026-09-15');
       expect(leads?.adSets[0]).toMatchObject({ endDate: '2026-09-15', placements: instagram });
     } finally {
+      await restoreSpend();
       await db
         .update(adSets)
         .set({ endDate: null, placements: null })
