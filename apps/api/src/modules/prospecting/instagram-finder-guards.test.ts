@@ -260,9 +260,10 @@ describe('the paid search and the enrichment ledger', () => {
       braveBroken = false;
     }
     const kept = await lookupOf(company);
-    expect(kept!.reasons.at(-1)).toMatch(/a busca na web não respondeu/);
+    expect((kept!.reasons as string[]).at(-1)).toMatch(/a busca na web não respondeu/);
     expect(kept!.expiresAt.getTime() - T0.getTime()).toBe(6 * 3_600_000);
   });
+
   it('counts in the same ledger and stops at the same dollar ceiling, with no lead', async () => {
     const day = new Date();
     const enrichSpent = async () => {
