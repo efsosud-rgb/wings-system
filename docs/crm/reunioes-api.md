@@ -98,7 +98,23 @@ recusar: **502 `google_sync_failed`** (ou 503/409 acima), a cópia do CRM fica c
 true`, que grava `googleSync.error = skipped`). Uma reunião encerrada não volta a agendada.
 Remarcar (início ou fim novos) grava `lead_events` `meeting.rescheduled` (`{ meetingId, from, to }`);
 cancelar grava `meeting.cancelled` (`{ meetingId }`). Mudar só título, link ou convidados não entra no
-histórico.
+histórico da ficha, mas a trilha de auditoria (`meeting.updated`) guarda quais campos mudaram
+(`metadata.fields`, nunca os valores).
+
+**Quem pode (t088, 04/11).** Editar ou cancelar exige `leads.write` **com o alcance sobre a
+negociação** (`canChangeMeeting`, `modules/meetings/access.ts`): o dono da negociação, e os cargos que
+escrevem em todas (Admin Master, Gerente comercial). Quem só lê todas (Diretoria) ou quem não é o dono
+recebe 404/403 e o Google nem é chamado. Quem marcou a reunião e perdeu a negociação (reatribuída) não
+a muda mais. Reunião `encerrada` ou `cancelada` responde 409 `meeting_closed`.
+
+**Cancelar apaga o vínculo.** Com o evento apagado no Google, a reunião fica na negociação como
+`cancelada` (histórico, com o `meeting.cancelled` e a auditoria), mas `googleEventId` e
+`googleHtmlLink` voltam a nulo: não aponta para um evento que não existe. Se o Google recusou e a
+pessoa escolheu "só no sistema" (`skipGoogle`), o vínculo fica, porque o evento ainda está lá.
+
+**Pelo card da Agenda.** O card de uma reunião do CRM mostra Editar e Excluir quando
+`crm.canManage` (`docs/agenda.md`); os dois usam esta mesma rota: Editar abre o diálogo (título,
+início, fim, convidados; só o que mudou é enviado) e Excluir pergunta e manda `status: "cancelada"`.
 
 No Histórico da ficha, os eventos de reunião ficam no filtro **Reuniões**: "Reunião marcada" (para
 quando), "Reunião remarcada" (de quando para quando), "Reunião cancelada", "Reunião iniciada" e

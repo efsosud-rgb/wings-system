@@ -109,7 +109,7 @@ pages per calendar; `truncated: true` when Google had more.
    real id, case-insensitive), or Google lets guests modify it (`guestsCanModify`);
 3. it is not a birthday or an event Gmail made (`eventType` `birthday` / `fromGmail`);
    out-of-office stays editable;
-4. it is not a CRM meeting.
+4. it is not a CRM meeting (those are changed through the meeting's own route, below).
 
 A guest who does not organize an event only sees it. `PATCH` and `DELETE` re-read the event and
 re-check the rule on the server (409 `event_not_editable`); the screen's `canEdit` is convenience
@@ -142,9 +142,22 @@ to her primary and the event comes back as `mine`.
 ## CRM meetings
 
 A deal's meeting (a `crm_meetings` row whose `google_event_id` is the event's id or its series id,
-status not `cancelada`) is shown with `crm: { leadId }` and `canEdit: false`. It is **never** moved
-or cancelled from the Agenda: `PATCH` and `DELETE` answer 409 `crm_meeting` with `leadId`, and the
-details show "Abrir negociação" (`agendaDealPath`). `leadId` is set only when the person may open
+status not `cancelada`) is shown with `crm: { leadId, meetingId, canManage }` and `canEdit: false`.
+The Agenda's own event routes never move or cancel it: `PATCH` and `DELETE /agenda/events/...` answer
+409 `crm_meeting` with `leadId`, and the details show "Abrir negociação" (`agendaDealPath`).
+
+**Editar and Excluir on the card (t088, 04/11).** When `crm.canManage` the card shows both buttons
+(a seller without `calendar.write` included), and they go through the meeting's route, not the
+event routes: Editar opens a dialog (title, start, end, guests; only what changed is sent) and sends
+`PATCH /meetings/:meetingId`; Excluir asks, then sends `PATCH /meetings/:meetingId` with `status:
+"cancelada"`. That route changes Google first (move, guests, delete with `sendUpdates=all`), then the
+deal, and writes the deal's trail (`docs/crm/reunioes-api.md`). `canManage` is `canChangeMeeting`
+(`modules/meetings/access.ts`): the deal's owner, or a role with `leads.write` over every deal, and
+only while the meeting is `agendada` or `em_andamento`; for anyone else `meetingId` is null and
+`canManage` false, so the card keeps only "Abrir negociação". The Agenda's event is not the source of
+truth for the guests of a pasted-link meeting (it carries none), so the dialog reads
+`GET /meetings/:id` first. A deleted meeting leaves the Agenda (cancelled ones never show) and the
+deal keeps it as `cancelada` without the Google link. `leadId` is set only when the person may open
 that deal (`leadVisibleTo(actor, 'leads.read', …)` in `modules/leads/access.ts`: the owner seller,
 the Admin, Diretoria); another seller gets `leadId: null`. No lead data goes into the answer beyond
 what Google itself shows the person.
@@ -209,6 +222,9 @@ No migration.
    viewing only, with the notice to ask Thais).
 3. Create an event with a Meet on "mine": it appears on Google Agenda with the Meet link. Edit its
    time, then delete it: Google follows.
-4. Open a deal meeting made in the CRM: the details offer "Abrir negociação", no edit or delete.
+4. Open a deal meeting made in the CRM, as its owner: the details offer "Abrir negociação", Editar
+   and Excluir. Edit the title, the time and a guest: Google Agenda and the deal's meeting follow.
+   Delete it: it leaves Google Agenda and the deal shows it as cancelled. As Diretoria or another
+   seller, only "Abrir negociação" is offered.
 5. Open an event someone else organized: it is view-only.
 6. Log in as Thais: only her calendar is listed, once.
