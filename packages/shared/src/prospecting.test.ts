@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { INSTAGRAM_FROM_GOOGLE_SITE } from './instagram-discovery.js';
+import { INSTAGRAM_FROM_GOOGLE_SITE, type ProspectInstagramRef } from './instagram-discovery.js';
 import {
   DEFAULT_ICP_WEIGHTS,
   excludedName,
@@ -372,8 +372,14 @@ describe('prospectLeadDefaults', () => {
   } as const;
 
   // The search row's @ as the screen gets it: from the company's own site (ours) or from Google.
-  const ownRow = (username: string) => ({ username, source: PROSPECT_ENRICHMENT_SOURCE });
-  const googleRow = (username: string) => ({ username, source: INSTAGRAM_FROM_GOOGLE_SITE });
+  const ownRow = (username: string): Pick<ProspectInstagramRef, 'username' | 'source'> => ({
+    username,
+    source: PROSPECT_ENRICHMENT_SOURCE,
+  });
+  const googleRow = (username: string): Pick<ProspectInstagramRef, 'username' | 'source'> => ({
+    username,
+    source: INSTAGRAM_FROM_GOOGLE_SITE,
+  });
 
   it("keeps Google's name, phone and site out of the form until Eric decides", () => {
     expect(PROSPECT_LEAD_PREFILL_FROM_GOOGLE).toBe(false);
