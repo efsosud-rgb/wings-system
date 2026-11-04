@@ -433,9 +433,8 @@ export const leadEnrichmentLedger = pgTable(
   {
     tenantId: tenantId(),
     id: uuid('id').primaryKey().defaultRandom(),
-    leadId: uuid('lead_id')
-      .notNull()
-      .references(() => leads.id),
+    /** Null for a spend that belongs to no lead: the Prospecção Instagram finder's paid search (t090). */
+    leadId: uuid('lead_id').references(() => leads.id),
     jobId: uuid('job_id').references(() => jobs.id),
     /** zapi_profile | ddd | email_domain | web_search | brasilapi_cnpj */
     step: text('step').notNull(),

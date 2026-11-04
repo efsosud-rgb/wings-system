@@ -606,8 +606,10 @@ export function missingFields(place: PlaceResult): ProspectMissingField[] {
 }
 
 /**
- * Hosts that are not the company's own site (a profile, a link page, a delivery app): two
- * companies "sharing" one of these are not the same company, so it never marks a duplicate.
+ * Hosts that are not the company's own site (a profile, a link page, a delivery app, a marketplace,
+ * a booking agenda): two companies "sharing" one of these are not the same company, so it never
+ * marks a duplicate, and nothing is read or guessed from it (t090: the Instagram finder would
+ * otherwise hand back the platform's own @).
  */
 const SHARED_HOSTS = [
   'instagram.com',
@@ -620,6 +622,26 @@ const SHARED_HOSTS = [
   'google.com',
   'business.site',
   'ifood.com.br',
+  'rappi.com.br',
+  'rappi.com',
+  'ubereats.com',
+  'anota.ai',
+  'aiqfome.com',
+  'keeta.com',
+  '99app.com',
+  'doctoralia.com.br',
+  'doctoralia.com',
+  'shopee.com.br',
+  'shopee.com',
+  'mercadolivre.com.br',
+  'mercadolibre.com',
+  'amazon.com.br',
+  'olx.com.br',
+  'booksy.com',
+  'trinks.com',
+  'tripadvisor.com.br',
+  'tripadvisor.com',
+  'booking.com',
   'goo.gl',
   'bit.ly',
   'tiktok.com',

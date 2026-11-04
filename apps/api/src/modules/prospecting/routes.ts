@@ -39,6 +39,7 @@ import {
   findInstagram,
   issueFinderTicket,
   readFinderTicket,
+  WEB_SEARCH_PER_DAY,
   type FinderDeps,
 } from './instagram-finder.js';
 import {
@@ -137,6 +138,11 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
     siteTransport: app.wings.siteTransport,
     discovery: discovery ? { db, client: discovery, ticketKey, hold, now: at } : null,
     search: webSearch,
+    budget: {
+      perDay: WEB_SEARCH_PER_DAY,
+      dailyUsd: env.ENRICH_DAILY_USD,
+      usdPerQuery: env.ENRICH_SEARCH_USD_PER_QUERY,
+    },
   });
   const llm: AgentLlm | null =
     app.wings.agentLlm ??

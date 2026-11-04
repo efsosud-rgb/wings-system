@@ -15,7 +15,7 @@ import {
 import { and, eq, gt, gte, inArray, lt, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { WINGS_TENANT_ID } from '../../db/schema/ads.js';
-import { auditLog, prospectInstagramLookups } from '../../db/schema/index.js';
+import { auditLog, leadEnrichmentLedger, prospectInstagramLookups } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import type { PageTransport } from '../../lib/public-probe.js';
 import { startOfDaySaoPaulo } from '../prospect-ai/classifier.js';
@@ -49,8 +49,9 @@ export interface FinderDeps {
   siteTransport?: PageTransport;
   /** Null while Business Discovery is off or unconfigured. */
   discovery: DiscoveryDeps | null;
-  /** Null while `BRAVE_SEARCH_API_KEY` is missing. */
+  /** Null while `BRAVE_SEARCH_API_KEY` is missing (then nothing is spent). */
   search: WebSearchClient | null;
+  budget: WebSearchBudget;
 }
 
 export interface FinderOutcome {
@@ -157,13 +158,54 @@ export function nameTokens(name: string | null): string[] {
     .filter((token) => token.length >= 2 && !STOPWORDS.has(token));
 }
 
-/** The probable @s, the site's domain first (the company's own word), then its name run together. */
+/** Second-level labels under `.br` ("marca.com.br"): the registrable name is the label before them. */
+const BR_SECOND_LEVEL = new Set([
+  'com',
+  'net',
+  'org',
+  'ind',
+  'eco',
+  'med',
+  'srv',
+  'art',
+  'tur',
+  'adv',
+  'eng',
+  'psi',
+  'blog',
+  'emp',
+]);
+
+/**
+ * The word of the company's own registered domain ("marca" of "www.marca.com.br"), or null. Null
+ * for a platform (`siteDomain` knows them: delivery apps, marketplaces, agendas) and for a
+ * subdomain ("pedido.anota.ai", "loja.marca.com.br"): the first label there is a service or a
+ * section, not the company, and Meta would confirm whoever owns that @.
+ */
+export function ownDomainLabel(website: string | null): string | null {
+  const labels = siteDomain(website)?.split('.') ?? [];
+  const registrable =
+    labels.length === 2 ||
+    (labels.length === 3 && labels[2] === 'br' && BR_SECOND_LEVEL.has(labels[1]!));
+  return registrable ? labels[0]! : null;
+}
+
+/**
+ * The probable @s: the company's own domain first, only when it carries an identifying word of its
+ * name ("epsilon" for "Mercado Épsilon"), then the name run together. Confirming that an account
+ * exists is not confirming whose it is, so a domain that says nothing of the name is no guess
+ * (t090).
+ */
 export function guessHandles(company: Pick<FinderCompany, 'name' | 'website'>): string[] {
-  const label = siteDomain(company.website)?.split('.')[0] ?? null;
-  const joined = nameTokens(company.name).join('');
+  const tokens = nameTokens(company.name);
+  const joined = tokens.join('');
+  const label = ownDomainLabel(company.website)?.replace(/-/g, '') ?? null;
+  const significant = tokens.filter((token) => token.length >= 3);
+  const domainSaysName =
+    label !== null && significant.length > 0 && significant.some((token) => label.includes(token));
   const handles: string[] = [];
-  for (const candidate of [label, joined]) {
-    const handle = candidate ? normalizeInstagram(candidate.replace(/-/g, '')) : null;
+  for (const candidate of [domainSaysName ? label : null, joined]) {
+    const handle = candidate ? normalizeInstagram(candidate) : null;
     if (handle && handle.length >= 4 && !handles.includes(handle)) handles.push(handle);
   }
   return handles.slice(0, MAX_GUESSES);
@@ -262,31 +304,70 @@ export async function purgeInstagramLookups(
   return gone.length;
 }
 
-// --- the paid search's daily ceiling ------------------------------------------------------------------
+// --- the paid search's ceilings: 100 a day, and the enrichment's dollars -------------------------------
 
-/** One search reserved under a lock before it goes (lição 5); false at the day's ceiling. */
+/** What the paid search may spend: the count per day, and the ledger's one daily dollar ceiling. */
+export interface WebSearchBudget {
+  perDay: number;
+  /** `ENRICH_DAILY_USD`: the same number the worker's paid steps stop at (t090, Eric 04/11). */
+  dailyUsd: number;
+  /** `ENRICH_SEARCH_USD_PER_QUERY`: what one search costs, as the worker counts it. */
+  usdPerQuery: number;
+}
+
+/**
+ * One search reserved before it goes (lição 5): under the same lock the worker takes for the
+ * enrichment's budget, so today's spend of the enrichment (worker and finder together) plus this
+ * search must fit `dailyUsd`, and the day holds at most `perDay` searches. The row goes to the same
+ * `lead_enrichment_ledger` as the worker's, without a lead, and is written BEFORE the call. Returns
+ * why the search may not go (and nothing is spent), or null when it is reserved (lição 1).
+ */
 export async function reserveWebSearch(
   db: Database,
   employeeId: string,
-  perDay: number,
+  budget: WebSearchBudget,
   now: Date,
-): Promise<boolean> {
+): Promise<string | null> {
+  const dayStart = startOfDaySaoPaulo(now);
+  const usdMicro = Math.round(budget.usdPerQuery * 1_000_000);
+  const ceiling = Math.round(budget.dailyUsd * 1_000_000);
   return db.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtext('instagram_finder_web_search'))`);
-    const [row] = await tx
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext('lead_enrichment_budget'))`);
+    const [searches] = await tx
       .select({ total: sql<number>`count(*)::int` })
       .from(auditLog)
+      .where(and(eq(auditLog.action, 'prospect.web_search'), gte(auditLog.at, dayStart)));
+    if ((searches?.total ?? 0) >= budget.perDay) return 'Web: limite de buscas na web do dia.';
+    // The worker's "enrich" group: every step but the company research and the Instagram checks.
+    const [spent] = await tx
+      .select({ total: sql<string>`coalesce(sum(${leadEnrichmentLedger.usdMicro}), 0)::bigint` })
+      .from(leadEnrichmentLedger)
       .where(
-        and(eq(auditLog.action, 'prospect.web_search'), gte(auditLog.at, startOfDaySaoPaulo(now))),
+        and(
+          gte(leadEnrichmentLedger.createdAt, dayStart),
+          sql`${leadEnrichmentLedger.step} <> 'ai_research' and ${leadEnrichmentLedger.step} not like 'ig\_%'`,
+        ),
       );
-    if ((row?.total ?? 0) >= perDay) return false;
+    const total = Number(spent?.total ?? 0);
+    const fits = total + usdMicro <= ceiling;
+    await tx.insert(leadEnrichmentLedger).values({
+      step: 'web_search',
+      status: fits ? 'started' : 'refused',
+      usdMicro: fits ? usdMicro : 0,
+      detail: {
+        purpose: 'instagram_finder',
+        spentTodayUsdMicro: total,
+        ceilingUsdMicro: ceiling,
+      },
+    });
+    if (!fits) return 'Web: teto de gasto do dia da busca paga atingido.';
     await writeAudit(tx, {
       actorEmployeeId: employeeId,
       action: 'prospect.web_search',
       entity: 'prospect_instagram_lookup',
       metadata: { purpose: 'instagram_finder' },
     });
-    return true;
+    return null;
   });
 }
 
@@ -311,7 +392,9 @@ async function fromSite(
 ): Promise<Step> {
   if (!company.website) return miss('Site: o Google não informa o site da empresa.');
   if (!siteDomain(company.website))
-    return miss('Site: o endereço do Google é uma página de rede social, não o site da empresa.');
+    return miss(
+      'Site: o endereço do Google é de rede social, app de entrega, marketplace ou agenda, não o site da empresa.',
+    );
   const read =
     reading ??
     (await readCompanySite(company.website, {
@@ -365,8 +448,8 @@ async function fromWebSearch(deps: FinderDeps, company: FinderCompany): Promise<
   if (!deps.search) return miss('Web: a busca na web não está configurada neste ambiente.');
   const name = company.name?.trim();
   if (!name) return miss('Web: sem o nome da empresa para buscar.');
-  if (!(await reserveWebSearch(deps.db, deps.employeeId, WEB_SEARCH_PER_DAY, deps.now)))
-    return miss('Web: limite de buscas na web do dia.', TRANSIENT_RETRY_MS);
+  const refused = await reserveWebSearch(deps.db, deps.employeeId, deps.budget, deps.now);
+  if (refused) return miss(refused, TRANSIENT_RETRY_MS);
   const city = cityOf(company.address);
   let results;
   try {

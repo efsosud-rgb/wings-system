@@ -147,10 +147,16 @@ const schema = z.object({
   GOOGLE_PLACES_API_KEY: optionalString,
   /**
    * Brave Search, the same key the worker uses (secret). On the API it feeds the last path of the
-   * Prospecção Instagram finder (name + city + "instagram"); PAID per query, capped per day in
-   * code. Without it that path is skipped and the reason says so.
+   * Prospecção Instagram finder (name + city + "instagram"); PAID per query, capped at 100 a day in
+   * code and by ENRICH_DAILY_USD. Without it that path is skipped and the reason says so.
    */
   BRAVE_SEARCH_API_KEY: optionalString,
+  /**
+   * The finder's paid search counts in the enrichment's own ledger and ceiling (t090): these two
+   * must hold the same values as the worker's, since both add to one day's number.
+   */
+  ENRICH_SEARCH_USD_PER_QUERY: numberOr(0.005),
+  ENRICH_DAILY_USD: numberOr(2),
   /**
    * Google Analytics 4, read through the Data API. The property id is the
    * number in GA4 → Admin → Detalhes da propriedade (not the G-… measurement

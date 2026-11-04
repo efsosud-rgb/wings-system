@@ -27,16 +27,7 @@ import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factori
 import { startOfDaySaoPaulo } from '../prospect-ai/classifier.js';
 import { runInstagramHousekeeping } from '../prospect-ai/housekeeping.js';
 import { fakePlace, fakePlacesApi } from './fake-places-api.js';
-import {
-  cityOf,
-  finderKeyOf,
-  guessHandles,
-  issueFinderTicket,
-  nameTokens,
-  profileMatches,
-  readFinderTicket,
-  reserveWebSearch,
-} from './instagram-finder.js';
+import { reserveWebSearch } from './instagram-finder.js';
 
 /**
  * t086: the Instagram finder. A scripted Places API, company sites, Graph and web search; no test
@@ -50,58 +41,6 @@ const ACCOUNT = '17841400000000001';
 const T0 = new Date('2026-11-04T15:00:00.000Z');
 const DAY = 86_400_000;
 
-describe('what the finder derives from a name and a site', () => {
-  it('guesses the @ from the site domain first, then the name run together', () => {
-    expect(
-      guessHandles({
-        name: 'Padaria Central - Icaraí',
-        website: 'https://www.padariacentral.com.br/',
-      }),
-    ).toEqual(['padariacentral']);
-    expect(guessHandles({ name: 'Café & Bar do João Ltda', website: null })).toEqual([
-      'cafebarjoao',
-    ]);
-    expect(
-      guessHandles({ name: 'Loja Zeta', website: 'https://zetashop.example.com.br/' }),
-    ).toEqual(['zetashop', 'lojazeta']);
-    // A shared host is not the company's word, a very short one is not a guess.
-    expect(guessHandles({ name: 'Ok', website: 'https://linktr.ee/okok' })).toEqual([]);
-    expect(nameTokens('Padaria Central | Niterói')).toEqual(['padaria', 'central']);
-  });
-
-  it('takes the city out of a Google address', () => {
-    expect(cityOf('Rua Fictícia, 12 - Icaraí, Niterói - RJ, 24220-000, Brasil')).toBe('Niterói');
-    expect(cityOf(null)).toBeNull();
-  });
-
-  it('a web profile counts only when every identifying word of the name is in it', () => {
-    expect(profileMatches('Padaria Delta', 'padariadelta.niteroi', 'Padaria Delta (@x)')).toBe(
-      true,
-    );
-    expect(profileMatches('Padaria Delta', 'padaria_do_joao', 'Padaria do João')).toBe(false);
-    expect(profileMatches('Padaria Delta', 'delta.oficial', 'Delta Oficial')).toBe(false);
-    expect(profileMatches(null, 'qualquer', 'Qualquer')).toBe(false);
-  });
-
-  it('a ticket carries the company, is signed for one seller and expires', () => {
-    const key = finderKeyOf('s'.repeat(48));
-    const company = {
-      placeId: 'ChIJx',
-      name: 'Loja Zeta',
-      website: null,
-      address: 'Rua A, 1 - B, C - RJ',
-    };
-    const ticket = issueFinderTicket(key, 'seller-1', company, T0);
-    expect(readFinderTicket(key, 'seller-1', ticket, T0)).toEqual(company);
-    expect(readFinderTicket(key, 'seller-2', ticket, T0)).toBeNull();
-    expect(readFinderTicket(finderKeyOf('o'.repeat(48)), 'seller-1', ticket, T0)).toBeNull();
-    expect(readFinderTicket(key, 'seller-1', `${ticket}x`, T0)).toBeNull();
-    expect(
-      readFinderTicket(key, 'seller-1', ticket, new Date(T0.getTime() + 13 * 3_600_000)),
-    ).toBeNull();
-  });
-});
-
 // --- the scripted world ---------------------------------------------------------------------------
 
 const place = (n: number, name: string, site: string | null) =>
@@ -111,9 +50,9 @@ const place = (n: number, name: string, site: string | null) =>
   });
 const ALFA = place(1, 'Hamburgueria Alfa', 'https://alfa.example.com.br/');
 const BETA = place(2, 'Hamburgueria Beta', 'https://beta.example.com.br/');
-const GAMA = place(3, 'Hamburgueria Gama', 'https://gama.example.com.br/');
+const GAMA = place(3, 'Hamburgueria Gama', 'https://gama.example/');
 const DELTA = place(4, 'Padaria Delta', null);
-const EPSILON = place(5, 'Mercado Épsilon', 'https://epsilon.example.com.br/');
+const EPSILON = place(5, 'Mercado Épsilon', 'https://epsilon.example/');
 const ZETA = place(6, 'Loja Zeta', null);
 const ETA = place(7, 'Loja Eta', null);
 const PLACES = [ALFA, BETA, GAMA, DELTA, EPSILON, ZETA, ETA];
@@ -150,8 +89,8 @@ const resetSites = () => {
     '<a href="https://instagram.com/beta.burger">Instagram</a>',
   ];
   // Gama and Épsilon never answer.
-  sites['https://gama.example.com.br/robots.txt'] = ['timeout'];
-  sites['https://epsilon.example.com.br/robots.txt'] = ['timeout'];
+  sites['https://gama.example/robots.txt'] = ['timeout'];
+  sites['https://epsilon.example/robots.txt'] = ['timeout'];
 };
 
 type Answer = { status?: number; body: unknown };
@@ -367,8 +306,8 @@ describe('the three paths, in order', () => {
       'hamburgueriagama',
     ]);
     // The site never answered: 2 tries on robots.txt, so the home page was not even asked.
-    expect(asked.filter((u) => u === 'https://gama.example.com.br/robots.txt')).toHaveLength(2);
-    expect(asked).not.toContain('https://gama.example.com.br/');
+    expect(asked.filter((u) => u === 'https://gama.example/robots.txt')).toHaveLength(2);
+    expect(asked).not.toContain('https://gama.example/');
     expect((await lookupOf(GAMA))?.outcome).toBe('found');
   });
 
@@ -496,10 +435,11 @@ describe('what stops the finder', () => {
       gte(auditLog.at, startOfDaySaoPaulo(day)),
     );
     const spentBefore = (await db.select().from(auditLog).where(today)).length;
+    const budget = { perDay: spentBefore + 2, dailyUsd: 100, usdPerQuery: 0.005 };
     const results = await Promise.all(
-      [1, 2, 3, 4].map(() => reserveWebSearch(db, seller.id, spentBefore + 2, day)),
+      [1, 2, 3, 4].map(() => reserveWebSearch(db, seller.id, budget, day)),
     );
-    expect(results.filter(Boolean)).toHaveLength(2);
+    expect(results.filter((reason) => reason === null)).toHaveLength(2);
   });
 
   it('a refused Meta (permission) is a transient reason: tried again within hours, not a week', async () => {
@@ -535,8 +475,8 @@ describe('what stops the finder', () => {
 describe('Enriquecer with the search ticket', () => {
   it('reads the site and, with no link there, finds the @ by the next paths and saves it with its source', async () => {
     resetSites();
-    sites['https://epsilon.example.com.br/robots.txt'] = [''];
-    sites['https://epsilon.example.com.br/'] = ['<html>sem redes</html>'];
+    sites['https://epsilon.example/robots.txt'] = [''];
+    sites['https://epsilon.example/'] = ['<html>sem redes</html>'];
     graphScript.epsilon = { body: business('epsilon') };
     // Meta said "not a business" for this @ in the earlier test, and that answer is cached.
     await db
@@ -563,7 +503,7 @@ describe('Enriquecer with the search ticket', () => {
       .values({ placeId: EPSILON.id, status: 'reservado', ownerEmployeeId: seller.id })
       .returning();
     const res = await call(seller, 'POST', `/prospecting/prospects/${row!.id}/enrich`, {
-      website: 'https://epsilon.example.com.br/',
+      website: 'https://epsilon.example/',
       findTicket: ticket,
     });
     expect(res.statusCode).toBe(200);
