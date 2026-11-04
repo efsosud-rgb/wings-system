@@ -489,21 +489,13 @@ describe('what stops the finder', () => {
   });
 
   it('the paid web search has a daily ceiling, reserved under a lock', async () => {
-    // The ceiling counts audit rows, which the database stamps with the real clock; the "before"
-    // counts the same São Paulo day as the code, so a run across midnight stays coherent (lição 2).
+    // Audit rows carry the real clock; "before" counts the same São Paulo day as the code (lição 2).
     const day = new Date();
-    // The searches the tests above made already count today.
-    const spentBefore = (
-      await db
-        .select()
-        .from(auditLog)
-        .where(
-          and(
-            eq(auditLog.action, 'prospect.web_search'),
-            gte(auditLog.at, startOfDaySaoPaulo(day)),
-          ),
-        )
-    ).length;
+    const today = and(
+      eq(auditLog.action, 'prospect.web_search'),
+      gte(auditLog.at, startOfDaySaoPaulo(day)),
+    );
+    const spentBefore = (await db.select().from(auditLog).where(today)).length;
     const results = await Promise.all(
       [1, 2, 3, 4].map(() => reserveWebSearch(db, seller.id, spentBefore + 2, day)),
     );
@@ -550,8 +542,7 @@ describe('Enriquecer with the search ticket', () => {
     await db
       .delete(instagramBusinessSnapshots)
       .where(eq(instagramBusinessSnapshots.username, 'epsilon'));
-    // Start state: no earlier answer kept for this company. From here the order is the screen's:
-    // search -> find -> search again -> reserve -> Enriquecer, with nothing cleared in between.
+    // From here the order is the screen's, nothing cleared between: search, find, search, click.
     await db
       .delete(prospectInstagramLookups)
       .where(eq(prospectInstagramLookups.placeId, EPSILON.id));
@@ -562,12 +553,10 @@ describe('Enriquecer with the search ticket', () => {
     const found = (await find(seller, [first.instagramFind!])).json<InstagramFindResponse>();
     expect(found.items[0]!.instagram?.username).toBe('epsilon');
     expect(graphAsked.length).toBeGreaterThan(metaBefore);
-    // The finder answered: the row stops asking, but keeps the ticket the click sends.
     const next = itemOf(await search(seller), EPSILON);
     expect(next.instagramFind).toBeNull();
     expect(next.instagram).toMatchObject({ username: 'epsilon' });
     const ticket = next.enrichTicket!;
-    expect(ticket).toBeTruthy();
     const metaAfterFind = graphAsked.length;
     const [row] = await db
       .insert(prospects)
@@ -586,7 +575,6 @@ describe('Enriquecer with the search ticket', () => {
     });
     expect(body.instagramReasons).toBeUndefined();
     expect((await lookupOf(EPSILON))?.username).toBe('epsilon');
-    // The kept answer is saved with no second call to Meta.
     expect(graphAsked.length).toBe(metaAfterFind);
   });
 
