@@ -13,7 +13,8 @@ deny() {
 
 # secret-bearing files: any .env except .env.example/.env.sample/.env.template, /etc/wings-crm, environ dumps.
 # The suffix after `.env` is any non-separator text, so globs and backups (`.env*`, `.env~`, `.env.bak`) match too.
-SECRET_FILE='(^|[[:space:]/="'"'"'])\.env([^[:space:]"'"'"';|&<>/]*)|/etc/wings-crm|/proc/[^[:space:]]*/environ|\.pem([[:space:]"'"'"']|$)|(^|/)id_(rsa|ed25519)'
+# `:` is a separator so git's `HEAD:.env` form is recognised.
+SECRET_FILE='(^|[[:space:]/="'"'"':])\.env([^[:space:]"'"'"';|&<>/]*)|/etc/wings-crm|/proc/[^[:space:]]*/environ|\.pem([[:space:]"'"'"']|$)|(^|/)id_(rsa|ed25519)'
 SAFE_ENV='\.env\.(example|sample|template)'
 
 if [ "$tool" != Bash ]; then
@@ -33,7 +34,9 @@ scrub=$(sed -E 's/[^[:space:]"'"'"']*\.env\.(example|sample|template)([^[:alnum:
 # `cp SRC .env` / `mv SRC .env` only WRITE the last argument: do not count it as a read
 scrub=$(sed -E 's/^([[:space:]]*(cp|mv)[[:space:]].*)[[:space:]]+[^[:space:]]+[[:space:]]*$/\1/' <<<"$scrub")
 
-READERS='(^|[^[:alnum:]_-])(cat|tac|head|tail|less|more|nl|bat|grep|egrep|fgrep|rg|ag|sed|awk|cut|sort|uniq|paste|tee|base64|xxd|od|hexdump|strings|diff|cmp|jq|yq|source|python3?|node|perl|ruby|php|xargs|cp|mv|scp|rsync|curl|wget|nc|openssl|gpg|tar|zip|7z|dd|docker[[:space:]]+cp)([^[:alnum:]_-]|$)|(^|[;&|(][[:space:]]*)\.[[:space:]]+[^[:space:]]|<[[:space:]]*[^[:space:]]'
+# `git` counts only for the subcommands that print a file's content; `git commit -m 'add .env'`
+# writes text and is not a read.
+READERS='(^|[^[:alnum:]_-])(cat|tac|head|tail|less|more|nl|bat|grep|egrep|fgrep|rg|ag|sed|awk|cut|sort|uniq|paste|tee|base64|xxd|od|hexdump|strings|diff|cmp|jq|yq|source|python3?|node|perl|ruby|php|xargs|cp|mv|scp|rsync|curl|wget|nc|openssl|gpg|tar|zip|7z|dd|docker[[:space:]]+cp)([^[:alnum:]_-]|$)|(^|[^[:alnum:]_-])git[[:space:]]+([^;&|]*[[:space:]])?(show|diff|log|cat-file|grep|blame|whatchanged|archive|reflog)([^[:alnum:]_-]|$)|(^|[;&|(][[:space:]]*)\.[[:space:]]+[^[:space:]]|<[[:space:]]*[^[:space:]]'
 
 if grep -Eq "$SECRET_FILE" <<<"$scrub"; then
   # listing / existence checks are fine
