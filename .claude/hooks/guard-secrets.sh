@@ -15,6 +15,8 @@ deny() {
 # 007-A08: a missing dependency closes the guard (exit 0 would open it). Uses only builtins and
 # variables already set, so it runs before anything that needs jq.
 [ -n "${JQ_BIN:-$(command -v jq || true)}" ] || deny "falta o jq; a trava não consegue ler a chamada e não libera nada"
+# Same reason for input that does not parse: an empty read would otherwise fall through to exit 0.
+jq -e . >/dev/null 2>&1 <<<"$input" || deny "a chamada não é um JSON válido; a trava não consegue avaliá-la"
 
 # secret-bearing files: any .env except .env.example/.env.sample/.env.template, /etc/wings-crm, environ dumps.
 # The suffix after `.env` is any non-separator text, so globs and backups (`.env*`, `.env~`, `.env.bak`) match too.

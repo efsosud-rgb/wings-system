@@ -15,6 +15,11 @@ if ! command -v jq >/dev/null 2>&1; then
   echo "BLOQUEADO (produção): o jq não foi encontrado no PATH; a trava não libera nada sem ele. Instale o jq ou peça ao Eric." >&2
   exit 2
 fi
+# Input that does not parse would read as empty and fall through to exit 0, so it is refused too.
+if ! jq -e . >/dev/null 2>&1 <<<"$input"; then
+  echo "BLOQUEADO (produção): a chamada não é um JSON válido; a trava não consegue avaliá-la." >&2
+  exit 2
+fi
 [ "$(jq -r '.tool_name // empty' <<<"$input")" = Bash ] || exit 0
 [ "${WINGS_ALLOW_PRODUCTION:-}" = 1 ] && exit 0
 

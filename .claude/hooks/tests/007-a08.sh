@@ -34,4 +34,10 @@ test_with_jq_present_the_guards_behave_normally() {
   expect_allow guard-secrets.sh "$(bash_json 'ls')" 'with jq: guard-secrets'
 }
 
+test_unparseable_input_blocks() {
+  # An empty tool_name would also fall through to exit 0; unreadable input must block too.
+  expect_block guard-production.sh 'not json' 'unparseable input: guard-production'
+  expect_block guard-secrets.sh 'not json' 'unparseable input: guard-secrets'
+}
+
 run_tests
