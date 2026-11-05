@@ -40,6 +40,8 @@ grep -Eq "$PROD_IDS" <<<"$cmd" && deny "comando cita um app de produção do Coo
 # `git`); quotes, backticks and parentheses group a command, so they become spaces. Either way the
 # call lands on a segment the checks can read. Only stricter: nothing that was blocked becomes allowed.
 cmd_flat=$(sed -E 's/\\//g; s/[][()"'"'"'`]/ /g' <<<"$cmd")
+# A path to the binary (`/usr/bin/git`, `./git`) runs the same git; keep the bare name.
+cmd_flat=$(sed -E 's#(^|[[:space:]])[^[:space:]]*/git([[:space:]]|$)#\1git\2#g' <<<"$cmd_flat")
 segments=$(sed -E 's/(&&|\|\||;|\||\\?$)/\n/g' <<<"$cmd_flat")
 
 branch_of() { git -C "$1" rev-parse --abbrev-ref HEAD 2>/dev/null || true; }

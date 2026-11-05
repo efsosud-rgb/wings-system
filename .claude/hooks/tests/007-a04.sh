@@ -32,6 +32,14 @@ test_escaped_command_name_is_blocked() {
   expect_block guard-production.sh "$(bash_json 'git\ push origin main')" 'git\ push origin main'
 }
 
+test_path_to_the_binary_is_blocked() {
+  # `/usr/bin/git` and `./git` run the same git as `git`
+  expect_block guard-production.sh "$(bash_json '/usr/bin/git push origin main')" '/usr/bin/git push'
+  expect_block guard-production.sh "$(bash_json './git push origin main')" './git push'
+  expect_block guard-production.sh "$(bash_json 'bash -c "/usr/bin/git push origin main"')" \
+    'bash -c /usr/bin/git push'
+}
+
 test_nested_production_deploy_is_blocked() {
   expect_block guard-production.sh "$(bash_json 'bash -c "wings-deploy production"')" \
     'bash -c "wings-deploy production"'
