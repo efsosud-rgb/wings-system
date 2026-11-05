@@ -5,8 +5,21 @@
 # the command does NOT release it, because this hook reads its own environment, not the command.
 # Blocks (exit 2): wings-deploy production, wings-env set|restart on api-prod/web-prod, the
 # production Coolify app ids, git push/merge/branch moves on main, gh pr merge.
+# 007-A04/05/06/07/08: quotes and subcommands cannot hide a call; options before the git
+# subcommand are skipped; checkout -B/switch -C on main and `gh api -f` on main are refused.
 set -u
+# d-t111: the checks below only ever get stricter.
 input=$(cat)
+# 007-A08: without jq the call cannot be read, so refuse instead of allowing (exit 0 = allowed).
+if ! command -v jq >/dev/null 2>&1; then
+  echo "BLOQUEADO (produção): o jq não foi encontrado no PATH; a trava não libera nada sem ele. Instale o jq ou peça ao Eric." >&2
+  exit 2
+fi
+# Input that does not parse would read as empty and fall through to exit 0, so it is refused too.
+if ! jq -e . >/dev/null 2>&1 <<<"$input"; then
+  echo "BLOQUEADO (produção): a chamada não é um JSON válido; a trava não consegue avaliá-la." >&2
+  exit 2
+fi
 [ "$(jq -r '.tool_name // empty' <<<"$input")" = Bash ] || exit 0
 [ "${WINGS_ALLOW_PRODUCTION:-}" = 1 ] && exit 0
 
@@ -22,10 +35,34 @@ deny() {
 PROD_IDS='engmbukkyuk3d07qqolmm5xt|di27x8hdkondbosmqmere9qf'
 grep -Eq "$PROD_IDS" <<<"$cmd" && deny "comando cita um app de produção do Coolify"
 
-# one segment per line (&&, ||, ;, |, newline), so `echo main && git push origin x` is not a push to main
-segments=$(sed -E 's/(&&|\|\||;|\||\\?$)/\n/g' <<<"$cmd")
+# one segment per line (&&, ||, ;, |, newline), so a harmless word ending a segment is not a push to main.
+# 007-A04: a backslash only escapes the next character, so it is dropped (`\git` and `g\it` are
+# `git`); quotes, backticks and parentheses group a command, so they become spaces. Either way the
+# call lands on a segment the checks can read. Only stricter: nothing that was blocked becomes allowed.
+cmd_flat=$(sed -E 's/\\//g; s/[][()"'"'"'`]/ /g' <<<"$cmd")
+# A path to the binary (`/usr/bin/git`, `./git`) runs the same git; keep the bare name.
+cmd_flat=$(sed -E 's#(^|[[:space:]])[^[:space:]]*/git([[:space:]]|$)#\1git\2#g' <<<"$cmd_flat")
+segments=$(sed -E 's/(&&|\|\||;|\||\\?$)/\n/g' <<<"$cmd_flat")
 
 branch_of() { git -C "$1" rev-parse --abbrev-ref HEAD 2>/dev/null || true; }
+
+# 007-A05: the subcommand is the first word after `git` that is not an option. Options that take a
+# separate argument (-c user.name=x, --git-dir .git, -C dir) consume the next word too.
+git_sub() {
+  local -a w
+  local i=0
+  read -r -a w <<<"$1"
+  while [ "$i" -lt "${#w[@]}" ] && [ "${w[$i]}" != git ]; do i=$((i + 1)); done
+  i=$((i + 1))
+  while [ "$i" -lt "${#w[@]}" ]; do
+    case "${w[$i]}" in
+      -C|-c|--git-dir|--work-tree|--namespace|--exec-path|--config-env|--super-prefix) i=$((i + 2)) ;;
+      -*) i=$((i + 1)) ;;
+      *) printf '%s\n' "${w[$i]}"; return 0 ;;
+    esac
+  done
+  return 1
+}
 branch=$(branch_of "$cwd")
 forced_main=0   # set by an earlier `git checkout main` in the same command line
 MAIN_REF='(^|[[:space:]:+])((refs/heads/|origin/)?main)([[:space:]]|$)'
@@ -39,6 +76,11 @@ while IFS= read -r seg; do
     deny "wings-env set/restart em app de produção"
   fi
 
+  # 007-A04: xargs builds the arguments from other input, so nothing about the call can be checked.
+  if grep -Eq '(^|[[:space:]])xargs([[:space:]]|$)' <<<"$seg" && grep -Eq '(^|[[:space:]])git[[:space:]]' <<<"$seg"; then
+    deny "git por xargs (argumentos não conferíveis)"
+  fi
+
   if grep -Eq '(^|[[:space:]])git[[:space:]]' <<<"$seg"; then
     # -C <dir> changes the repository the command acts on
     segcwd=$cwd
@@ -48,7 +90,7 @@ while IFS= read -r seg; do
     fi
     segbranch=$(branch_of "$segcwd"); [ -n "$segbranch" ] || segbranch=$branch
     [ "$forced_main" = 1 ] && segbranch=main
-    sub=$(sed -E 's/^.*(^|[[:space:]])git([[:space:]]+-C[[:space:]]+("[^"]+"|[^[:space:]]+))?([[:space:]]+-[-a-zA-Z]+(=[^[:space:]]+)?)*[[:space:]]+([a-z-]+).*$/\6/' <<<"$seg")
+    sub=$(git_sub "$seg")
 
     case "$sub" in
       push)
@@ -69,13 +111,18 @@ while IFS= read -r seg; do
         grep -Eq 'refs/heads/main' <<<"$seg" && deny "git update-ref em main"
         ;;
       checkout|switch)
+        # 007-A06. The flag may carry its argument joined (`-Bmain`), so both forms are covered.
+        grep -Eq -- "(-B|-C|-f|--force|--discard-changes|--orphan)([[:space:]]+[^[:space:]]+)*[[:space:]]+main([[:space:]]|$)" <<<"$seg" && deny "git $sub move a branch main"
+        grep -Eq -- "-(B|C)main([[:space:]]|$)|(^|[[:space:]])(--force|--discard-changes|--orphan)=main([[:space:]]|$)" <<<"$seg" && deny "git $sub move a branch main"
         grep -Eq -- '[[:space:]](main)([[:space:]]|$)' <<<"$seg" && forced_main=1
         ;;
     esac
   fi
 
   grep -Eq '(^|[[:space:]/])gh[[:space:]]+pr[[:space:]]+merge' <<<"$seg" && deny "gh pr merge (pode ser PR para main)"
-  grep -Eq '(^|[[:space:]/])gh[[:space:]]+api[[:space:]].*(merge|git/refs/heads/main)' <<<"$seg" && grep -Eiq -- '-X[[:space:]]*(PUT|POST|PATCH|DELETE)|--method' <<<"$seg" && deny "gh api alterando main/merge"
+  # 007-A07
+  grep -Eq '(^|[[:space:]/])gh[[:space:]]+api[[:space:]].*(merge|git/refs/heads/main)' <<<"$seg" && grep -Eiq -- '-X[[:space:]]*(PUT|POST|PATCH|DELETE)|--method|(^|[[:space:]])(-f|-F|--field|--raw-field|--input)([[:space:]=]|$)|(^|[[:space:]])-(f|F)[^[:space:]]' <<<"$seg" && deny "gh api alterando main/merge"
 done <<<"$segments"
 
 exit 0
+

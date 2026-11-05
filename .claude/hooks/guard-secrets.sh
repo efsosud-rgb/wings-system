@@ -3,37 +3,64 @@
 # environment dumps and variables named *TOKEN*/*SECRET*/*KEY*/*PASSWORD*. Using a secret without
 # showing it (the wings-* helpers read their own files) is not blocked. Exit 2 = block.
 set -u
+# d-t111: the checks below only ever get stricter.
 input=$(cat)
-tool=$(jq -r '.tool_name // empty' <<<"$input")
 
 deny() {
   echo "BLOQUEADO (segredo): $1. Valores de segredo nunca entram na conversa nem em log. Use wings-env list (só nomes), wings-env set --from-file, ou peça ao Eric." >&2
   exit 2
 }
 
-# secret-bearing files: any .env except .env.example/.env.sample/.env.template, /etc/wings-crm, environ dumps
-SECRET_FILE='(^|[[:space:]/="'"'"'])\.env(\.[A-Za-z0-9_-]+)?(["'"'"'[:space:]]|$)|/etc/wings-crm|/proc/[^[:space:]]*/environ|\.pem([[:space:]"'"'"']|$)|(^|/)id_(rsa|ed25519)'
+# 007-A08: a missing dependency closes the guard (exit 0 would open it). Uses only builtins, so it
+# runs before anything that needs jq.
+command -v jq >/dev/null 2>&1 || deny "falta o jq; a trava não consegue ler a chamada e não libera nada"
+# Same reason for input that does not parse: an empty read would otherwise fall through to exit 0.
+jq -e . >/dev/null 2>&1 <<<"$input" || deny "a chamada não é um JSON válido; a trava não consegue avaliá-la"
+tool=$(jq -r '.tool_name // empty' <<<"$input")
+
+# secret-bearing files: any .env except .env.example/.env.sample/.env.template, /etc/wings-crm, environ dumps.
+# The suffix after `.env` is any non-separator text, so globs and backups (`.env*`, `.env~`, `.env.bak`) match too.
+# `:` is a separator so git's `HEAD:.env` form is recognised.
+SECRET_FILE='(^|[[:space:]/="'"'"':{},])\.env([^[:space:]"'"'"';|&<>/]*)|/etc/wings-crm|/proc/[^[:space:]]*/environ|\.pem([[:space:]"'"'"']|$)|(^|/)id_(rsa|ed25519)'
+# A shell glob on dotfiles (`cat .*`, `head .??*`, `grep -r K .[e]nv`) reaches .env without ever
+# spelling it. Only a wildcard whose literal prefix is empty, `e`, `en` or `env` can match a dot-env
+# name, so `.prettierrc*` and `.github/*.yml` stay readable; listing stays allowed because `ls` is
+# not a reader.
+DOT_GLOB='(^|[[:space:]/="'"'"':{},])\.(e|en|env)?[*?[]'
 SAFE_ENV='\.env\.(example|sample|template)'
 
-if [ "$tool" = Read ]; then
-  p=$(jq -r '.tool_input.file_path // empty' <<<"$input")
+if [ "$tool" != Bash ]; then
+  # Any other tool that names a path (Read, Grep, NotebookRead...) would show the file's content.
+  # settings.json must match every such tool; see DUVIDAS.md (007-A02).
+  p=$(jq -r '[.tool_input.file_path, .tool_input.notebook_path, .tool_input.path, .tool_input.glob]
+    | map(select(. != null and . != "")) | .[]' <<<"$input" 2>/dev/null)
+  [ -n "$p" ] || exit 0
   grep -Eq "$SAFE_ENV" <<<"$p" && exit 0
-  grep -Eq "$SECRET_FILE" <<<"$p" && deny "leitura de arquivo de segredo ($(basename "$p"))"
+  # A glob in the tool's own path/glob field (`Grep` with `glob: ".*"`) reaches .env the same way.
+  grep -Eq "$SECRET_FILE|$DOT_GLOB" <<<"$p" && deny "leitura de arquivo de segredo ($(basename "$(head -1 <<<"$p")"))"
   exit 0
 fi
-[ "$tool" = Bash ] || exit 0
 
 cmd=$(jq -r '.tool_input.command // empty' <<<"$input")
 # ignore the safe example files so they do not trip the file rule
-scrub=$(sed -E 's/[^[:space:]"'"'"']*\.env\.(example|sample|template)//g' <<<"$cmd")
+scrub=$(sed -E 's/[^[:space:]"'"'"']*\.env\.(example|sample|template)([^[:alnum:]_.-]|$)/\2/g' <<<"$cmd")
 # `cp SRC .env` / `mv SRC .env` only WRITE the last argument: do not count it as a read
 scrub=$(sed -E 's/^([[:space:]]*(cp|mv)[[:space:]].*)[[:space:]]+[^[:space:]]+[[:space:]]*$/\1/' <<<"$scrub")
+# 007-A01: the shell joins `c"a"t` and `c\at` into `cat`, so the checks also see a copy without
+# quotes or backslashes. It gets the same two scrubs above; the original is checked too.
+plain=$(sed -E 's/["'"'"'\\]//g' <<<"$cmd")
+plain=$(sed -E 's/[^[:space:]]*\.env\.(example|sample|template)([^[:alnum:]_.-]|$)/\2/g' <<<"$plain")
+plain=$(sed -E 's/^([[:space:]]*(cp|mv)[[:space:]].*)[[:space:]]+[^[:space:]]+[[:space:]]*$/\1/' <<<"$plain")
+both="$scrub
+$plain"
 
-READERS='(^|[^[:alnum:]_-])(cat|tac|head|tail|less|more|nl|bat|grep|egrep|fgrep|rg|ag|sed|awk|cut|sort|uniq|paste|tee|base64|xxd|od|hexdump|strings|diff|cmp|jq|yq|source|python3?|node|perl|ruby|php|xargs|cp|mv|scp|rsync|curl|wget|nc|openssl|gpg|tar|zip|7z|dd|docker[[:space:]]+cp)([^[:alnum:]_-]|$)|(^|[;&|(][[:space:]]*)\.[[:space:]]+[^[:space:]]|<[[:space:]]*[^[:space:]]'
+# `git` counts only for the subcommands that print a file's content; `git commit -m 'add .env'`
+# writes text and is not a read.
+READERS='(^|[^[:alnum:]_-])(cat|tac|head|tail|less|more|nl|bat|grep|egrep|fgrep|rg|ag|sed|awk|cut|sort|uniq|paste|tee|base64|xxd|od|hexdump|strings|diff|cmp|jq|yq|source|python3?|node|perl|ruby|php|xargs|cp|mv|scp|rsync|curl|wget|nc|openssl|gpg|tar|zip|7z|dd|docker[[:space:]]+cp)([^[:alnum:]_-]|$)|(^|[^[:alnum:]_-])git[[:space:]]+([^;&|]*[[:space:]])?(show|diff|log|cat-file|grep|blame|whatchanged|archive|reflog)([^[:alnum:]_-]|$)|(^|[;&|(][[:space:]]*)\.[[:space:]]+[^[:space:]]|<[[:space:]]*[^[:space:]]'
 
-if grep -Eq "$SECRET_FILE" <<<"$scrub"; then
+if grep -Eq "$SECRET_FILE|$DOT_GLOB" <<<"$both"; then
   # listing / existence checks are fine
-  if grep -Eq "$READERS" <<<"$scrub"; then
+  if grep -Eq "$READERS" <<<"$both"; then
     deny "comando lê arquivo de segredo (.env, /etc/wings-crm, environ, chave)"
   fi
 fi
