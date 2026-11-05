@@ -16,13 +16,16 @@ deny() {
 SECRET_FILE='(^|[[:space:]/="'"'"'])\.env([^[:space:]"'"'"';|&<>/]*)|/etc/wings-crm|/proc/[^[:space:]]*/environ|\.pem([[:space:]"'"'"']|$)|(^|/)id_(rsa|ed25519)'
 SAFE_ENV='\.env\.(example|sample|template)'
 
-if [ "$tool" = Read ]; then
-  p=$(jq -r '.tool_input.file_path // empty' <<<"$input")
+if [ "$tool" != Bash ]; then
+  # Any other tool that names a path (Read, Grep, NotebookRead...) would show the file's content.
+  # settings.json must match every such tool; see DUVIDAS.md (007-A02).
+  p=$(jq -r '[.tool_input.file_path, .tool_input.notebook_path, .tool_input.path, .tool_input.glob]
+    | map(select(. != null and . != "")) | .[]' <<<"$input" 2>/dev/null)
+  [ -n "$p" ] || exit 0
   grep -Eq "$SAFE_ENV" <<<"$p" && exit 0
-  grep -Eq "$SECRET_FILE" <<<"$p" && deny "leitura de arquivo de segredo ($(basename "$p"))"
+  grep -Eq "$SECRET_FILE" <<<"$p" && deny "leitura de arquivo de segredo ($(basename "$(head -1 <<<"$p")"))"
   exit 0
 fi
-[ "$tool" = Bash ] || exit 0
 
 cmd=$(jq -r '.tool_input.command // empty' <<<"$input")
 # ignore the safe example files so they do not trip the file rule
