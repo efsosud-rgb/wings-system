@@ -3,6 +3,7 @@
 # environment dumps and variables named *TOKEN*/*SECRET*/*KEY*/*PASSWORD*. Using a secret without
 # showing it (the wings-* helpers read their own files) is not blocked. Exit 2 = block.
 set -u
+# d-t111: the checks below only ever get stricter.
 input=$(cat)
 tool=$(jq -r '.tool_name // empty' <<<"$input")
 
@@ -10,6 +11,10 @@ deny() {
   echo "BLOQUEADO (segredo): $1. Valores de segredo nunca entram na conversa nem em log. Use wings-env list (só nomes), wings-env set --from-file, ou peça ao Eric." >&2
   exit 2
 }
+
+# 007-A08: a missing dependency closes the guard (exit 0 would open it). Uses only builtins and
+# variables already set, so it runs before anything that needs jq.
+[ -n "${JQ_BIN:-$(command -v jq || true)}" ] || deny "falta o jq; a trava não consegue ler a chamada e não libera nada"
 
 # secret-bearing files: any .env except .env.example/.env.sample/.env.template, /etc/wings-crm, environ dumps.
 # The suffix after `.env` is any non-separator text, so globs and backups (`.env*`, `.env~`, `.env.bak`) match too.

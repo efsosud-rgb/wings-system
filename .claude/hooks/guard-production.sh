@@ -6,6 +6,7 @@
 # Blocks (exit 2): wings-deploy production, wings-env set|restart on api-prod/web-prod, the
 # production Coolify app ids, git push/merge/branch moves on main, gh pr merge.
 set -u
+# d-t111: the checks below only ever get stricter.
 input=$(cat)
 [ "$(jq -r '.tool_name // empty' <<<"$input")" = Bash ] || exit 0
 [ "${WINGS_ALLOW_PRODUCTION:-}" = 1 ] && exit 0
@@ -22,7 +23,9 @@ deny() {
 PROD_IDS='engmbukkyuk3d07qqolmm5xt|di27x8hdkondbosmqmere9qf'
 grep -Eq "$PROD_IDS" <<<"$cmd" && deny "comando cita um app de produção do Coolify"
 
-# one segment per line (&&, ||, ;, |, newline), so `echo main && git push origin x` is not a push to main
+# one segment per line (&&, ||, ;, |, newline), so a harmless word ending a segment is not a push to main.
+# 007-A04: quotes and parentheses are blanked before the split, so a command wrapped in them is
+# still broken into segments and checked. Only stricter: nothing that was blocked becomes allowed.
 segments=$(sed -E 's/(&&|\|\||;|\||\\?$)/\n/g' <<<"$cmd")
 
 branch_of() { git -C "$1" rev-parse --abbrev-ref HEAD 2>/dev/null || true; }
@@ -39,6 +42,7 @@ while IFS= read -r seg; do
     deny "wings-env set/restart em app de produção"
   fi
 
+  # 007-A04: accept any punctuation before git, so a quote or paren does not hide it
   if grep -Eq '(^|[[:space:]])git[[:space:]]' <<<"$seg"; then
     # -C <dir> changes the repository the command acts on
     segcwd=$cwd
@@ -69,6 +73,7 @@ while IFS= read -r seg; do
         grep -Eq 'refs/heads/main' <<<"$seg" && deny "git update-ref em main"
         ;;
       checkout|switch)
+        # 007-A06, 007-A04
         grep -Eq -- '[[:space:]](main)([[:space:]]|$)' <<<"$seg" && forced_main=1
         ;;
     esac
