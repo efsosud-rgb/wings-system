@@ -5,18 +5,18 @@
 set -u
 # d-t111: the checks below only ever get stricter.
 input=$(cat)
-tool=$(jq -r '.tool_name // empty' <<<"$input")
 
 deny() {
   echo "BLOQUEADO (segredo): $1. Valores de segredo nunca entram na conversa nem em log. Use wings-env list (só nomes), wings-env set --from-file, ou peça ao Eric." >&2
   exit 2
 }
 
-# 007-A08: a missing dependency closes the guard (exit 0 would open it). Uses only builtins and
-# variables already set, so it runs before anything that needs jq.
-[ -n "${JQ_BIN:-$(command -v jq || true)}" ] || deny "falta o jq; a trava não consegue ler a chamada e não libera nada"
+# 007-A08: a missing dependency closes the guard (exit 0 would open it). Uses only builtins, so it
+# runs before anything that needs jq.
+command -v jq >/dev/null 2>&1 || deny "falta o jq; a trava não consegue ler a chamada e não libera nada"
 # Same reason for input that does not parse: an empty read would otherwise fall through to exit 0.
 jq -e . >/dev/null 2>&1 <<<"$input" || deny "a chamada não é um JSON válido; a trava não consegue avaliá-la"
+tool=$(jq -r '.tool_name // empty' <<<"$input")
 
 # secret-bearing files: any .env except .env.example/.env.sample/.env.template, /etc/wings-crm, environ dumps.
 # The suffix after `.env` is any non-separator text, so globs and backups (`.env*`, `.env~`, `.env.bak`) match too.
