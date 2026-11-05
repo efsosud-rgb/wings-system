@@ -5,6 +5,8 @@
 # the command does NOT release it, because this hook reads its own environment, not the command.
 # Blocks (exit 2): wings-deploy production, wings-env set|restart on api-prod/web-prod, the
 # production Coolify app ids, git push/merge/branch moves on main, gh pr merge.
+# 007-A04/05/06/07/08: quotes and subcommands cannot hide a call; options before the git
+# subcommand are skipped; checkout -B/switch -C on main and `gh api -f` on main are refused.
 set -u
 # d-t111: the checks below only ever get stricter.
 input=$(cat)
@@ -29,6 +31,24 @@ grep -Eq "$PROD_IDS" <<<"$cmd" && deny "comando cita um app de produção do Coo
 segments=$(sed -E 's/(&&|\|\||;|\||\\?$)/\n/g' <<<"$cmd")
 
 branch_of() { git -C "$1" rev-parse --abbrev-ref HEAD 2>/dev/null || true; }
+
+# 007-A05: the subcommand is the first word after `git` that is not an option. Options that take a
+# separate argument (-c user.name=x, --git-dir .git, -C dir) consume the next word too.
+git_sub() {
+  local -a w
+  local i=0
+  read -r -a w <<<"$1"
+  while [ "$i" -lt "${#w[@]}" ] && [ "${w[$i]}" != git ]; do i=$((i + 1)); done
+  i=$((i + 1))
+  while [ "$i" -lt "${#w[@]}" ]; do
+    case "${w[$i]}" in
+      -C|-c|--git-dir|--work-tree|--namespace|--exec-path|--config-env|--super-prefix) i=$((i + 2)) ;;
+      -*) i=$((i + 1)) ;;
+      *) printf '%s\n' "${w[$i]}"; return 0 ;;
+    esac
+  done
+  return 1
+}
 branch=$(branch_of "$cwd")
 forced_main=0   # set by an earlier `git checkout main` in the same command line
 MAIN_REF='(^|[[:space:]:+])((refs/heads/|origin/)?main)([[:space:]]|$)'
@@ -52,7 +72,7 @@ while IFS= read -r seg; do
     fi
     segbranch=$(branch_of "$segcwd"); [ -n "$segbranch" ] || segbranch=$branch
     [ "$forced_main" = 1 ] && segbranch=main
-    sub=$(sed -E 's/^.*(^|[[:space:]])git([[:space:]]+-C[[:space:]]+("[^"]+"|[^[:space:]]+))?([[:space:]]+-[-a-zA-Z]+(=[^[:space:]]+)?)*[[:space:]]+([a-z-]+).*$/\6/' <<<"$seg")
+    sub=$(git_sub "$seg")
 
     case "$sub" in
       push)
@@ -73,14 +93,17 @@ while IFS= read -r seg; do
         grep -Eq 'refs/heads/main' <<<"$seg" && deny "git update-ref em main"
         ;;
       checkout|switch)
-        # 007-A06, 007-A04
+        # 007-A06
+        grep -Eq -- "(-B|-C|-f|--force|--discard-changes|--orphan)([[:space:]]+[^[:space:]]+)*[[:space:]]+main([[:space:]]|$)" <<<"$seg" && deny "git $sub move a branch main"
         grep -Eq -- '[[:space:]](main)([[:space:]]|$)' <<<"$seg" && forced_main=1
         ;;
     esac
   fi
 
   grep -Eq '(^|[[:space:]/])gh[[:space:]]+pr[[:space:]]+merge' <<<"$seg" && deny "gh pr merge (pode ser PR para main)"
-  grep -Eq '(^|[[:space:]/])gh[[:space:]]+api[[:space:]].*(merge|git/refs/heads/main)' <<<"$seg" && grep -Eiq -- '-X[[:space:]]*(PUT|POST|PATCH|DELETE)|--method' <<<"$seg" && deny "gh api alterando main/merge"
+  # 007-A07
+  grep -Eq '(^|[[:space:]/])gh[[:space:]]+api[[:space:]].*(merge|git/refs/heads/main)' <<<"$seg" && grep -Eiq -- '-X[[:space:]]*(PUT|POST|PATCH|DELETE)|--method|(^|[[:space:]])(-f|-F|--field|--raw-field|--input)([[:space:]=]|$)' <<<"$seg" && deny "gh api alterando main/merge"
 done <<<"$segments"
 
 exit 0
+
