@@ -21,7 +21,11 @@ jq -e . >/dev/null 2>&1 <<<"$input" || deny "a chamada não é um JSON válido; 
 # secret-bearing files: any .env except .env.example/.env.sample/.env.template, /etc/wings-crm, environ dumps.
 # The suffix after `.env` is any non-separator text, so globs and backups (`.env*`, `.env~`, `.env.bak`) match too.
 # `:` is a separator so git's `HEAD:.env` form is recognised.
-SECRET_FILE='(^|[[:space:]/="'"'"':])\.env([^[:space:]"'"'"';|&<>/]*)|/etc/wings-crm|/proc/[^[:space:]]*/environ|\.pem([[:space:]"'"'"']|$)|(^|/)id_(rsa|ed25519)'
+SECRET_FILE='(^|[[:space:]/="'"'"':{},])\.env([^[:space:]"'"'"';|&<>/]*)|/etc/wings-crm|/proc/[^[:space:]]*/environ|\.pem([[:space:]"'"'"']|$)|(^|/)id_(rsa|ed25519)'
+# A shell glob on dotfiles (`cat .*`, `head .??*`, `grep -r K .[e]nv`) reaches .env without ever
+# spelling it. A wildcard past a `/` cannot, so `.github/*.yml` stays readable; listing stays
+# allowed because `ls` is not a reader.
+DOT_GLOB='(^|[[:space:]/="'"'"':{},])\.([^/[:space:]"'"'"';|&<>]*)[*?[]'
 SAFE_ENV='\.env\.(example|sample|template)'
 
 if [ "$tool" != Bash ]; then
@@ -45,7 +49,7 @@ scrub=$(sed -E 's/^([[:space:]]*(cp|mv)[[:space:]].*)[[:space:]]+[^[:space:]]+[[
 # writes text and is not a read.
 READERS='(^|[^[:alnum:]_-])(cat|tac|head|tail|less|more|nl|bat|grep|egrep|fgrep|rg|ag|sed|awk|cut|sort|uniq|paste|tee|base64|xxd|od|hexdump|strings|diff|cmp|jq|yq|source|python3?|node|perl|ruby|php|xargs|cp|mv|scp|rsync|curl|wget|nc|openssl|gpg|tar|zip|7z|dd|docker[[:space:]]+cp)([^[:alnum:]_-]|$)|(^|[^[:alnum:]_-])git[[:space:]]+([^;&|]*[[:space:]])?(show|diff|log|cat-file|grep|blame|whatchanged|archive|reflog)([^[:alnum:]_-]|$)|(^|[;&|(][[:space:]]*)\.[[:space:]]+[^[:space:]]|<[[:space:]]*[^[:space:]]'
 
-if grep -Eq "$SECRET_FILE" <<<"$scrub"; then
+if grep -Eq "$SECRET_FILE|$DOT_GLOB" <<<"$scrub"; then
   # listing / existence checks are fine
   if grep -Eq "$READERS" <<<"$scrub"; then
     deny "comando lê arquivo de segredo (.env, /etc/wings-crm, environ, chave)"
