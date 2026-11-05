@@ -45,6 +45,15 @@ test_other_dotfiles_stay_allowed() {
   expect_allow guard-secrets.sh "$(bash_json 'cat ./src/*.ts')" 'cat src glob'
 }
 
+test_escaped_reader_name_is_blocked() {
+  # the shell joins `c"a"t` and `c\at` into `cat`; the reader name must not hide the read
+  expect_block guard-secrets.sh "$(bash_json 'c\at .env')" 'c\at .env'
+  expect_block guard-secrets.sh "$(bash_json 'ca\t .env')" 'ca\t .env'
+  expect_block guard-secrets.sh "$(bash_json 'c"a"t .env')" 'c"a"t .env'
+  expect_block guard-secrets.sh "$(bash_json "c'a't .env")" "c'a't .env"
+  expect_block guard-secrets.sh "$(bash_json 'cat .en\v')" 'cat .en\v'
+}
+
 test_listing_and_examples_still_allowed() {
   # only reading is blocked; the example files stay readable on purpose
   expect_allow guard-secrets.sh "$(bash_json 'ls -la .env*')" 'ls .env*'
