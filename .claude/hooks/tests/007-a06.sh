@@ -19,6 +19,16 @@ test_switch_c_main_is_blocked() {
     "$(bash_json 'git switch --force main')" 'git switch --force main'
 }
 
+test_joined_flag_carrying_main_is_blocked() {
+  # `-Bmain` is the same rewrite as `-B main`; the flag may carry its argument without a space
+  expect_block guard-production.sh \
+    "$(bash_json 'git checkout -Bmain origin/outra')" 'git checkout -Bmain'
+  expect_block guard-production.sh \
+    "$(bash_json 'git switch -Cmain outra')" 'git switch -Cmain'
+  expect_block guard-production.sh \
+    "$(bash_json 'git checkout --force=main')" 'git checkout --force=main'
+}
+
 test_plain_switch_stays_allowed() {
   # switching TO main is a checkout, not a rewrite; the later push guard still applies
   expect_allow guard-production.sh "$(bash_json 'git checkout main')" 'git checkout main'

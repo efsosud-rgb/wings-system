@@ -109,8 +109,9 @@ while IFS= read -r seg; do
         grep -Eq 'refs/heads/main' <<<"$seg" && deny "git update-ref em main"
         ;;
       checkout|switch)
-        # 007-A06
+        # 007-A06. The flag may carry its argument joined (`-Bmain`), so both forms are covered.
         grep -Eq -- "(-B|-C|-f|--force|--discard-changes|--orphan)([[:space:]]+[^[:space:]]+)*[[:space:]]+main([[:space:]]|$)" <<<"$seg" && deny "git $sub move a branch main"
+        grep -Eq -- "-(B|C)main([[:space:]]|$)|(^|[[:space:]])(--force|--discard-changes|--orphan)=main([[:space:]]|$)" <<<"$seg" && deny "git $sub move a branch main"
         grep -Eq -- '[[:space:]](main)([[:space:]]|$)' <<<"$seg" && forced_main=1
         ;;
     esac
@@ -118,7 +119,7 @@ while IFS= read -r seg; do
 
   grep -Eq '(^|[[:space:]/])gh[[:space:]]+pr[[:space:]]+merge' <<<"$seg" && deny "gh pr merge (pode ser PR para main)"
   # 007-A07
-  grep -Eq '(^|[[:space:]/])gh[[:space:]]+api[[:space:]].*(merge|git/refs/heads/main)' <<<"$seg" && grep -Eiq -- '-X[[:space:]]*(PUT|POST|PATCH|DELETE)|--method|(^|[[:space:]])(-f|-F|--field|--raw-field|--input)([[:space:]=]|$)' <<<"$seg" && deny "gh api alterando main/merge"
+  grep -Eq '(^|[[:space:]/])gh[[:space:]]+api[[:space:]].*(merge|git/refs/heads/main)' <<<"$seg" && grep -Eiq -- '-X[[:space:]]*(PUT|POST|PATCH|DELETE)|--method|(^|[[:space:]])(-f|-F|--field|--raw-field|--input)([[:space:]=]|$)|(^|[[:space:]])-(f|F)[^[:space:]]' <<<"$seg" && deny "gh api alterando main/merge"
 done <<<"$segments"
 
 exit 0
