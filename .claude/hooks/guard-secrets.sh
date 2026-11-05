@@ -23,9 +23,10 @@ jq -e . >/dev/null 2>&1 <<<"$input" || deny "a chamada não é um JSON válido; 
 # `:` is a separator so git's `HEAD:.env` form is recognised.
 SECRET_FILE='(^|[[:space:]/="'"'"':{},])\.env([^[:space:]"'"'"';|&<>/]*)|/etc/wings-crm|/proc/[^[:space:]]*/environ|\.pem([[:space:]"'"'"']|$)|(^|/)id_(rsa|ed25519)'
 # A shell glob on dotfiles (`cat .*`, `head .??*`, `grep -r K .[e]nv`) reaches .env without ever
-# spelling it. A wildcard past a `/` cannot, so `.github/*.yml` stays readable; listing stays
-# allowed because `ls` is not a reader.
-DOT_GLOB='(^|[[:space:]/="'"'"':{},])\.([^/[:space:]"'"'"';|&<>]*)[*?[]'
+# spelling it. Only a wildcard whose literal prefix is empty, `e`, `en` or `env` can match a dot-env
+# name, so `.prettierrc*` and `.github/*.yml` stay readable; listing stays allowed because `ls` is
+# not a reader.
+DOT_GLOB='(^|[[:space:]/="'"'"':{},])\.(e|en|env)?[*?[]'
 SAFE_ENV='\.env\.(example|sample|template)'
 
 if [ "$tool" != Bash ]; then

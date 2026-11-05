@@ -43,6 +43,10 @@ test_other_dotfiles_stay_allowed() {
   expect_allow guard-secrets.sh "$(bash_json 'cat .github/workflows/ci.yml')" 'cat workflow yml'
   expect_allow guard-secrets.sh "$(bash_json 'grep -r x .github')" 'grep in .github'
   expect_allow guard-secrets.sh "$(bash_json 'cat ./src/*.ts')" 'cat src glob'
+  # a wildcard after other dot-names cannot match a dot-env name
+  expect_allow guard-secrets.sh "$(bash_json 'cat .prettierrc*')" 'cat .prettierrc*'
+  expect_allow guard-secrets.sh "$(bash_json 'cat .eslintrc*')" 'cat .eslintrc*'
+  expect_block guard-secrets.sh "$(bash_json 'cat .en*')" 'cat .en*'
 }
 
 test_escaped_reader_name_is_blocked() {
