@@ -10,6 +10,11 @@
 set -u
 # d-t111: the checks below only ever get stricter.
 input=$(cat)
+# 007-A08: without jq the call cannot be read, so refuse instead of allowing (exit 0 = allowed).
+if ! command -v jq >/dev/null 2>&1; then
+  echo "BLOQUEADO (produção): o jq não foi encontrado no PATH; a trava não libera nada sem ele. Instale o jq ou peça ao Eric." >&2
+  exit 2
+fi
 [ "$(jq -r '.tool_name // empty' <<<"$input")" = Bash ] || exit 0
 [ "${WINGS_ALLOW_PRODUCTION:-}" = 1 ] && exit 0
 
@@ -28,7 +33,9 @@ grep -Eq "$PROD_IDS" <<<"$cmd" && deny "comando cita um app de produção do Coo
 # one segment per line (&&, ||, ;, |, newline), so a harmless word ending a segment is not a push to main.
 # 007-A04: quotes and parentheses are blanked before the split, so a command wrapped in them is
 # still broken into segments and checked. Only stricter: nothing that was blocked becomes allowed.
-segments=$(sed -E 's/(&&|\|\||;|\||\\?$)/\n/g' <<<"$cmd")
+# 007-A04: quotes and parentheses cannot hide a call, so they are blanked before the split.
+cmd_flat=$(sed -E 's/[][()"'"'"'`]/ /g' <<<"$cmd")
+segments=$(sed -E 's/(&&|\|\||;|\||\\?$)/\n/g' <<<"$cmd_flat")
 
 branch_of() { git -C "$1" rev-parse --abbrev-ref HEAD 2>/dev/null || true; }
 
@@ -62,7 +69,11 @@ while IFS= read -r seg; do
     deny "wings-env set/restart em app de produção"
   fi
 
-  # 007-A04: accept any punctuation before git, so a quote or paren does not hide it
+  # 007-A04: xargs builds the arguments from other input, so nothing about the call can be checked.
+  if grep -Eq '(^|[[:space:]])xargs([[:space:]]|$)' <<<"$seg" && grep -Eq '(^|[[:space:]])git[[:space:]]' <<<"$seg"; then
+    deny "git por xargs (argumentos não conferíveis)"
+  fi
+
   if grep -Eq '(^|[[:space:]])git[[:space:]]' <<<"$seg"; then
     # -C <dir> changes the repository the command acts on
     segcwd=$cwd
