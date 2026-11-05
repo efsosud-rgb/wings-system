@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { WA_VOICE_MAX_SECONDS, WA_VOICE_UPLOAD_MAX_BYTES, type WaMessage } from '@wings/shared';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   auditLog,
@@ -75,6 +75,25 @@ async function sellerDeal(open = true) {
 }
 
 const filesOf = (leadId: string) => db.select().from(leadFiles).where(eq(leadFiles.leadId, leadId));
+
+/**
+ * The release of a voice claim, made slow in this file's throwaway database (t117): a release
+ * done after the answer would still be pending when the test reads, so the test sees it.
+ */
+const SLOW_CLAIM_RELEASE = sql.raw(`
+  create or replace function slow_voice_claim_release() returns trigger language plpgsql as $fn$
+  begin
+    perform pg_sleep(0.5);
+    return old;
+  end $fn$;
+  create trigger slow_voice_claim_release before delete on wa_voice_sends
+    for each row execute function slow_voice_claim_release();
+`);
+
+const FAST_CLAIM_RELEASE = sql.raw(`
+  drop trigger if exists slow_voice_claim_release on wa_voice_sends;
+  drop function if exists slow_voice_claim_release();
+`);
 
 describe('a voice note recorded in the conversation', () => {
   it('is converted, kept in the deal files and sent once as a voice message', async () => {
@@ -286,6 +305,40 @@ describe('one recording, one audio (review of t084)', () => {
     expect(sent.statusCode).toBe(201);
     expect(await filesOf(leadId)).toHaveLength(1);
     expect(sends).toHaveLength(1);
+  });
+
+  /**
+   * The race of t117, made certain: a claim that sent nothing is released before the 502 leaves.
+   * The release is delayed in the throwaway database, so one done after the answer (a `finally`
+   * after `send()`) would still be pending here — the row would be visible, and a click with the
+   * same key in that moment got 409 "já está sendo enviado" instead of sending the audio. The
+   * route releases in `onSend`, so by the time the 502 arrives the key is free, and the click
+   * that follows sends it once.
+   */
+  it('frees the key before the 502 arrives, so the click that follows sends it', async () => {
+    // Deletes of wa_voice_sends in this file's throwaway database take a moment from now on.
+    await db.execute(SLOW_CLAIM_RELEASE);
+    try {
+      const { leadId } = await sellerDeal();
+      const key = randomUUID();
+      setNextUpload(() =>
+        metaAnswer({ error: { code: 131053, message: 'Media upload error' } }, 400),
+      );
+      const failed = await record(seller, leadId, recording, undefined, key);
+      expect(failed.statusCode).toBe(502);
+      expect(failed.json()).toMatchObject({ error: 'media_upload_failed' });
+      expect(failed.json().message).toContain('Nada foi enviado nem guardado');
+      // The answer is here: the claim is already gone, ready for the next click.
+      expect(await db.select().from(waVoiceSends).where(eq(waVoiceSends.key, key))).toHaveLength(0);
+      // The same recording again, once Meta takes it: one file, one audio, never "still going".
+      setNextUpload(() => null);
+      const sent = await record(seller, leadId, recording, undefined, key);
+      expect(sent.statusCode).toBe(201);
+      expect(await filesOf(leadId)).toHaveLength(1);
+      expect(sends).toHaveLength(1);
+    } finally {
+      await db.execute(FAST_CLAIM_RELEASE);
+    }
   });
 
   it('refuses a recording without the key, with nothing kept and nothing sent', async () => {

@@ -1405,6 +1405,38 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
   };
 
   /**
+   * Recordings whose claim this very request made. The claim is released in the route's `onSend`,
+   * never in a `finally` after `send()` (t117): `reply.send` starts the answer, so a release after
+   * it lands once the client already has the 502, and a click with the same key in between met the
+   * row of a send that never went and was told the audio was on its way.
+   */
+  const voiceClaims = new WeakMap<FastifyRequest, string>();
+
+  /** The answer is about to leave: a recording that sent nothing frees its key first. */
+  const releaseVoiceClaim = async (
+    request: FastifyRequest,
+    _reply: FastifyReply,
+    payload: unknown,
+  ) => {
+    // Only a claim this request made: another request's send may still be going.
+    const key = voiceClaims.get(request);
+    if (key === undefined) return payload;
+    voiceClaims.delete(request);
+    await db
+      .delete(waVoiceSends)
+      .where(
+        and(
+          eq(waVoiceSends.employeeId, request.session.actor.employeeId),
+          eq(waVoiceSends.key, key),
+          isNull(waVoiceSends.messageId),
+        ),
+      )
+      // A release that fails keeps the answer; the 5-minute takeover frees the key after all.
+      .catch(() => undefined);
+    return payload;
+  };
+
+  /**
    * A recording goes once by its key: the first request claims it (the row's primary key decides
    * between two at once), a later one gets the message that went, or hears that it is still
    * going. A claim that sent nothing is removed, so the same recording may be tried again; one
@@ -1449,13 +1481,8 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       const authors = await authorsOf(db, [earlier.message]);
       return reply.status(200).send({ message: toMessage(earlier.message, authors) });
     }
-    try {
-      await send(request, reply, target, outgoing);
-    } finally {
-      // Refused (or failed) before any message was written: nothing went, the key is free again.
-      await db.delete(waVoiceSends).where(and(mine, isNull(waVoiceSends.messageId)));
-    }
-    return reply;
+    voiceClaims.set(request, outgoing.key);
+    return send(request, reply, target, outgoing);
   }
 
   const outgoingOf = (kind: 'text' | 'template' | 'media', body: unknown): Outgoing | string => {
@@ -1489,7 +1516,10 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
   };
 
   for (const kind of ['text', 'template', 'media', 'voice'] as const) {
-    app.post(`/leads/:id/whatsapp/${kind}`, use, async (request, reply) => {
+    // A recording's key is freed before its answer leaves, never after (see releaseVoiceClaim).
+    const hooks = kind === 'voice' ? { ...use, onSend: [releaseVoiceClaim] } : use;
+
+    app.post(`/leads/:id/whatsapp/${kind}`, hooks, async (request, reply) => {
       const params = idParams.safeParse(request.params);
       if (!params.success) return notFound(reply);
       const lead = await leadInScope(db, request.session.actor, params.data.id, 'leads.whatsapp');
@@ -1510,7 +1540,7 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
         : send(request, reply, target, outgoing);
     });
 
-    app.post(`/whatsapp/conversations/:id/${kind}`, use, async (request, reply) => {
+    app.post(`/whatsapp/conversations/:id/${kind}`, hooks, async (request, reply) => {
       const params = idParams.safeParse(request.params);
       if (!params.success) return notFound(reply);
       // Any conversation the reader may see: the reply goes to that
