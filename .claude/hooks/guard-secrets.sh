@@ -11,8 +11,9 @@ deny() {
   exit 2
 }
 
-# secret-bearing files: any .env except .env.example/.env.sample/.env.template, /etc/wings-crm, environ dumps
-SECRET_FILE='(^|[[:space:]/="'"'"'])\.env(\.[A-Za-z0-9_-]+)?(["'"'"'[:space:]]|$)|/etc/wings-crm|/proc/[^[:space:]]*/environ|\.pem([[:space:]"'"'"']|$)|(^|/)id_(rsa|ed25519)'
+# secret-bearing files: any .env except .env.example/.env.sample/.env.template, /etc/wings-crm, environ dumps.
+# The suffix after `.env` is any non-separator text, so globs and backups (`.env*`, `.env~`, `.env.bak`) match too.
+SECRET_FILE='(^|[[:space:]/="'"'"'])\.env([^[:space:]"'"'"';|&<>/]*)|/etc/wings-crm|/proc/[^[:space:]]*/environ|\.pem([[:space:]"'"'"']|$)|(^|/)id_(rsa|ed25519)'
 SAFE_ENV='\.env\.(example|sample|template)'
 
 if [ "$tool" = Read ]; then
@@ -25,7 +26,7 @@ fi
 
 cmd=$(jq -r '.tool_input.command // empty' <<<"$input")
 # ignore the safe example files so they do not trip the file rule
-scrub=$(sed -E 's/[^[:space:]"'"'"']*\.env\.(example|sample|template)//g' <<<"$cmd")
+scrub=$(sed -E 's/[^[:space:]"'"'"']*\.env\.(example|sample|template)([^[:alnum:]_.-]|$)/\2/g' <<<"$cmd")
 # `cp SRC .env` / `mv SRC .env` only WRITE the last argument: do not count it as a read
 scrub=$(sed -E 's/^([[:space:]]*(cp|mv)[[:space:]].*)[[:space:]]+[^[:space:]]+[[:space:]]*$/\1/' <<<"$scrub")
 
