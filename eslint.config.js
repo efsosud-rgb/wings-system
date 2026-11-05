@@ -1,6 +1,7 @@
 import js from '@eslint/js';
 import prettier from 'eslint-config-prettier';
 import tseslint from 'typescript-eslint';
+import { noAsyncReplyReturn } from './apps/api/src/lint/no-async-reply-return.ts';
 
 export default tseslint.config(
   // .claude/, .agents/ and .github/agents|hooks|skills hold third-party agent
@@ -79,7 +80,10 @@ export default tseslint.config(
     },
   },
   {
+    // The repository's own rules (apps/api/src/lint/).
+    plugins: { wings: { rules: { 'no-async-reply-return': noAsyncReplyReturn } } },
     rules: {
+      'wings/no-async-reply-return': 'error',
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       // Personal data must never reach logs or the console (LGPD).
       'no-console': ['warn', { allow: ['warn', 'error'] }],
