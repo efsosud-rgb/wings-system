@@ -25,6 +25,13 @@ test_parens_and_xargs_are_blocked() {
     "$(bash_json 'eval "git push origin main"')" 'eval "git push ..."'
 }
 
+test_escaped_command_name_is_blocked() {
+  # a backslash only escapes the next character: `\git` and `g\it` are `git` and must not slip by
+  expect_block guard-production.sh "$(bash_json '\git push origin main')" '\git push origin main'
+  expect_block guard-production.sh "$(bash_json 'g\it push origin main')" 'g\it push origin main'
+  expect_block guard-production.sh "$(bash_json 'git\ push origin main')" 'git\ push origin main'
+}
+
 test_nested_production_deploy_is_blocked() {
   expect_block guard-production.sh "$(bash_json 'bash -c "wings-deploy production"')" \
     'bash -c "wings-deploy production"'
