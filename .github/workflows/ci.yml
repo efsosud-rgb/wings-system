@@ -48,6 +48,11 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm lint
 
+      # The agent session guards (.claude/hooks): pure bash, no database and no network. Each test
+      # feeds the hook the same JSON Claude Code sends and checks the exit code (2 = blocked, 0 = allowed).
+      - name: Travas dos agentes (.claude/hooks)
+        run: bash .claude/hooks/tests/run-all.sh
+
       # Migrations and seeds must stay runnable from scratch. These run before
       # the tests because the API integration tests create their own throwaway
       # database from DATABASE_URL.
