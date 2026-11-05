@@ -14,6 +14,9 @@ test_grep_on_a_secret_glob_or_etc_is_blocked() {
   # glob written in the glob field rather than the path
   expect_block guard-secrets.sh \
     "$(grep_json 'KEY' 'apps/api' '.env*')" 'Grep glob=.env*'
+  # a dotfile glob in the glob field reaches .env without spelling it (007-A01 rule)
+  expect_block guard-secrets.sh "$(grep_json 'KEY' '.' '.*')" 'Grep glob=.*'
+  expect_block guard-secrets.sh "$(grep_json 'KEY' '.' '.??*')" 'Grep glob=.??*'
   expect_block guard-secrets.sh \
     "$(grep_json 'KEY' '/etc/wings-crm')" 'Grep /etc/wings-crm'
 }

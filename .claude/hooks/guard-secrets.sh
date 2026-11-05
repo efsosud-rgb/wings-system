@@ -35,7 +35,8 @@ if [ "$tool" != Bash ]; then
     | map(select(. != null and . != "")) | .[]' <<<"$input" 2>/dev/null)
   [ -n "$p" ] || exit 0
   grep -Eq "$SAFE_ENV" <<<"$p" && exit 0
-  grep -Eq "$SECRET_FILE" <<<"$p" && deny "leitura de arquivo de segredo ($(basename "$(head -1 <<<"$p")"))"
+  # A glob in the tool's own path/glob field (`Grep` with `glob: ".*"`) reaches .env the same way.
+  grep -Eq "$SECRET_FILE|$DOT_GLOB" <<<"$p" && deny "leitura de arquivo de segredo ($(basename "$(head -1 <<<"$p")"))"
   exit 0
 fi
 
